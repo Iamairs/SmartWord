@@ -188,6 +188,9 @@
     <Compile Include="Properties\AssemblyInfo.cs">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="Infrastructure\GlobalHotKeyManager.cs" />
+    <Compile Include="Infrastructure\MessageBoxNotificationService.cs" />
+    <Compile Include="Poc\VbaPocScriptFactory.cs" />
     <EmbeddedResource Include="Properties\Resources.resx">
       <Generator>ResXFileCodeGenerator</Generator>
       <LastGenOutput>Resources.Designer.cs</LastGenOutput>
@@ -208,6 +211,7 @@
     <Compile Include="ThisAddIn.cs">
       <SubType>Code</SubType>
     </Compile>
+    <None Include="SmartWord.AddIn_TemporaryKey.pfx" />
     <None Include="ThisAddIn.Designer.xml">
       <DependentUpon>ThisAddIn.cs</DependentUpon>
     </None>
@@ -249,6 +253,15 @@
   <PropertyGroup>
     <VisualStudioVersion Condition="'$(VisualStudioVersion)' == ''">10.0</VisualStudioVersion>
     <VSToolsPath Condition="'$(VSToolsPath)' == ''">$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)</VSToolsPath>
+  </PropertyGroup>
+  <PropertyGroup>
+    <SignManifests>true</SignManifests>
+  </PropertyGroup>
+  <PropertyGroup>
+    <ManifestKeyFile>SmartWord.AddIn_TemporaryKey.pfx</ManifestKeyFile>
+  </PropertyGroup>
+  <PropertyGroup>
+    <ManifestCertificateThumbprint>80C2163EA6CE7A1B032B2165BCC4BCFA4E17A271</ManifestCertificateThumbprint>
   </PropertyGroup>
   <!-- Include the build rules for a C# project. -->
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
