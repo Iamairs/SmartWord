@@ -42,6 +42,11 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Undo\NoopUndoScope.cs" />
+    <Compile Include="Undo\WordUndoScope.cs" />
+    <Compile Include="Undo\WordUndoScopeFactory.cs" />
+    <Compile Include="Vba\VbaExecutor.cs" />
+    <Compile Include="Vba\VbaModuleManager.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\SmartWord.Core\SmartWord.Core.csproj">
