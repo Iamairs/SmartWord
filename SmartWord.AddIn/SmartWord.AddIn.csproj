@@ -190,7 +190,9 @@
     </Compile>
     <Compile Include="Infrastructure\GlobalHotKeyManager.cs" />
     <Compile Include="Infrastructure\MessageBoxNotificationService.cs" />
-    <Compile Include="Poc\VbaPocScriptFactory.cs" />
+    <Compile Include="UI\PromptWindow.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <EmbeddedResource Include="Properties\Resources.resx">
       <Generator>ResXFileCodeGenerator</Generator>
       <LastGenOutput>Resources.Designer.cs</LastGenOutput>
