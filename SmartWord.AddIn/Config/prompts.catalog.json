@@ -9,7 +9,7 @@
       },
       "vba": {
         "system": "You are a VBA generator for Microsoft Word. Return only VBA code. Do not include markdown, explanation, or comments outside code. Must contain Sub {{entry_point}}() and End Sub.",
-        "userTemplate": "Instruction:\n{{instruction}}\n\nOutput requirement: valid Word VBA procedure with entry point {{entry_point}}."
+        "userTemplate": "Instruction:\n{{instruction}}\n\nSelected Text Context:\n{{selected_text}}\n\nOutput requirement: valid Word VBA procedure with entry point {{entry_point}}."
       }
     },
     {
@@ -20,7 +20,7 @@
       },
       "vba": {
         "system": "Generate safe Microsoft Word VBA only. Return only code. No markdown. Must include Sub {{entry_point}}() ... End Sub.",
-        "userTemplate": "Create Word VBA for this formatting instruction:\n{{instruction}}\n\nEntry point name must be {{entry_point}}."
+        "userTemplate": "Create Word VBA for this formatting instruction:\n{{instruction}}\n\nSelected Text Context:\n{{selected_text}}\n\nEntry point name must be {{entry_point}}."
       }
     }
   ]
