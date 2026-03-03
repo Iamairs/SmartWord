@@ -40,7 +40,7 @@ namespace SmartWord.AddIn
             var modelService = CreateModelService(_apiOptions);
             var sanitizer = new VbaCodeSanitizer();
             _editorAgentOrchestrator = new EditorAgentOrchestrator(selectionService, modelService, _notificationService);
-            _vbaAgentOrchestrator = new VbaAgentOrchestrator(modelService, sanitizer, _vbaExecutor, _notificationService);
+            _vbaAgentOrchestrator = new VbaAgentOrchestrator(selectionService, modelService, sanitizer, _vbaExecutor, _notificationService);
             _availableModels = _apiOptions.AvailableModels ?? new string[0];
             _defaultModel = _apiOptions.Model ?? string.Empty;
             _defaultPromptVersion = _apiOptions.DefaultPromptVersion ?? string.Empty;
