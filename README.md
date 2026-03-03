@@ -4,7 +4,7 @@
 
 目标：跑通 C# 抓取 Word 内容，并调用大模型 API 返回结果的基本链路。
 
-功能点 ID功能名称优先级MVP 阶段实现标准 (Scope)MVP-1.1快捷唤起P0按下 Alt+K，在屏幕中央弹出一个简单的 WinForm/WPF 输入框（无需做到完美的无边框悬浮和跟随光标）。MVP-1.2基础指令输入P0用户输入自然语言指令（如：“帮我润色这段话，语气更正式一点”）。MVP-1.3选区上下文抓取P0极简版感知：C# 仅抓取用户当前高亮选中的文本（Selection.Text）和指令一起发给大模型。（砍掉：获取文档元数据和自动抓取前后段落）。MVP-1.4直接文本替换P1大模型返回结果后，直接覆盖替换掉用户选中的文本。（砍掉：强制开启修订模式的 Diff 视图和流式回显，先解决“能用”的问题）。
+功能点 ID功能名称优先级MVP 阶段实现标准 (Scope)MVP-1.1快捷唤起P0按下 Alt+K，在屏幕中央弹出一个简单的 WinForm/WPF 输入框（无需做到完美的无边框悬浮和跟随光标）。MVP-1.2基础指令输入P0用户输入自然语言指令（如：“帮我润色这段话，语气更正式一点”）。MVP-1.3选区上下文抓取P0极简版感知：C# 仅抓取用户当前高亮选中的文本（Selection.Text）和指令一起发给大模型。（砍掉：获取文档元数据和自动抓取前后段落）。MVP-1.4直接文本替换P1大模型返回结果后，直接覆盖替换掉用户选中的文本。
 
 模块二：核心 VBA 引擎 (Core VBA Agent Engine)
 
@@ -21,3 +21,73 @@ M2 文档合规编译器（全砍）：基于正则的检查比较鸡肋，基�
 自愈循环 (Self-Healing)：虽然是绝佳的卖点，但对于 0 经验开发者，处理 C# 异步等待大模型重试、死循环熔断机制等非常痛苦。v1.0 允许 AI 犯错，只要能 Undo 就行。
 
 跨文件静默扫描 (OpenXML)：极易引发文件被占用、多线程死锁等问题。
+
+## 大模型 API 配置（OpenAI 兼容）
+
+当前项目已支持 OpenAI 兼容接口，配置方式为**环境变量**，不会把密钥写入仓库文件。
+
+### 1) 必填变量
+
+- `SMARTWORD_API_KEY`：你的 API Key（必填）
+
+### 2) 可选变量
+
+- `SMARTWORD_API_BASE_URL`：默认 `https://api.openai.com/v1`
+- `SMARTWORD_API_MODEL`：默认 `gpt-4o-mini`
+- `SMARTWORD_PROMPT_VERSION`：默认使用 Prompt 配置中的 `activeVersion`
+- `SMARTWORD_SETTINGS_FILE`：可指定本地设置文件路径
+- `SMARTWORD_PROMPTS_FILE`：可指定 Prompt 目录文件路径
+
+### 3) 快速示例（PowerShell）
+
+```powershell
+$env:SMARTWORD_API_BASE_URL = "https://api.openai.com/v1"
+$env:SMARTWORD_API_MODEL = "gpt-4o-mini"
+$env:SMARTWORD_API_KEY = "sk-xxxx"
+$env:SMARTWORD_PROMPT_VERSION = "v1"
+```
+
+### 4) 文件配置（推荐）
+
+可在本地创建（不要提交）：
+
+- `SmartWord.AddIn/Config/runtime-settings.local.json`
+
+示例结构：
+
+```json
+{
+  "apiBaseUrl": "https://api.openai.com/v1",
+  "apiKey": "sk-xxxx",
+  "defaultModel": "gpt-4o-mini",
+  "availableModels": ["gpt-4o-mini", "gpt-4.1-mini"],
+  "promptCatalogPath": "Config/prompts.catalog.json",
+  "defaultPromptVersion": "v1"
+}
+```
+
+Prompt 版本目录文件：
+
+- `SmartWord.AddIn/Config/prompts.catalog.json`
+
+你可以新增 `versions` 节点并切换 `activeVersion` 来做版本评测，也可在命令中临时指定。
+
+### 5) 命令行指令约定（Alt+K 输入框）
+
+- 默认：写作改写链路
+- `/vba xxx`：VBA 排版链路
+- `/model <modelName> xxx`：临时指定模型
+- `/prompt <version> xxx`：临时指定 Prompt 版本
+
+可组合示例：
+
+```text
+/vba /model gpt-4o-mini /prompt v1_strict 把全文字号改为 14
+```
+
+### 6) 安全说明
+
+- 仓库已忽略 `.env` 和 `secrets.json`。
+- 仓库已忽略 `SmartWord.AddIn/Config/runtime-settings.local.json`。
+- 请勿把真实密钥写入 `README.md`、源码文件、提交记录。
+- 可参考仓库根目录 `.env.example`，复制为本地 `.env` 使用（`.env` 不会提交）。
