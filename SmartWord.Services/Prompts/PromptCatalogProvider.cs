@@ -75,7 +75,7 @@ namespace SmartWord.Services.Prompts
             };
         }
 
-        public PromptPair BuildVbaPrompts(string requestedVersion, string instruction, string entryPoint)
+        public PromptPair BuildVbaPrompts(string requestedVersion, string instruction, string selectedText, string entryPoint)
         {
             PromptVersionItem item = ResolveVersion(requestedVersion);
             if (item.vba == null)
@@ -86,6 +86,7 @@ namespace SmartWord.Services.Prompts
             var tokens = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 { "instruction", instruction ?? string.Empty },
+                { "selected_text", selectedText ?? string.Empty },
                 { "entry_point", entryPoint ?? "SmartWord_Run" }
             };
 

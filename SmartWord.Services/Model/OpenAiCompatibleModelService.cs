@@ -63,6 +63,7 @@ namespace SmartWord.Services.Model
             var promptPair = _promptCatalogProvider.BuildVbaPrompts(
                 ResolvePromptVersion(request == null ? null : request.PromptVersion),
                 instruction,
+                request == null ? string.Empty : request.SelectedText,
                 entryPoint);
 
             return ExecuteChatAsync(

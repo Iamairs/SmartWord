@@ -9,17 +9,20 @@ namespace SmartWord.Services.Orchestration
 {
     public sealed class VbaAgentOrchestrator : IVbaAgentOrchestrator
     {
+        private readonly ISelectionService _selectionService;
         private readonly IModelService _modelService;
         private readonly VbaCodeSanitizer _sanitizer;
         private readonly IVbaExecutor _vbaExecutor;
         private readonly INotificationService _notificationService;
 
         public VbaAgentOrchestrator(
+            ISelectionService selectionService,
             IModelService modelService,
             VbaCodeSanitizer sanitizer,
             IVbaExecutor vbaExecutor,
             INotificationService notificationService)
         {
+            _selectionService = selectionService;
             _modelService = modelService;
             _sanitizer = sanitizer;
             _vbaExecutor = vbaExecutor;
@@ -33,6 +36,7 @@ namespace SmartWord.Services.Orchestration
                 var request = new VbaGenerationRequest
                 {
                     Instruction = instruction,
+                    SelectedText = _selectionService == null ? string.Empty : _selectionService.GetSelectedText(),
                     ModelOverride = modelOverride,
                     PromptVersion = promptVersion
                 };
