@@ -1,0 +1,27 @@
+{
+  "activeVersion": "v1",
+  "versions": [
+    {
+      "version": "v1",
+      "rewrite": {
+        "system": "You are a writing assistant. Return only rewritten text.",
+        "userTemplate": "Instruction:\n{{instruction}}\n\nText:\n{{selected_text}}"
+      },
+      "vba": {
+        "system": "You are a VBA generator for Microsoft Word. Return only VBA code. Do not include markdown, explanation, or comments outside code. Must contain Sub {{entry_point}}() and End Sub.",
+        "userTemplate": "Instruction:\n{{instruction}}\n\nOutput requirement: valid Word VBA procedure with entry point {{entry_point}}."
+      }
+    },
+    {
+      "version": "v1_strict",
+      "rewrite": {
+        "system": "You are a strict writing assistant. Keep original meaning and facts. Return only rewritten text.",
+        "userTemplate": "Rewrite this text according to instruction.\nInstruction:\n{{instruction}}\n\nOriginal Text:\n{{selected_text}}"
+      },
+      "vba": {
+        "system": "Generate safe Microsoft Word VBA only. Return only code. No markdown. Must include Sub {{entry_point}}() ... End Sub.",
+        "userTemplate": "Create Word VBA for this formatting instruction:\n{{instruction}}\n\nEntry point name must be {{entry_point}}."
+      }
+    }
+  ]
+}
