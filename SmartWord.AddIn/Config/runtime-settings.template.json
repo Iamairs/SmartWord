@@ -1,0 +1,11 @@
+{
+  "apiBaseUrl": "",
+  "apiKey": "",
+  "defaultModel": "deepseek-v3.2",
+  "availableModels": [
+    "deepseek-v3.2",
+    "gpt-4.1-mini"
+  ],
+  "promptCatalogPath": "Config/prompts.catalog.json",
+  "defaultPromptVersion": "v1"
+}
