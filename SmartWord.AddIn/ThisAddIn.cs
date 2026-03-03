@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using SmartWord.AddIn.Infrastructure;
 using SmartWord.AddIn.UI;
 using SmartWord.Core.Abstractions;
@@ -46,7 +47,10 @@ namespace SmartWord.AddIn
 
             try
             {
-                _hotKeyManager = new GlobalHotKeyManager(HandleAltKHotKey);
+                _hotKeyManager = new GlobalHotKeyManager(() =>
+                {
+                    _ = HandleAltKHotKeyAsync();
+                });
                 _hotKeyManager.RegisterAltK();
             }
             catch (Exception ex)
@@ -64,7 +68,7 @@ namespace SmartWord.AddIn
             }
         }
 
-        private void HandleAltKHotKey()
+        private async Task HandleAltKHotKeyAsync()
         {
             if (!IsWordForeground())
             {
@@ -102,11 +106,11 @@ namespace SmartWord.AddIn
 
                     if (command.IsVba)
                     {
-                        _vbaAgentOrchestrator.RunFormatting(command.Instruction, command.ModelOverride, command.PromptVersion);
+                        await _vbaAgentOrchestrator.RunFormattingAsync(command.Instruction, command.ModelOverride, command.PromptVersion);
                     }
                     else
                     {
-                        _editorAgentOrchestrator.RunRewrite(command.Instruction, command.ModelOverride, command.PromptVersion);
+                        await _editorAgentOrchestrator.RunRewriteAsync(command.Instruction, command.ModelOverride, command.PromptVersion);
                     }
                 }
             }
