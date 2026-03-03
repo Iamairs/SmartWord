@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using SmartWord.Core.Abstractions;
 using SmartWord.Core.Models;
 using SmartWord.Core.Orchestration;
@@ -21,7 +22,7 @@ namespace SmartWord.Services.Orchestration
             _notificationService = notificationService;
         }
 
-        public void RunRewrite(string instruction, string modelOverride, string promptVersion)
+        public async Task RunRewriteAsync(string instruction, string modelOverride, string promptVersion)
         {
             try
             {
@@ -40,7 +41,7 @@ namespace SmartWord.Services.Orchestration
                     PromptVersion = promptVersion
                 };
 
-                string rewrittenText = _modelService.RewriteText(request);
+                string rewrittenText = await _modelService.RewriteTextAsync(request);
                 if (string.IsNullOrWhiteSpace(rewrittenText))
                 {
                     _notificationService.Error("Model returned empty text.");

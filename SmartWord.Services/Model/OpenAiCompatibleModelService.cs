@@ -5,6 +5,7 @@ using System.Net.Http.Headers;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Text;
+using System.Threading.Tasks;
 using SmartWord.Core.Abstractions;
 using SmartWord.Core.Models;
 using SmartWord.Services.Prompts;
@@ -15,7 +16,7 @@ namespace SmartWord.Services.Model
     {
         private static readonly HttpClient SharedHttpClient = new HttpClient
         {
-            Timeout = TimeSpan.FromSeconds(90)
+            Timeout = TimeSpan.FromSeconds(120)
         };
 
         private readonly OpenAiApiOptions _options;
@@ -32,11 +33,11 @@ namespace SmartWord.Services.Model
             _promptCatalogProvider = new PromptCatalogProvider(_options.PromptCatalogPath);
         }
 
-        public string RewriteText(EditorRewriteRequest request)
+        public Task<string> RewriteTextAsync(EditorRewriteRequest request)
         {
             if (request == null || string.IsNullOrWhiteSpace(request.SelectedText))
             {
-                return string.Empty;
+                return Task.FromResult(string.Empty);
             }
 
             var promptPair = _promptCatalogProvider.BuildRewritePrompts(
@@ -44,14 +45,14 @@ namespace SmartWord.Services.Model
                 request.Instruction,
                 request.SelectedText);
 
-            return ExecuteChat(
+            return ExecuteChatAsync(
                 _options.ResolveModel(request.ModelOverride),
                 promptPair.SystemPrompt,
                 promptPair.UserPrompt,
                 0.3d);
         }
 
-        public string GenerateVbaCode(VbaGenerationRequest request)
+        public Task<string> GenerateVbaCodeAsync(VbaGenerationRequest request)
         {
             string entryPoint = request != null && !string.IsNullOrWhiteSpace(request.EntryPoint)
                 ? request.EntryPoint
@@ -64,14 +65,14 @@ namespace SmartWord.Services.Model
                 instruction,
                 entryPoint);
 
-            return ExecuteChat(
+            return ExecuteChatAsync(
                 _options.ResolveModel(request == null ? null : request.ModelOverride),
                 promptPair.SystemPrompt,
                 promptPair.UserPrompt,
                 0.1d);
         }
 
-        private string ExecuteChat(string model, string systemPrompt, string userPrompt, double temperature)
+        private async Task<string> ExecuteChatAsync(string model, string systemPrompt, string userPrompt, double temperature)
         {
             var request = new ChatCompletionRequest
             {
@@ -92,29 +93,30 @@ namespace SmartWord.Services.Model
                 httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.ApiKey);
                 httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
                 httpRequest.Content = new StringContent(requestJson, Encoding.UTF8, "application/json");
-                SharedHttpClient.Timeout = TimeSpan.FromSeconds(60);
 
-                HttpResponseMessage response = SharedHttpClient.SendAsync(httpRequest).GetAwaiter().GetResult();
-                string responseBody = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
-
-                if (!response.IsSuccessStatusCode)
+                using (HttpResponseMessage response = await SharedHttpClient.SendAsync(httpRequest).ConfigureAwait(false))
                 {
-                    throw new InvalidOperationException(
-                        "LLM API request failed (" + (int)response.StatusCode + "): " + TrimForError(responseBody));
-                }
+                    string responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 
-                var chatResponse = Deserialize<ChatCompletionResponse>(responseBody);
-                if (chatResponse == null ||
-                    chatResponse.choices == null ||
-                    chatResponse.choices.Length == 0 ||
-                    chatResponse.choices[0] == null ||
-                    chatResponse.choices[0].message == null ||
-                    string.IsNullOrWhiteSpace(chatResponse.choices[0].message.content))
-                {
-                    throw new InvalidOperationException("LLM API returned empty content.");
-                }
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        throw new InvalidOperationException(
+                            "LLM API request failed (" + (int)response.StatusCode + "): " + TrimForError(responseBody));
+                    }
 
-                return chatResponse.choices[0].message.content.Trim();
+                    var chatResponse = Deserialize<ChatCompletionResponse>(responseBody);
+                    if (chatResponse == null ||
+                        chatResponse.choices == null ||
+                        chatResponse.choices.Length == 0 ||
+                        chatResponse.choices[0] == null ||
+                        chatResponse.choices[0].message == null ||
+                        string.IsNullOrWhiteSpace(chatResponse.choices[0].message.content))
+                    {
+                        throw new InvalidOperationException("LLM API returned empty content.");
+                    }
+
+                    return chatResponse.choices[0].message.content.Trim();
+                }
             }
         }
 

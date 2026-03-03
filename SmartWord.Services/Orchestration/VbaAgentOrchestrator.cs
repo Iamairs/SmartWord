@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using SmartWord.Core.Abstractions;
 using SmartWord.Core.Models;
 using SmartWord.Core.Orchestration;
@@ -25,7 +26,7 @@ namespace SmartWord.Services.Orchestration
             _notificationService = notificationService;
         }
 
-        public void RunFormatting(string instruction, string modelOverride, string promptVersion)
+        public async Task RunFormattingAsync(string instruction, string modelOverride, string promptVersion)
         {
             try
             {
@@ -36,7 +37,7 @@ namespace SmartWord.Services.Orchestration
                     PromptVersion = promptVersion
                 };
 
-                string rawCode = _modelService.GenerateVbaCode(request);
+                string rawCode = await _modelService.GenerateVbaCodeAsync(request);
                 string sanitizedCode = _sanitizer.SanitizeAndValidate(rawCode, request.EntryPoint);
                 _vbaExecutor.Execute(sanitizedCode, request.EntryPoint);
                 _notificationService.Info("Formatting completed. Press Ctrl+Z to verify undo.");
