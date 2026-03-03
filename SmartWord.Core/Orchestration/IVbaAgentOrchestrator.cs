@@ -1,7 +1,9 @@
+using System.Threading.Tasks;
+
 namespace SmartWord.Core.Orchestration
 {
     public interface IVbaAgentOrchestrator
     {
-        void RunFormatting(string instruction, string modelOverride, string promptVersion);
+        Task RunFormattingAsync(string instruction, string modelOverride, string promptVersion);
     }
 }

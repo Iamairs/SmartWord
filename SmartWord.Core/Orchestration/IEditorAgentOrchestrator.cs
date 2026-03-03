@@ -1,7 +1,9 @@
+using System.Threading.Tasks;
+
 namespace SmartWord.Core.Orchestration
 {
     public interface IEditorAgentOrchestrator
     {
-        void RunRewrite(string instruction, string modelOverride, string promptVersion);
+        Task RunRewriteAsync(string instruction, string modelOverride, string promptVersion);
     }
 }

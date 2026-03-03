@@ -1,11 +1,12 @@
 using SmartWord.Core.Models;
+using System.Threading.Tasks;
 
 namespace SmartWord.Core.Abstractions
 {
     public interface IModelService
     {
-        string RewriteText(EditorRewriteRequest request);
+        Task<string> RewriteTextAsync(EditorRewriteRequest request);
 
-        string GenerateVbaCode(VbaGenerationRequest request);
+        Task<string> GenerateVbaCodeAsync(VbaGenerationRequest request);
     }
 }
