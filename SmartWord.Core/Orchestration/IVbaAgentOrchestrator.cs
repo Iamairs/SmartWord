@@ -2,6 +2,6 @@ namespace SmartWord.Core.Orchestration
 {
     public interface IVbaAgentOrchestrator
     {
-        void RunFormatting(string instruction);
+        void RunFormatting(string instruction, string modelOverride, string promptVersion);
     }
 }
