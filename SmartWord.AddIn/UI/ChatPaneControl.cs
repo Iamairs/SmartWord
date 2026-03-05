@@ -535,6 +535,8 @@ namespace SmartWord.AddIn.UI
         /// <param name="callback">实际执行的异步逻辑。</param>
         private async Task RunSafeAsync(Func<Task> callback)
         {
+            await EnsureOnUiThreadAsync().ConfigureAwait(false);
+
             if (_isBusy)
             {
                 return;
@@ -550,6 +552,7 @@ namespace SmartWord.AddIn.UI
             {
                 // UI 层统一收口异常，避免事件处理链中断。
                 string error = "操作失败：" + ex.Message;
+                await EnsureOnUiThreadAsync().ConfigureAwait(false);
                 _statusLabel.Text = error;
                 if (_notificationService != null)
                 {
@@ -558,9 +561,31 @@ namespace SmartWord.AddIn.UI
             }
             finally
             {
+                await EnsureOnUiThreadAsync().ConfigureAwait(false);
                 _isBusy = false;
                 SetBusyState(false);
             }
+        }
+
+        /// <summary>
+        /// 切换到 UI 线程执行后续逻辑。
+        /// </summary>
+        /// <returns>当已在 UI 线程或切换完成时返回已完成任务。</returns>
+        private Task EnsureOnUiThreadAsync()
+        {
+            if (IsDisposed || !InvokeRequired)
+            {
+                return Task.CompletedTask;
+            }
+
+            if (!IsHandleCreated)
+            {
+                return Task.CompletedTask;
+            }
+
+            var tcs = new TaskCompletionSource<bool>();
+            BeginInvoke(new Action(() => tcs.SetResult(true)));
+            return tcs.Task;
         }
 
         /// <summary>
@@ -569,6 +594,21 @@ namespace SmartWord.AddIn.UI
         /// <param name="isBusy">是否处于忙碌状态。</param>
         private void SetBusyState(bool isBusy)
         {
+            if (IsDisposed)
+            {
+                return;
+            }
+
+            if (InvokeRequired)
+            {
+                if (IsHandleCreated)
+                {
+                    BeginInvoke(new Action<bool>(SetBusyState), isBusy);
+                }
+
+                return;
+            }
+
             _sendButton.Enabled = !isBusy;
             _newSessionButton.Enabled = !isBusy;
             _sessionListBox.Enabled = !isBusy;
