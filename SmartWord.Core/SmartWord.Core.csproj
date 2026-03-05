@@ -42,14 +42,32 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Abstractions\Conversation\ICommandRouteService.cs" />
+    <Compile Include="Abstractions\Conversation\IConversationStore.cs" />
+    <Compile Include="Abstractions\Conversation\IDocumentRetriever.cs" />
+    <Compile Include="Abstractions\Conversation\IEmbeddingService.cs" />
     <Compile Include="Abstractions\IModelService.cs" />
     <Compile Include="Abstractions\INotificationService.cs" />
     <Compile Include="Abstractions\ISelectionService.cs" />
     <Compile Include="Abstractions\IUndoScope.cs" />
     <Compile Include="Abstractions\IUndoScopeFactory.cs" />
     <Compile Include="Abstractions\IVbaExecutor.cs" />
+    <Compile Include="Models\Conversation\ApplyActionResult.cs" />
+    <Compile Include="Models\Conversation\ChatTurnRequest.cs" />
+    <Compile Include="Models\Conversation\ChatTurnResult.cs" />
+    <Compile Include="Models\Conversation\ConversationActionType.cs" />
+    <Compile Include="Models\Conversation\ConversationMessage.cs" />
+    <Compile Include="Models\Conversation\ConversationRouteType.cs" />
+    <Compile Include="Models\Conversation\ConversationSession.cs" />
+    <Compile Include="Models\Conversation\DocumentQuery.cs" />
+    <Compile Include="Models\Conversation\PendingAction.cs" />
+    <Compile Include="Models\Conversation\RetrievedChunk.cs" />
+    <Compile Include="Models\Conversation\RetrievedContext.cs" />
+    <Compile Include="Models\Conversation\RouteDecision.cs" />
+    <Compile Include="Models\Conversation\RouteInput.cs" />
     <Compile Include="Models\EditorRewriteRequest.cs" />
     <Compile Include="Models\VbaGenerationRequest.cs" />
+    <Compile Include="Orchestration\Conversation\IConversationOrchestrator.cs" />
     <Compile Include="Orchestration\IEditorAgentOrchestrator.cs" />
     <Compile Include="Orchestration\IVbaAgentOrchestrator.cs" />
   </ItemGroup>
