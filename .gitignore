@@ -67,3 +67,4 @@ secrets.json
 # 其它
 .serena/
 
+/SmartWord.AddIn/Config/chat.sessions.local.json
