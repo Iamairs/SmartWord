@@ -63,3 +63,7 @@ secrets.json
 SmartWord.AddIn/Config/runtime-settings.local.json
 SmartWord.AddIn/Config/vector-index
 SmartWord.AddIn/Config/chat.sessions.local.json
+
+# 其它
+.serena/
+/SmartWord.AddIn/Config/chat.sessions.local.json
