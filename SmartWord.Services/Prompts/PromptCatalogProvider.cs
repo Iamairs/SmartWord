@@ -5,13 +5,22 @@ using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Text;
 
+// 文件说明：
+// Prompt 目录提供器，负责读取版本化模板并渲染为最终系统/用户提示词。
 namespace SmartWord.Services.Prompts
 {
+    /// <summary>
+    /// Prompt 目录提供器。
+    /// </summary>
     public sealed class PromptCatalogProvider
     {
         private readonly PromptCatalog _catalog;
         private readonly Dictionary<string, PromptVersionItem> _versionMap;
 
+        /// <summary>
+        /// 初始化 Prompt 目录提供器。
+        /// </summary>
+        /// <param name="catalogPath">Prompt 配置文件路径。</param>
         public PromptCatalogProvider(string catalogPath)
         {
             if (string.IsNullOrWhiteSpace(catalogPath))
@@ -48,12 +57,23 @@ namespace SmartWord.Services.Prompts
             }
         }
 
+        /// <summary>
+        /// 获取可用 Prompt 版本列表。
+        /// </summary>
+        /// <returns>版本号数组。</returns>
         public string[] GetAvailableVersions()
         {
             var result = new List<string>(_versionMap.Keys);
             return result.ToArray();
         }
 
+        /// <summary>
+        /// 构建改写场景提示词。
+        /// </summary>
+        /// <param name="requestedVersion">请求版本。</param>
+        /// <param name="instruction">用户指令。</param>
+        /// <param name="selectedText">选中文本。</param>
+        /// <returns>系统/用户提示词对。</returns>
         public PromptPair BuildRewritePrompts(string requestedVersion, string instruction, string selectedText)
         {
             PromptVersionItem item = ResolveVersion(requestedVersion);
@@ -75,6 +95,14 @@ namespace SmartWord.Services.Prompts
             };
         }
 
+        /// <summary>
+        /// 构建 VBA 场景提示词。
+        /// </summary>
+        /// <param name="requestedVersion">请求版本。</param>
+        /// <param name="instruction">用户指令。</param>
+        /// <param name="selectedText">选中文本。</param>
+        /// <param name="entryPoint">入口过程名称。</param>
+        /// <returns>系统/用户提示词对。</returns>
         public PromptPair BuildVbaPrompts(string requestedVersion, string instruction, string selectedText, string entryPoint)
         {
             PromptVersionItem item = ResolveVersion(requestedVersion);
@@ -97,6 +125,9 @@ namespace SmartWord.Services.Prompts
             };
         }
 
+        /// <summary>
+        /// 解析最终使用的版本（请求版本 -> activeVersion -> 第一个可用版本）。
+        /// </summary>
         private PromptVersionItem ResolveVersion(string requestedVersion)
         {
             if (!string.IsNullOrWhiteSpace(requestedVersion))
@@ -125,6 +156,9 @@ namespace SmartWord.Services.Prompts
             throw new InvalidOperationException("No prompt version is available.");
         }
 
+        /// <summary>
+        /// 执行模板渲染，将占位符替换为实际值。
+        /// </summary>
         private static string Render(string template, IDictionary<string, string> tokens)
         {
             if (string.IsNullOrEmpty(template))
@@ -135,12 +169,16 @@ namespace SmartWord.Services.Prompts
             string output = template;
             foreach (var pair in tokens)
             {
+                // 采用简单字符串替换，避免引入额外模板引擎依赖。
                 output = output.Replace("{{" + pair.Key + "}}", pair.Value ?? string.Empty);
             }
 
             return output;
         }
 
+        /// <summary>
+        /// 反序列化 JSON 为目标对象。
+        /// </summary>
         private static T Deserialize<T>(string json) where T : class
         {
             if (string.IsNullOrWhiteSpace(json))
@@ -156,19 +194,34 @@ namespace SmartWord.Services.Prompts
             }
         }
 
+        /// <summary>
+        /// 提示词对。
+        /// </summary>
         public sealed class PromptPair
         {
+            /// <summary>
+            /// 系统提示词。
+            /// </summary>
             public string SystemPrompt { get; set; }
 
+            /// <summary>
+            /// 用户提示词。
+            /// </summary>
             public string UserPrompt { get; set; }
         }
 
         [DataContract]
         private sealed class PromptCatalog
         {
+            /// <summary>
+            /// 当前激活版本。
+            /// </summary>
             [DataMember(Name = "activeVersion")]
             public string activeVersion { get; set; }
 
+            /// <summary>
+            /// 全部版本集合。
+            /// </summary>
             [DataMember(Name = "versions")]
             public PromptVersionItem[] versions { get; set; }
         }
@@ -176,12 +229,21 @@ namespace SmartWord.Services.Prompts
         [DataContract]
         private sealed class PromptVersionItem
         {
+            /// <summary>
+            /// 版本号。
+            /// </summary>
             [DataMember(Name = "version")]
             public string version { get; set; }
 
+            /// <summary>
+            /// 改写模板。
+            /// </summary>
             [DataMember(Name = "rewrite")]
             public PromptTemplate rewrite { get; set; }
 
+            /// <summary>
+            /// VBA 模板。
+            /// </summary>
             [DataMember(Name = "vba")]
             public PromptTemplate vba { get; set; }
         }
@@ -189,9 +251,15 @@ namespace SmartWord.Services.Prompts
         [DataContract]
         private sealed class PromptTemplate
         {
+            /// <summary>
+            /// 系统提示词模板。
+            /// </summary>
             [DataMember(Name = "system")]
             public string system { get; set; }
 
+            /// <summary>
+            /// 用户提示词模板。
+            /// </summary>
             [DataMember(Name = "userTemplate")]
             public string userTemplate { get; set; }
         }

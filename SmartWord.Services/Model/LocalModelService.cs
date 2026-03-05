@@ -3,10 +3,20 @@ using System.Threading.Tasks;
 using SmartWord.Core.Abstractions;
 using SmartWord.Core.Models;
 
+// 文件说明：
+// 本地模型降级实现，用于在远端模型不可用时维持基本改写、VBA 生成和路由能力。
 namespace SmartWord.Services.Model
 {
+    /// <summary>
+    /// 本地模型服务。
+    /// </summary>
     public sealed class LocalModelService : IModelService
     {
+        /// <summary>
+        /// 基于规则执行文本改写。
+        /// </summary>
+        /// <param name="request">改写请求。</param>
+        /// <returns>改写结果。</returns>
         public Task<string> RewriteTextAsync(EditorRewriteRequest request)
         {
             if (request == null || string.IsNullOrWhiteSpace(request.SelectedText))
@@ -17,6 +27,7 @@ namespace SmartWord.Services.Model
             string instruction = request.Instruction ?? string.Empty;
             string selectedText = request.SelectedText;
 
+            // 简单关键词规则：仅用于离线兜底，不追求语义完备。
             if (instruction.IndexOf("upper", System.StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 return Task.FromResult(selectedText.ToUpperInvariant());
@@ -35,11 +46,17 @@ namespace SmartWord.Services.Model
             return Task.FromResult(selectedText + " [Edited]");
         }
 
+        /// <summary>
+        /// 基于规则生成示例 VBA 代码。
+        /// </summary>
+        /// <param name="request">VBA 生成请求。</param>
+        /// <returns>VBA 代码文本。</returns>
         public Task<string> GenerateVbaCodeAsync(VbaGenerationRequest request)
         {
             int fontSize = 16;
             if (request != null && !string.IsNullOrWhiteSpace(request.Instruction))
             {
+                // 从指令中提取数字作为字号，限定到合理区间。
                 Match match = Regex.Match(request.Instruction, "(\\d+)");
                 int parsed;
                 if (match.Success && int.TryParse(match.Value, out parsed) && parsed >= 6 && parsed <= 96)
@@ -56,6 +73,14 @@ namespace SmartWord.Services.Model
             return Task.FromResult(code);
         }
 
+        /// <summary>
+        /// 基于关键词规则返回路由 JSON，供路由服务解析。
+        /// </summary>
+        /// <param name="systemPrompt">系统提示词（本地实现中不使用）。</param>
+        /// <param name="userPrompt">用户提示词。</param>
+        /// <param name="modelOverride">模型覆盖项（本地实现中不使用）。</param>
+        /// <param name="temperature">温度参数（本地实现中不使用）。</param>
+        /// <returns>路由 JSON 文本。</returns>
         public Task<string> ChatWithPromptsAsync(string systemPrompt, string userPrompt, string modelOverride, double temperature)
         {
             string prompt = (userPrompt ?? string.Empty).ToLowerInvariant();

@@ -1,76 +1,85 @@
-using System;
+ï»¿using System;
 
+// æ–‡ä»¶è¯´æ˜Žï¼š
+// VBA æ¨¡å—ç®¡ç†å™¨ï¼Œè´Ÿè´£åœ¨ Word æ–‡æ¡£ä¸­åˆ›å»ºä¸´æ—¶æ¨¡å—å¹¶åœ¨æ‰§è¡ŒåŽå®‰å…¨æ¸…ç†ã€‚
 namespace SmartWord.Services.Vba
 {
-    /// VBAÄ£¿é¹ÜÀíÆ÷
-    /// ¸ºÔðÔÚWordÎÄµµÖÐ¶¯Ì¬´´½¨¡¢¹ÜÀíºÍÇåÀíÁÙÊ±VBAÄ£¿é
-    /// ÕâÊÇSmartWordºËÐÄ¹¦ÄÜµÄÖØÒª×é³É²¿·Ö£¬Ö§³Ö¶¯Ì¬´úÂë×¢ÈëºÍÖ´ÐÐ
+    /// <summary>
+    /// VBA æ¨¡å—ç®¡ç†å™¨ã€‚
+    /// </summary>
     internal sealed class VbaModuleManager
     {
-        /// VBA±ê×¼Ä£¿éÀàÐÍ³£Á¿
-        /// ÖµÎª1£¬±íÊ¾´´½¨±ê×¼VBAÄ£¿é£¨ÓëÀàÄ£¿é¡¢´°ÌåÄ£¿éµÈÇø·Ö£©
+        /// <summary>
+        /// VBA æ ‡å‡†æ¨¡å—ç±»åž‹å¸¸é‡ï¼ˆ1 ä»£è¡¨æ ‡å‡†æ¨¡å—ï¼‰ã€‚
+        /// </summary>
         private const int VbextCtStdModule = 1;
-        
-        /// WordÓ¦ÓÃ³ÌÐòÊµÀýµÄ¶¯Ì¬ÒýÓÃ
-        /// Ê¹ÓÃdynamicÀàÐÍÒÔÖ§³ÖCOM»¥²Ù×÷£¬±ÜÃâÔçÆÚ°ó¶¨µÄ°æ±¾ÒÀÀµÎÊÌâ
+
+        /// <summary>
+        /// Word åº”ç”¨ç¨‹åºåŠ¨æ€å¼•ç”¨ï¼ˆCOM äº’æ“ä½œï¼‰ã€‚
+        /// </summary>
         private readonly dynamic _wordApplication;
 
-        /// ³õÊ¼»¯VBAÄ£¿é¹ÜÀíÆ÷
-        /// WordÓ¦ÓÃ³ÌÐòÊµÀý£¬ÓÃÓÚ·ÃÎÊVBAÏîÄ¿ºÍ×é¼þ
+        /// <summary>
+        /// åˆå§‹åŒ– VBA æ¨¡å—ç®¡ç†å™¨ã€‚
+        /// </summary>
+        /// <param name="wordApplication">Word åº”ç”¨å®žä¾‹ã€‚</param>
         public VbaModuleManager(dynamic wordApplication)
         {
             _wordApplication = wordApplication;
         }
 
-        /// ´´½¨ÁÙÊ±VBAÄ£¿é²¢×¢Èë´úÂë
+        /// <summary>
+        /// åˆ›å»ºä¸´æ—¶ VBA æ¨¡å—å¹¶æ³¨å…¥ä»£ç ã€‚
+        /// </summary>
+        /// <param name="vbaCode">VBA ä»£ç æ–‡æœ¬ã€‚</param>
+        /// <returns>ä¸´æ—¶æ¨¡å—åç§°ã€‚</returns>
         public string CreateTemporaryModule(string vbaCode)
         {
-            // »ñÈ¡µ±Ç°»î¶¯ÎÄµµµÄVBAÏîÄ¿
+            // èŽ·å–å½“å‰æ´»åŠ¨æ–‡æ¡£çš„ VBA é¡¹ç›®ã€‚
             dynamic vbProject = _wordApplication.ActiveDocument.VBProject;
-            // »ñÈ¡VBA×é¼þ¼¯ºÏ£¬ÓÃÓÚÌí¼ÓÐÂÄ£¿é
+            // èŽ·å– VBA ç»„ä»¶é›†åˆï¼Œç”¨äºŽæ·»åŠ æ–°æ¨¡å—ã€‚
             dynamic vbComponents = vbProject.VBComponents;
-            // ´´½¨±ê×¼VBAÄ£¿é
+            // åˆ›å»ºæ ‡å‡† VBA æ¨¡å—ã€‚
             dynamic module = vbComponents.Add(VbextCtStdModule);
 
-            // Éú³ÉÎ¨Ò»µÄÁÙÊ±Ä£¿éÃû³Æ£¬Ê¹ÓÃGUIDÈ·±£²»ÓëÏÖÓÐÄ£¿é³åÍ»
+            // ç”Ÿæˆå”¯ä¸€ä¸´æ—¶æ¨¡å—åï¼Œé¿å…ä¸ŽçŽ°æœ‰æ¨¡å—å†²çªã€‚
             string moduleName = "SmartWordTemp_" + Guid.NewGuid().ToString("N").Substring(0, 8);
 
-
-            // ÉèÖÃÄ£¿éÃû³Æ²¢×¢ÈëVBA´úÂë
+            // è®¾ç½®æ¨¡å—åç§°å¹¶æ³¨å…¥ VBA ä»£ç ã€‚
             module.Name = moduleName;
             module.CodeModule.AddFromString(vbaCode);
-            
+
             return moduleName;
         }
 
-        /// °²È«ÒÆ³ýÖ¸¶¨µÄVBAÄ£¿é
-        /// ÔÚ´úÂëÖ´ÐÐÍê±ÏºóÇåÀíÁÙÊ±Ä£¿é£¬±ÜÃâÎÛÈ¾WordÎÄµµµÄVBAÏîÄ¿
+        /// <summary>
+        /// å®‰å…¨ç§»é™¤æŒ‡å®š VBA æ¨¡å—ã€‚
+        /// </summary>
+        /// <param name="moduleName">æ¨¡å—åç§°ã€‚</param>
         public void RemoveModuleIfExists(string moduleName)
         {
-            // ²ÎÊýÑéÖ¤£º¿ÕÖµ»ò¿Õ°××Ö·û´®Ö±½Ó·µ»Ø
+            // å‚æ•°ä¸ºç©ºæ—¶ç›´æŽ¥è¿”å›žã€‚
             if (string.IsNullOrWhiteSpace(moduleName))
             {
                 return;
             }
 
-            // »ñÈ¡VBAÏîÄ¿×é¼þ¼¯ºÏ
+            // èŽ·å– VBA é¡¹ç›®ç»„ä»¶é›†åˆã€‚
             dynamic vbProject = _wordApplication.ActiveDocument.VBProject;
             dynamic vbComponents = vbProject.VBComponents;
 
             try
             {
-                // ³¢ÊÔ»ñÈ¡Ö¸¶¨Ãû³ÆµÄÄ£¿é
+                // å°è¯•èŽ·å–æŒ‡å®šæ¨¡å—å¹¶åˆ é™¤ã€‚
                 dynamic module = vbComponents.Item(moduleName);
                 if (module != null)
                 {
-                    // ÒÆ³ýÄ£¿é
                     vbComponents.Remove(module);
                 }
             }
             catch
             {
-                // ºöÂÔÇåÀí¹ý³ÌÖÐµÄ´íÎó£¬±ÜÃâÑÚ¸ÇÔ­Ê¼Òì³£
-                // ÕâÖÖÉè¼ÆÈ·±£¼´Ê¹ÇåÀíÊ§°Ü£¬Ò²²»»áÓ°ÏìÖ÷ÒªµÄÒµÎñÂß¼­Á÷³Ì
+                // å¿½ç•¥æ¸…ç†å¼‚å¸¸ï¼Œé¿å…æŽ©ç›–ä¸»æµç¨‹å¼‚å¸¸ã€‚
             }
         }
     }

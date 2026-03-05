@@ -2,18 +2,29 @@
 
 namespace SmartWord.AddIn.UI
 {
+    // 文件说明：
+    // 定义 Word Ribbon 上的 SmartWord 入口按钮，并与任务侧栏可见状态保持同步。
+    /// <summary>
+    /// SmartWord Ribbon 组件。
+    /// </summary>
     public sealed class SmartWordRibbon : RibbonBase
     {
         private RibbonTab _homeTab;
         private RibbonGroup _smartWordGroup;
         private RibbonToggleButton _toggleChatPaneButton;
 
+        /// <summary>
+        /// 初始化 Ribbon 实例并创建控件树。
+        /// </summary>
         public SmartWordRibbon()
             : base(Globals.Factory.GetRibbonFactory())
         {
             InitializeComponent();
         }
 
+        /// <summary>
+        /// 构建 Ribbon 控件结构与显示属性。
+        /// </summary>
         private void InitializeComponent()
         {
             this._homeTab = this.Factory.CreateRibbonTab();
@@ -55,11 +66,20 @@ namespace SmartWord.AddIn.UI
 
         }
 
+        /// <summary>
+        /// 根据侧栏可见状态同步按钮选中态。
+        /// </summary>
+        /// <param name="isVisible">侧栏是否可见。</param>
         public void SyncPaneState(bool isVisible)
         {
             _toggleChatPaneButton.Checked = isVisible;
         }
 
+        /// <summary>
+        /// Ribbon 按钮点击事件：切换聊天侧栏显隐并回写最终状态。
+        /// </summary>
+        /// <param name="sender">事件源。</param>
+        /// <param name="e">事件参数。</param>
         private void ToggleChatPaneButton_Click(object sender, RibbonControlEventArgs e)
         {
             bool current = _toggleChatPaneButton.Checked;

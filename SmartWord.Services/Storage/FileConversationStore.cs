@@ -8,13 +8,22 @@ using System.Text;
 using System.Threading.Tasks;
 using SmartWord.Core.Models.Conversation;
 
+// 文件说明：
+// 基于 JSON 文件的会话存储实现，负责会话读写、活动会话切换与并发保护。
 namespace SmartWord.Services.Storage
 {
+    /// <summary>
+    /// 文件会话存储。
+    /// </summary>
     public sealed class FileConversationStore : IConversationStore
     {
         private readonly string _storeFilePath;
         private readonly object _syncRoot = new object();
 
+        /// <summary>
+        /// 初始化文件会话存储。
+        /// </summary>
+        /// <param name="storeFilePath">存储文件路径。</param>
         public FileConversationStore(string storeFilePath)
         {
             _storeFilePath = string.IsNullOrWhiteSpace(storeFilePath)
@@ -22,16 +31,24 @@ namespace SmartWord.Services.Storage
                 : storeFilePath;
         }
 
+        /// <summary>
+        /// 加载会话列表。
+        /// </summary>
+        /// <returns>会话只读列表。</returns>
         public Task<IReadOnlyList<ConversationSession>> LoadSessionsAsync()
         {
             lock (_syncRoot)
             {
+                // 锁内读取，确保多线程场景下文件读写一致。
                 StoreFileModel model = LoadFile();
                 var result = new List<ConversationSession>(model.Sessions);
                 return Task.FromResult((IReadOnlyList<ConversationSession>)result);
             }
         }
 
+        /// <summary>
+        /// 创建新会话并设为活动会话。
+        /// </summary>
         public Task<ConversationSession> CreateSessionAsync(string title)
         {
             lock (_syncRoot)
@@ -51,6 +68,7 @@ namespace SmartWord.Services.Storage
 
                 for (int i = 0; i < model.Sessions.Count; i++)
                 {
+                    // 新建会话后重置其他会话活动状态。
                     model.Sessions[i].IsActive = false;
                 }
 
@@ -61,6 +79,9 @@ namespace SmartWord.Services.Storage
             }
         }
 
+        /// <summary>
+        /// 按会话 ID 获取会话。
+        /// </summary>
         public Task<ConversationSession> GetSessionAsync(string sessionId)
         {
             lock (_syncRoot)
@@ -83,6 +104,9 @@ namespace SmartWord.Services.Storage
             }
         }
 
+        /// <summary>
+        /// 获取当前活动会话。
+        /// </summary>
         public Task<ConversationSession> GetActiveSessionAsync()
         {
             lock (_syncRoot)
@@ -111,6 +135,9 @@ namespace SmartWord.Services.Storage
             }
         }
 
+        /// <summary>
+        /// 设置活动会话。
+        /// </summary>
         public Task SetActiveSessionAsync(string sessionId)
         {
             lock (_syncRoot)
@@ -138,6 +165,9 @@ namespace SmartWord.Services.Storage
             }
         }
 
+        /// <summary>
+        /// 保存会话。
+        /// </summary>
         public Task SaveSessionAsync(ConversationSession session)
         {
             if (session == null || string.IsNullOrWhiteSpace(session.SessionId))
@@ -162,6 +192,7 @@ namespace SmartWord.Services.Storage
 
                 if (!updated)
                 {
+                    // 新会话直接插入头部，便于 UI 侧按最近更新时间展示。
                     session.UpdatedAtUtc = DateTime.UtcNow;
                     model.Sessions.Insert(0, session);
                 }
@@ -183,6 +214,10 @@ namespace SmartWord.Services.Storage
             }
         }
 
+        /// <summary>
+        /// 从存储文件加载模型。
+        /// </summary>
+        /// <returns>存储文件模型。</returns>
         private StoreFileModel LoadFile()
         {
             EnsureDirectory();
@@ -201,12 +236,17 @@ namespace SmartWord.Services.Storage
 
             if (model.Sessions == null)
             {
+                // 兼容旧文件或异常文件结构。
                 model.Sessions = new List<ConversationSession>();
             }
 
             return model;
         }
 
+        /// <summary>
+        /// 将模型写回存储文件。
+        /// </summary>
+        /// <param name="model">存储模型。</param>
         private void SaveFile(StoreFileModel model)
         {
             EnsureDirectory();
@@ -214,6 +254,9 @@ namespace SmartWord.Services.Storage
             File.WriteAllText(_storeFilePath, json, Encoding.UTF8);
         }
 
+        /// <summary>
+        /// 确保存储目录存在。
+        /// </summary>
         private void EnsureDirectory()
         {
             string directory = Path.GetDirectoryName(_storeFilePath);
@@ -223,6 +266,9 @@ namespace SmartWord.Services.Storage
             }
         }
 
+        /// <summary>
+        /// 序列化对象为 JSON。
+        /// </summary>
         private static string Serialize<T>(T value)
         {
             var serializer = new DataContractJsonSerializer(typeof(T));
@@ -233,6 +279,9 @@ namespace SmartWord.Services.Storage
             }
         }
 
+        /// <summary>
+        /// 从 JSON 反序列化对象。
+        /// </summary>
         private static T Deserialize<T>(string json) where T : class
         {
             if (string.IsNullOrWhiteSpace(json))
@@ -251,14 +300,23 @@ namespace SmartWord.Services.Storage
         [DataContract]
         private sealed class StoreFileModel
         {
+            /// <summary>
+            /// 初始化存储文件模型。
+            /// </summary>
             public StoreFileModel()
             {
                 Sessions = new List<ConversationSession>();
             }
 
+            /// <summary>
+            /// 活动会话 ID。
+            /// </summary>
             [DataMember(Name = "activeSessionId")]
             public string ActiveSessionId { get; set; }
 
+            /// <summary>
+            /// 会话集合。
+            /// </summary>
             [DataMember(Name = "sessions")]
             public List<ConversationSession> Sessions { get; set; }
         }

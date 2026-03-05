@@ -5,17 +5,31 @@ using System;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
+// 文件说明：
+// 指令路由服务实现，综合模型判定与规则兜底决定会话执行链路。
 namespace SmartWord.Services.Routing
 {
+    /// <summary>
+    /// 指令路由服务。
+    /// </summary>
     public sealed class CommandRouteService : ICommandRouteService
     {
         private readonly IModelService _modelService;
 
+        /// <summary>
+        /// 初始化路由服务。
+        /// </summary>
+        /// <param name="modelService">模型服务。</param>
         public CommandRouteService(IModelService modelService)
         {
             _modelService = modelService;
         }
 
+        /// <summary>
+        /// 对输入指令进行路由判定。
+        /// </summary>
+        /// <param name="input">路由输入。</param>
+        /// <returns>路由决策结果。</returns>
         public async Task<RouteDecision> DecideRouteAsync(RouteInput input)
         {
             if (input == null || string.IsNullOrWhiteSpace(input.UserMessage))
@@ -30,6 +44,7 @@ namespace SmartWord.Services.Routing
 
             try
             {
+                // 优先使用模型路由，提升复杂场景识别准确性。
                 string modelReply = await _modelService.ChatWithPromptsAsync(
                     BuildSystemPrompt(),
                     BuildUserPrompt(input),
@@ -50,6 +65,9 @@ namespace SmartWord.Services.Routing
             return BuildFallbackRoute(input.UserMessage);
         }
 
+        /// <summary>
+        /// 构建路由系统提示词。
+        /// </summary>
         private static string BuildSystemPrompt()
         {
             return "You are a routing agent for Word assistant. " +
@@ -57,6 +75,9 @@ namespace SmartWord.Services.Routing
                    "Use route=vba for formatting/layout/macro intent, rewrite for rewriting text, hybrid for both.";
         }
 
+        /// <summary>
+        /// 构建路由用户提示词。
+        /// </summary>
         private static string BuildUserPrompt(RouteInput input)
         {
             return "Instruction:\n" + (input.UserMessage ?? string.Empty) +
@@ -64,6 +85,9 @@ namespace SmartWord.Services.Routing
                    "\n\nRetrievedContext:\n" + (input.RetrievedContext ?? string.Empty);
         }
 
+        /// <summary>
+        /// 解析模型返回的 JSON 风格路由结果。
+        /// </summary>
         private static RouteDecision ParseModelRoute(string modelReply)
         {
             if (string.IsNullOrWhiteSpace(modelReply))
@@ -95,6 +119,9 @@ namespace SmartWord.Services.Routing
             };
         }
 
+        /// <summary>
+        /// 将字符串路由值解析为枚举。
+        /// </summary>
         private static bool TryParseRoute(string route, out ConversationRouteType routeType)
         {
             routeType = ConversationRouteType.Rewrite;
@@ -125,6 +152,9 @@ namespace SmartWord.Services.Routing
             return false;
         }
 
+        /// <summary>
+        /// 从 JSON 风格文本中提取指定字段值。
+        /// </summary>
         private static string ExtractValue(string jsonLikeText, string key)
         {
             Match quoted = Regex.Match(
@@ -150,6 +180,9 @@ namespace SmartWord.Services.Routing
             return string.Empty;
         }
 
+        /// <summary>
+        /// 构建基于规则的兜底路由结果。
+        /// </summary>
         private static RouteDecision BuildFallbackRoute(string instruction)
         {
             string text = instruction ?? string.Empty;

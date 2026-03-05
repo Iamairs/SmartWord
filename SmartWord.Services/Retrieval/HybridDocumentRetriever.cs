@@ -9,8 +9,13 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
+// 文件说明：
+// 混合检索器实现，融合关键词、向量相似度与可选 LLM 重排，为会话提供高相关上下文。
 namespace SmartWord.Services.Retrieval
 {
+    /// <summary>
+    /// 混合文档检索器。
+    /// </summary>
     public sealed class HybridDocumentRetriever : IDocumentRetriever
     {
         private readonly WordDocumentChunkProvider _chunkProvider;
@@ -18,6 +23,9 @@ namespace SmartWord.Services.Retrieval
         private readonly VectorIndexStore _vectorIndexStore;
         private readonly IModelService _modelService;
 
+        /// <summary>
+        /// 初始化混合检索器。
+        /// </summary>
         public HybridDocumentRetriever(
             WordDocumentChunkProvider chunkProvider,
             IEmbeddingService embeddingService,
@@ -30,6 +38,11 @@ namespace SmartWord.Services.Retrieval
             _modelService = modelService;
         }
 
+        /// <summary>
+        /// 执行检索并返回上下文。
+        /// </summary>
+        /// <param name="query">检索查询。</param>
+        /// <returns>检索上下文。</returns>
         public async Task<RetrievedContext> RetrieveAsync(DocumentQuery query)
         {
             var snapshot = _chunkProvider.CaptureSnapshot();
@@ -46,6 +59,7 @@ namespace SmartWord.Services.Retrieval
 
             int maxChunks = query == null || query.MaxChunks <= 0 ? 5 : query.MaxChunks;
             string queryText = BuildQueryText(query);
+            // 第一阶段：关键词召回，覆盖基础相关性。
             List<ScoredChunk> candidates = ScoreByKeyword(snapshot.Chunks, queryText);
 
             Dictionary<string, float[]> vectorMap = await _vectorIndexStore.GetOrCreateEmbeddingsAsync(
@@ -58,6 +72,7 @@ namespace SmartWord.Services.Retrieval
                 ? new float[0]
                 : await _embeddingService.CreateEmbeddingAsync(queryText, query == null ? null : query.ModelOverride);
 
+            // 第二阶段：融合向量分数，得到混合评分。
             for (int i = 0; i < candidates.Count; i++)
             {
                 float[] chunkVector;
@@ -76,6 +91,7 @@ namespace SmartWord.Services.Retrieval
                 .Take(Math.Max(maxChunks * 2, maxChunks))
                 .ToList();
 
+            // 第三阶段：可选 LLM 重排，提升候选精度。
             List<ScoredChunk> reranked = await TryRerankAsync(topCandidates, queryText, query == null ? null : query.ModelOverride);
             List<ScoredChunk> finalChunks = reranked
                 .OrderByDescending(item => item.TotalScore)
@@ -106,6 +122,9 @@ namespace SmartWord.Services.Retrieval
             return context;
         }
 
+        /// <summary>
+        /// 尝试使用模型对候选分片进行重排。
+        /// </summary>
         private async Task<List<ScoredChunk>> TryRerankAsync(List<ScoredChunk> candidates, string queryText, string modelOverride)
         {
             if (candidates == null || candidates.Count <= 1 || _modelService == null)
@@ -143,6 +162,7 @@ namespace SmartWord.Services.Retrieval
                     int rank;
                     if (rankMap.TryGetValue(candidates[i].Chunk.ChunkId, out rank))
                     {
+                        // 以轻量加分方式融入重排结果，避免完全推翻基础分数。
                         candidates[i].TotalScore += (candidates.Count - rank) * 0.01d;
                     }
                 }
@@ -155,6 +175,9 @@ namespace SmartWord.Services.Retrieval
             return candidates;
         }
 
+        /// <summary>
+        /// 构建重排提示词。
+        /// </summary>
         private static string BuildRerankPrompt(string queryText, List<ScoredChunk> candidates)
         {
             var builder = new StringBuilder();
@@ -174,6 +197,9 @@ namespace SmartWord.Services.Retrieval
             return builder.ToString();
         }
 
+        /// <summary>
+        /// 基于关键词重叠计算候选分片分数。
+        /// </summary>
         private static List<ScoredChunk> ScoreByKeyword(List<DocumentChunk> chunks, string queryText)
         {
             var queryTokens = Tokenize(queryText);
@@ -201,6 +227,9 @@ namespace SmartWord.Services.Retrieval
             return result;
         }
 
+        /// <summary>
+        /// 统计两个 token 集合的重叠数量。
+        /// </summary>
         private static int CountOverlap(List<string> left, List<string> right)
         {
             var rightSet = new HashSet<string>(right, StringComparer.OrdinalIgnoreCase);
@@ -216,6 +245,9 @@ namespace SmartWord.Services.Retrieval
             return count;
         }
 
+        /// <summary>
+        /// 对文本进行粗粒度分词。
+        /// </summary>
         private static List<string> Tokenize(string text)
         {
             var tokens = new List<string>();
@@ -237,6 +269,9 @@ namespace SmartWord.Services.Retrieval
             return tokens;
         }
 
+        /// <summary>
+        /// 构建检索查询文本（用户问题 + 选区上下文）。
+        /// </summary>
         private static string BuildQueryText(DocumentQuery query)
         {
             if (query == null)
@@ -247,6 +282,9 @@ namespace SmartWord.Services.Retrieval
             return (query.QueryText ?? string.Empty) + "\n" + (query.SelectedText ?? string.Empty);
         }
 
+        /// <summary>
+        /// 计算余弦相似度。
+        /// </summary>
         private static double CosineSimilarity(float[] left, float[] right)
         {
             if (left == null || right == null || left.Length == 0 || right.Length == 0)
@@ -274,6 +312,9 @@ namespace SmartWord.Services.Retrieval
             return dot / (Math.Sqrt(normLeft) * Math.Sqrt(normRight));
         }
 
+        /// <summary>
+        /// 带分值的分片结构。
+        /// </summary>
         private sealed class ScoredChunk
         {
             public DocumentChunk Chunk { get; set; }

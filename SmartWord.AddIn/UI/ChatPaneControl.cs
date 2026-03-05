@@ -11,6 +11,12 @@ using System.Windows.Forms;
 
 namespace SmartWord.AddIn.UI
 {
+    // 文件说明：
+    // 聊天侧栏核心控件，负责会话列表管理、对话交互、待执行动作确认以及 UI 状态控制。
+    /// <summary>
+    /// SmartWord 对话侧栏控件。
+    /// 将编排器能力映射为可交互 UI，并在 WinForms 环境下维护统一的忙碌态与异常提示机制。
+    /// </summary>
     internal sealed class ChatPaneControl : UserControl
     {
         private readonly IConversationOrchestrator _conversationOrchestrator;
@@ -34,6 +40,14 @@ namespace SmartWord.AddIn.UI
         private bool _isBusy;
         private bool _isRefreshingSessions;
 
+        /// <summary>
+        /// 初始化聊天侧栏控件并构建界面元素。
+        /// </summary>
+        /// <param name="conversationOrchestrator">会话编排器。</param>
+        /// <param name="notificationService">通知服务。</param>
+        /// <param name="availableModels">可选模型列表。</param>
+        /// <param name="defaultModel">默认模型。</param>
+        /// <param name="defaultPromptVersion">默认 Prompt 版本。</param>
         public ChatPaneControl(
             IConversationOrchestrator conversationOrchestrator,
             INotificationService notificationService,
@@ -45,6 +59,7 @@ namespace SmartWord.AddIn.UI
             _notificationService = notificationService;
             _themeProvider = new LightThemeProvider();
 
+            // 统一设置主题基础属性，保证控件观感一致。
             BackColor = _themeProvider.BackgroundColor;
             Font = _themeProvider.NormalFont;
 
@@ -102,6 +117,7 @@ namespace SmartWord.AddIn.UI
             rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 160));
             _splitContainer.Panel2.Controls.Add(rightLayout);
 
+            // 初始化分栏宽度，避免首次渲染时出现越界异常。
             ApplySafeSplitterDistance();
 
             var topPanel = new Panel
@@ -253,16 +269,27 @@ namespace SmartWord.AddIn.UI
             bottomPanel.Controls.Add(_statusLabel);
         }
 
+        /// <summary>
+        /// 异步初始化控件数据（加载会话列表及历史消息）。
+        /// </summary>
         public async Task InitializeAsync()
         {
             await LoadSessionsAsync().ConfigureAwait(true);
         }
 
+        /// <summary>
+        /// 将焦点定位到输入框，便于用户直接输入指令。
+        /// </summary>
         public void FocusInput()
         {
             _inputTextBox.Focus();
         }
 
+        /// <summary>
+        /// 新建会话按钮事件：创建会话并刷新左侧会话列表。
+        /// </summary>
+        /// <param name="sender">事件源。</param>
+        /// <param name="e">事件参数。</param>
         private async void NewSessionButton_Click(object sender, EventArgs e)
         {
             await RunSafeAsync(async () =>
@@ -275,8 +302,14 @@ namespace SmartWord.AddIn.UI
             }).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// 会话列表选中事件：切换当前活跃会话并刷新消息区。
+        /// </summary>
+        /// <param name="sender">事件源。</param>
+        /// <param name="e">事件参数。</param>
         private async void SessionListBox_SelectedIndexChanged(object sender, EventArgs e)
         {
+            // 刷新列表时会触发选中变化事件，这里直接忽略以避免重复请求。
             if (_isRefreshingSessions)
             {
                 return;
@@ -296,11 +329,19 @@ namespace SmartWord.AddIn.UI
             }).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// 发送按钮事件：提交当前输入为一次新对话轮次。
+        /// </summary>
+        /// <param name="sender">事件源。</param>
+        /// <param name="e">事件参数。</param>
         private async void SendButton_Click(object sender, EventArgs e)
         {
             await SubmitTurnAsync().ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// 提交当前输入并处理编排结果（更新会话、待执行动作与状态提示）。
+        /// </summary>
         private async Task SubmitTurnAsync()
         {
             string message = _inputTextBox.Text == null ? string.Empty : _inputTextBox.Text.Trim();
@@ -312,6 +353,7 @@ namespace SmartWord.AddIn.UI
 
             await RunSafeAsync(async () =>
             {
+                // 每一轮对话都允许用户临时覆盖模型与 Prompt 版本，便于快速试验。
                 ChatTurnResult result = await _conversationOrchestrator.RunTurnAsync(new ChatTurnRequest
                 {
                     SessionId = _activeSessionId,
@@ -337,6 +379,11 @@ namespace SmartWord.AddIn.UI
             }).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// 确认执行按钮事件：应用当前待执行动作。
+        /// </summary>
+        /// <param name="sender">事件源。</param>
+        /// <param name="e">事件参数。</param>
         private async void ApplyButton_Click(object sender, EventArgs e)
         {
             if (string.IsNullOrWhiteSpace(_activeSessionId) || string.IsNullOrWhiteSpace(_pendingActionId))
@@ -359,6 +406,11 @@ namespace SmartWord.AddIn.UI
             }).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// 取消按钮事件：清空当前待执行动作并恢复按钮状态。
+        /// </summary>
+        /// <param name="sender">事件源。</param>
+        /// <param name="e">事件参数。</param>
         private void CancelActionButton_Click(object sender, EventArgs e)
         {
             _pendingActionId = string.Empty;
@@ -367,6 +419,11 @@ namespace SmartWord.AddIn.UI
             _statusLabel.Text = "已取消待执行动作。";
         }
 
+        /// <summary>
+        /// 输入框键盘事件：按 Enter（不带 Shift）时触发发送。
+        /// </summary>
+        /// <param name="sender">事件源。</param>
+        /// <param name="e">键盘事件参数。</param>
         private async void InputTextBox_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Enter && !e.Shift)
@@ -376,6 +433,9 @@ namespace SmartWord.AddIn.UI
             }
         }
 
+        /// <summary>
+        /// 加载会话列表并渲染活跃会话消息。
+        /// </summary>
         private async Task LoadSessionsAsync()
         {
             IReadOnlyList<ConversationSession> sessions = await _conversationOrchestrator.LoadSessionsAsync().ConfigureAwait(true);
@@ -409,6 +469,7 @@ namespace SmartWord.AddIn.UI
 
                 if (active == null && sessions.Count > 0)
                 {
+                    // 未找到匹配活跃会话时，默认展示第一条，保证 UI 有稳定落点。
                     active = sessions[0];
                 }
 
@@ -429,6 +490,10 @@ namespace SmartWord.AddIn.UI
             }
         }
 
+        /// <summary>
+        /// 根据会话 ID 在列表中选中对应项。
+        /// </summary>
+        /// <param name="sessionId">目标会话 ID。</param>
         private void SelectSessionItem(string sessionId)
         {
             for (int i = 0; i < _sessionListBox.Items.Count; i++)
@@ -442,6 +507,10 @@ namespace SmartWord.AddIn.UI
             }
         }
 
+        /// <summary>
+        /// 将会话消息序列渲染为可读文本并滚动到末尾。
+        /// </summary>
+        /// <param name="messages">会话消息集合。</param>
         private void RenderMessages(IList<ConversationMessage> messages)
         {
             var builder = new StringBuilder();
@@ -460,6 +529,10 @@ namespace SmartWord.AddIn.UI
             _messageBox.ScrollToCaret();
         }
 
+        /// <summary>
+        /// 统一异步执行保护：防重入、异常兜底与忙碌态切换。
+        /// </summary>
+        /// <param name="callback">实际执行的异步逻辑。</param>
         private async Task RunSafeAsync(Func<Task> callback)
         {
             if (_isBusy)
@@ -475,6 +548,7 @@ namespace SmartWord.AddIn.UI
             }
             catch (Exception ex)
             {
+                // UI 层统一收口异常，避免事件处理链中断。
                 string error = "操作失败：" + ex.Message;
                 _statusLabel.Text = error;
                 if (_notificationService != null)
@@ -489,6 +563,10 @@ namespace SmartWord.AddIn.UI
             }
         }
 
+        /// <summary>
+        /// 根据忙碌状态批量更新控件可用性，防止用户在处理中重复触发动作。
+        /// </summary>
+        /// <param name="isBusy">是否处于忙碌状态。</param>
         private void SetBusyState(bool isBusy)
         {
             _sendButton.Enabled = !isBusy;
@@ -509,11 +587,19 @@ namespace SmartWord.AddIn.UI
             }
         }
 
+        /// <summary>
+        /// 容器尺寸变化事件：重新计算分栏比例。
+        /// </summary>
+        /// <param name="sender">事件源。</param>
+        /// <param name="e">事件参数。</param>
         private void ChatPaneControl_Resize(object sender, EventArgs e)
         {
             ApplySafeSplitterDistance();
         }
 
+        /// <summary>
+        /// 计算并应用安全的分栏距离，规避极窄窗口下的越界异常。
+        /// </summary>
         private void ApplySafeSplitterDistance()
         {
             if (_splitContainer == null || _splitContainer.Width <= 0)
@@ -554,8 +640,17 @@ namespace SmartWord.AddIn.UI
             _splitContainer.SplitterDistance = target;
         }
 
+        /// <summary>
+        /// 会话列表显示项。
+        /// </summary>
         private sealed class SessionListItem
         {
+            /// <summary>
+            /// 初始化会话列表项。
+            /// </summary>
+            /// <param name="sessionId">会话 ID。</param>
+            /// <param name="title">会话标题。</param>
+            /// <param name="isActive">是否为活跃会话。</param>
             public SessionListItem(string sessionId, string title, bool isActive)
             {
                 SessionId = sessionId;
@@ -569,6 +664,10 @@ namespace SmartWord.AddIn.UI
 
             public bool IsActive { get; private set; }
 
+            /// <summary>
+            /// 返回列表显示文本；活跃会话前缀 <c>*</c> 便于快速识别。
+            /// </summary>
+            /// <returns>用于 ListBox 展示的文本。</returns>
             public override string ToString()
             {
                 return (IsActive ? "* " : string.Empty) + (string.IsNullOrWhiteSpace(Title) ? "未命名会话" : Title);

@@ -3,6 +3,11 @@ using System.Windows.Forms;
 
 namespace SmartWord.AddIn.UI
 {
+    // 文件说明：
+    // 传统指令输入弹窗，用于在未使用侧栏时快速收集用户指令、模型与 Prompt 版本参数。
+    /// <summary>
+    /// 指令输入窗口。
+    /// </summary>
     internal sealed class PromptWindow : Form
     {
         private readonly TextBox _instructionTextBox;
@@ -11,6 +16,12 @@ namespace SmartWord.AddIn.UI
         private readonly Button _okButton;
         private readonly Button _cancelButton;
 
+        /// <summary>
+        /// 初始化指令输入窗口并构建基础表单布局。
+        /// </summary>
+        /// <param name="availableModels">可选模型列表。</param>
+        /// <param name="defaultModel">默认模型。</param>
+        /// <param name="defaultPromptVersion">默认 Prompt 版本。</param>
         public PromptWindow(string[] availableModels, string defaultModel, string defaultPromptVersion)
         {
             Text = "SmartWord Command";
@@ -59,6 +70,7 @@ namespace SmartWord.AddIn.UI
             };
             if (availableModels != null)
             {
+                // 仅注入有效模型名称，避免空白项污染下拉体验。
                 for (int i = 0; i < availableModels.Length; i++)
                 {
                     if (!string.IsNullOrWhiteSpace(availableModels[i]))
@@ -112,20 +124,30 @@ namespace SmartWord.AddIn.UI
             };
             Controls.Add(_cancelButton);
 
+            // 设置默认确认/取消按钮，提升键盘可用性（Enter / Esc）。
             AcceptButton = _okButton;
             CancelButton = _cancelButton;
         }
 
+        /// <summary>
+        /// 获取用户输入的自然语言指令文本。
+        /// </summary>
         public string Instruction
         {
             get { return _instructionTextBox.Text; }
         }
 
+        /// <summary>
+        /// 获取用户选择或输入的模型名称。
+        /// </summary>
         public string SelectedModel
         {
             get { return _modelComboBox.Text; }
         }
 
+        /// <summary>
+        /// 获取用户指定的 Prompt 版本。
+        /// </summary>
         public string PromptVersion
         {
             get { return _promptVersionTextBox.Text; }

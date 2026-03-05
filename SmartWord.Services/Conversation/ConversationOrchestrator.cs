@@ -9,8 +9,13 @@ using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
 
+// 文件说明：
+// 对话编排核心实现，负责会话轮次执行、路由分流、待执行动作生成与确认执行。
 namespace SmartWord.Services.Conversation
 {
+    /// <summary>
+    /// 会话编排器实现。
+    /// </summary>
     public sealed class ConversationOrchestrator : IConversationOrchestrator
     {
         private readonly IConversationStore _conversationStore;
@@ -22,6 +27,17 @@ namespace SmartWord.Services.Conversation
         private readonly IVbaExecutor _vbaExecutor;
         private readonly INotificationService _notificationService;
 
+        /// <summary>
+        /// 初始化会话编排器。
+        /// </summary>
+        /// <param name="conversationStore">会话存储。</param>
+        /// <param name="documentRetriever">文档检索器。</param>
+        /// <param name="commandRouteService">路由服务。</param>
+        /// <param name="selectionService">选区服务。</param>
+        /// <param name="modelService">模型服务。</param>
+        /// <param name="vbaCodeSanitizer">VBA 代码净化器。</param>
+        /// <param name="vbaExecutor">VBA 执行器。</param>
+        /// <param name="notificationService">通知服务。</param>
         public ConversationOrchestrator(
             IConversationStore conversationStore,
             IDocumentRetriever documentRetriever,
@@ -42,25 +58,44 @@ namespace SmartWord.Services.Conversation
             _notificationService = notificationService;
         }
 
+        /// <summary>
+        /// 加载会话列表。
+        /// </summary>
+        /// <returns>会话只读列表。</returns>
         public Task<IReadOnlyList<ConversationSession>> LoadSessionsAsync()
         {
             return _conversationStore.LoadSessionsAsync();
         }
 
+        /// <summary>
+        /// 创建新会话。
+        /// </summary>
+        /// <param name="title">会话标题。</param>
+        /// <returns>新建会话。</returns>
         public Task<ConversationSession> CreateSessionAsync(string title)
         {
             return _conversationStore.CreateSessionAsync(title);
         }
 
+        /// <summary>
+        /// 设置活动会话。
+        /// </summary>
+        /// <param name="sessionId">目标会话 ID。</param>
         public Task SetActiveSessionAsync(string sessionId)
         {
             return _conversationStore.SetActiveSessionAsync(sessionId);
         }
 
+        /// <summary>
+        /// 执行一轮对话：检索上下文、路由判定、生成建议并写入会话历史。
+        /// </summary>
+        /// <param name="request">对话轮次请求。</param>
+        /// <returns>轮次结果。</returns>
         public async Task<ChatTurnResult> RunTurnAsync(ChatTurnRequest request)
         {
             if (request == null || string.IsNullOrWhiteSpace(request.UserMessage))
             {
+                // 输入为空时返回可展示结果，避免上层额外判空分支。
                 return new ChatTurnResult
                 {
                     AssistantReply = "请输入问题后再发送。",
@@ -72,10 +107,12 @@ namespace SmartWord.Services.Conversation
             ConversationSession session = await ResolveSessionAsync(request.SessionId).ConfigureAwait(false);
             if (session == null)
             {
+                // 会话不存在时自动创建新会话，确保流程可继续。
                 session = await _conversationStore.CreateSessionAsync("新对话").ConfigureAwait(false);
             }
 
             string selectedText = _selectionService == null ? string.Empty : _selectionService.GetSelectedText();
+            // 对当前文档做检索增强，为后续路由与生成提供上下文。
             RetrievedContext retrieved = await _documentRetriever.RetrieveAsync(new DocumentQuery
             {
                 QueryText = request.UserMessage,
@@ -92,6 +129,7 @@ namespace SmartWord.Services.Conversation
                 ModelOverride = request.ModelOverride
             }).ConfigureAwait(false);
 
+            // 基于路由生成待执行动作，但不立即修改文档，保持“先建议后执行”。
             PendingAction pendingAction = await BuildPendingActionAsync(route, request, selectedText, retrieved).ConfigureAwait(false);
             string assistantReply = BuildAssistantReply(route, pendingAction, selectedText);
 
@@ -113,6 +151,7 @@ namespace SmartWord.Services.Conversation
 
             if (pendingAction != null)
             {
+                // 将待执行动作持久化到会话，供用户确认执行。
                 session.PendingActions.Add(pendingAction);
             }
 
@@ -131,6 +170,12 @@ namespace SmartWord.Services.Conversation
             };
         }
 
+        /// <summary>
+        /// 应用指定待执行动作。
+        /// </summary>
+        /// <param name="sessionId">会话 ID。</param>
+        /// <param name="actionId">动作 ID。</param>
+        /// <returns>动作执行结果。</returns>
         public async Task<ApplyActionResult> ApplyPendingActionAsync(string sessionId, string actionId)
         {
             ConversationSession session = await _conversationStore.GetSessionAsync(sessionId).ConfigureAwait(false);
@@ -170,6 +215,7 @@ namespace SmartWord.Services.Conversation
 
             try
             {
+                // 执行成功后打已应用标记，避免重复执行同一动作。
                 ExecuteAction(action);
                 action.IsApplied = true;
 
@@ -218,6 +264,11 @@ namespace SmartWord.Services.Conversation
             }
         }
 
+        /// <summary>
+        /// 解析本轮应使用的会话。
+        /// </summary>
+        /// <param name="sessionId">请求中的会话 ID。</param>
+        /// <returns>命中会话；未命中时返回活动会话或空值。</returns>
         private async Task<ConversationSession> ResolveSessionAsync(string sessionId)
         {
             if (!string.IsNullOrWhiteSpace(sessionId))
@@ -229,9 +280,18 @@ namespace SmartWord.Services.Conversation
                 }
             }
 
+            // 显式会话不存在时回退到当前活动会话。
             return await _conversationStore.GetActiveSessionAsync().ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// 按路由生成待执行动作。
+        /// </summary>
+        /// <param name="route">路由决策。</param>
+        /// <param name="request">对话轮次请求。</param>
+        /// <param name="selectedText">当前选区文本。</param>
+        /// <param name="retrieved">检索上下文。</param>
+        /// <returns>待执行动作；无有效载荷时返回空值。</returns>
         private async Task<PendingAction> BuildPendingActionAsync(
             RouteDecision route,
             ChatTurnRequest request,
@@ -240,6 +300,7 @@ namespace SmartWord.Services.Conversation
         {
             if (route == null)
             {
+                // 路由异常时默认走改写，避免中断主流程。
                 route = new RouteDecision
                 {
                     RouteType = ConversationRouteType.Rewrite,
@@ -310,6 +371,12 @@ namespace SmartWord.Services.Conversation
             return action;
         }
 
+        /// <summary>
+        /// 将用户指令与检索上下文合并为统一提示文本。
+        /// </summary>
+        /// <param name="userMessage">用户指令。</param>
+        /// <param name="retrieved">检索上下文。</param>
+        /// <returns>合并后的指令文本。</returns>
         private static string BuildMergedInstruction(string userMessage, RetrievedContext retrieved)
         {
             string context = retrieved == null ? string.Empty : retrieved.CombinedText;
@@ -321,6 +388,13 @@ namespace SmartWord.Services.Conversation
             return (userMessage ?? string.Empty) + "\n\n参考上下文：\n" + context;
         }
 
+        /// <summary>
+        /// 生成展示给用户的建议回复文本。
+        /// </summary>
+        /// <param name="route">路由决策。</param>
+        /// <param name="action">待执行动作。</param>
+        /// <param name="selectedText">当前选区文本。</param>
+        /// <returns>回复文本。</returns>
         private static string BuildAssistantReply(RouteDecision route, PendingAction action, string selectedText)
         {
             if (action == null)
@@ -358,6 +432,11 @@ namespace SmartWord.Services.Conversation
             return builder.ToString();
         }
 
+        /// <summary>
+        /// 将路由枚举转换为中文展示文案。
+        /// </summary>
+        /// <param name="routeType">路由类型。</param>
+        /// <returns>展示文案。</returns>
         private static string RouteTypeToText(ConversationRouteType routeType)
         {
             if (routeType == ConversationRouteType.Vba)
@@ -373,6 +452,10 @@ namespace SmartWord.Services.Conversation
             return "文本改写";
         }
 
+        /// <summary>
+        /// 执行待执行动作（改写替换和/或 VBA 执行）。
+        /// </summary>
+        /// <param name="action">待执行动作。</param>
         private void ExecuteAction(PendingAction action)
         {
             if (action.ActionType == ConversationActionType.Rewrite || action.ActionType == ConversationActionType.Hybrid)
@@ -392,11 +475,18 @@ namespace SmartWord.Services.Conversation
                     throw new InvalidOperationException("VBA 代码为空，无法执行排版。");
                 }
 
+                // 执行前进行代码净化与入口校验，避免注入非法脚本。
                 string safeCode = _vbaCodeSanitizer.SanitizeAndValidate(action.VbaCode, action.EntryPoint);
                 _vbaExecutor.Execute(safeCode, action.EntryPoint);
             }
         }
 
+        /// <summary>
+        /// 按动作 ID 从会话中查找待执行动作。
+        /// </summary>
+        /// <param name="session">会话对象。</param>
+        /// <param name="actionId">动作 ID。</param>
+        /// <returns>命中的动作；未命中返回空值。</returns>
         private static PendingAction FindPendingAction(ConversationSession session, string actionId)
         {
             if (session == null || session.PendingActions == null || string.IsNullOrWhiteSpace(actionId))
@@ -415,6 +505,12 @@ namespace SmartWord.Services.Conversation
             return null;
         }
 
+        /// <summary>
+        /// 对长文本做预览截断。
+        /// </summary>
+        /// <param name="input">输入文本。</param>
+        /// <param name="maxLength">最大预览长度。</param>
+        /// <returns>截断后的预览文本。</returns>
         private static string TrimForPreview(string input, int maxLength)
         {
             if (string.IsNullOrWhiteSpace(input))

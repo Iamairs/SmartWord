@@ -10,8 +10,13 @@ using SmartWord.Core.Abstractions;
 using SmartWord.Core.Models;
 using SmartWord.Services.Prompts;
 
+// 文件说明：
+// OpenAI 兼容模型服务实现，负责根据 Prompt 模板发起对话请求并解析模型输出。
 namespace SmartWord.Services.Model
 {
+    /// <summary>
+    /// OpenAI 兼容模型服务。
+    /// </summary>
     public sealed class OpenAiCompatibleModelService : IModelService
     {
         private static readonly HttpClient SharedHttpClient = new HttpClient
@@ -22,6 +27,10 @@ namespace SmartWord.Services.Model
         private readonly OpenAiApiOptions _options;
         private readonly PromptCatalogProvider _promptCatalogProvider;
 
+        /// <summary>
+        /// 初始化模型服务并加载 Prompt 目录。
+        /// </summary>
+        /// <param name="options">API 配置。</param>
         public OpenAiCompatibleModelService(OpenAiApiOptions options)
         {
             _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -33,6 +42,11 @@ namespace SmartWord.Services.Model
             _promptCatalogProvider = new PromptCatalogProvider(_options.PromptCatalogPath);
         }
 
+        /// <summary>
+        /// 调用模型执行文本改写。
+        /// </summary>
+        /// <param name="request">改写请求。</param>
+        /// <returns>改写结果文本。</returns>
         public Task<string> RewriteTextAsync(EditorRewriteRequest request)
         {
             if (request == null || string.IsNullOrWhiteSpace(request.SelectedText))
@@ -52,6 +66,11 @@ namespace SmartWord.Services.Model
                 0.3d);
         }
 
+        /// <summary>
+        /// 调用模型生成 VBA 代码。
+        /// </summary>
+        /// <param name="request">VBA 生成请求。</param>
+        /// <returns>VBA 代码文本。</returns>
         public Task<string> GenerateVbaCodeAsync(VbaGenerationRequest request)
         {
             string entryPoint = request != null && !string.IsNullOrWhiteSpace(request.EntryPoint)
@@ -73,6 +92,14 @@ namespace SmartWord.Services.Model
                 0.1d);
         }
 
+        /// <summary>
+        /// 透传系统/用户提示词到聊天完成接口。
+        /// </summary>
+        /// <param name="systemPrompt">系统提示词。</param>
+        /// <param name="userPrompt">用户提示词。</param>
+        /// <param name="modelOverride">模型覆盖项。</param>
+        /// <param name="temperature">采样温度。</param>
+        /// <returns>模型响应文本。</returns>
         public Task<string> ChatWithPromptsAsync(string systemPrompt, string userPrompt, string modelOverride, double temperature)
         {
             return ExecuteChatAsync(
@@ -82,6 +109,9 @@ namespace SmartWord.Services.Model
                 temperature);
         }
 
+        /// <summary>
+        /// 发起聊天完成请求并返回首条响应内容。
+        /// </summary>
         private async Task<string> ExecuteChatAsync(string model, string systemPrompt, string userPrompt, double temperature)
         {
             var request = new ChatCompletionRequest
@@ -100,6 +130,7 @@ namespace SmartWord.Services.Model
 
             using (var httpRequest = new HttpRequestMessage(HttpMethod.Post, url))
             {
+                // 采用标准 Bearer 鉴权，兼容 OpenAI 及兼容网关。
                 httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.ApiKey);
                 httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
                 httpRequest.Content = new StringContent(requestJson, Encoding.UTF8, "application/json");
@@ -122,6 +153,7 @@ namespace SmartWord.Services.Model
                         chatResponse.choices[0].message == null ||
                         string.IsNullOrWhiteSpace(chatResponse.choices[0].message.content))
                     {
+                        // 协议成功但无有效内容时主动抛错，便于上层统一处理。
                         throw new InvalidOperationException("LLM API returned empty content.");
                     }
 
@@ -130,6 +162,11 @@ namespace SmartWord.Services.Model
             }
         }
 
+        /// <summary>
+        /// 解析最终使用的 Prompt 版本。
+        /// </summary>
+        /// <param name="requestPromptVersion">请求中的 Prompt 版本。</param>
+        /// <returns>有效 Prompt 版本。</returns>
         private string ResolvePromptVersion(string requestPromptVersion)
         {
             if (!string.IsNullOrWhiteSpace(requestPromptVersion))
@@ -140,6 +177,11 @@ namespace SmartWord.Services.Model
             return _options.DefaultPromptVersion;
         }
 
+        /// <summary>
+        /// 截断错误响应文本，避免异常消息过长。
+        /// </summary>
+        /// <param name="input">原始错误文本。</param>
+        /// <returns>截断后的文本。</returns>
         private static string TrimForError(string input)
         {
             if (string.IsNullOrWhiteSpace(input))
@@ -156,6 +198,9 @@ namespace SmartWord.Services.Model
             return trimmed.Substring(0, 300) + "...";
         }
 
+        /// <summary>
+        /// 将对象序列化为 JSON 字符串。
+        /// </summary>
         private static string Serialize<T>(T value)
         {
             var serializer = new DataContractJsonSerializer(typeof(T));
@@ -166,6 +211,9 @@ namespace SmartWord.Services.Model
             }
         }
 
+        /// <summary>
+        /// 将 JSON 反序列化为目标对象。
+        /// </summary>
         private static T Deserialize<T>(string json) where T : class
         {
             if (string.IsNullOrWhiteSpace(json))
@@ -184,12 +232,21 @@ namespace SmartWord.Services.Model
         [DataContract]
         private sealed class ChatCompletionRequest
         {
+            /// <summary>
+            /// 模型名称。
+            /// </summary>
             [DataMember(Name = "model")]
             public string model { get; set; }
 
+            /// <summary>
+            /// 对话消息数组。
+            /// </summary>
             [DataMember(Name = "messages")]
             public ChatMessage[] messages { get; set; }
 
+            /// <summary>
+            /// 采样温度。
+            /// </summary>
             [DataMember(Name = "temperature")]
             public double temperature { get; set; }
         }
@@ -197,9 +254,15 @@ namespace SmartWord.Services.Model
         [DataContract]
         private sealed class ChatMessage
         {
+            /// <summary>
+            /// 消息角色。
+            /// </summary>
             [DataMember(Name = "role")]
             public string role { get; set; }
 
+            /// <summary>
+            /// 消息文本。
+            /// </summary>
             [DataMember(Name = "content")]
             public string content { get; set; }
         }
@@ -207,6 +270,9 @@ namespace SmartWord.Services.Model
         [DataContract]
         private sealed class ChatCompletionResponse
         {
+            /// <summary>
+            /// 响应候选集合。
+            /// </summary>
             [DataMember(Name = "choices")]
             public ChatChoice[] choices { get; set; }
         }
@@ -214,6 +280,9 @@ namespace SmartWord.Services.Model
         [DataContract]
         private sealed class ChatChoice
         {
+            /// <summary>
+            /// 候选消息。
+            /// </summary>
             [DataMember(Name = "message")]
             public ChatMessage message { get; set; }
         }
