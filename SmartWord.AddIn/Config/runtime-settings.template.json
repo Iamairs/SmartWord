@@ -9,6 +9,8 @@
   "promptCatalogPath": "Config/prompts.catalog.json",
   "defaultPromptVersion": "v1",
   "embeddingModel": "text-embedding-3-small",
+  "embeddingApiBaseUrl": "",
+  "embeddingApiKey": "",
   "chatStorePath": "Config/chat.sessions.local.json",
   "vectorIndexDirectory": "Config/vector-index"
 }

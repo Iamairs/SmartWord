@@ -38,11 +38,11 @@ namespace SmartWord.Services.Embedding
         /// 调用远端接口生成向量。
         /// </summary>
         /// <param name="input">输入文本。</param>
-        /// <param name="modelOverride">模型覆盖项。</param>
+        /// <param name="modelOverride">模型覆盖项（保留参数，当前 Embedding 流程不使用）。</param>
         /// <returns>向量数组；在未配置或响应异常时返回空数组。</returns>
         public async Task<float[]> CreateEmbeddingAsync(string input, string modelOverride)
         {
-            if (_options == null || !_options.IsConfigured)
+            if (_options == null || !_options.IsEmbeddingConfigured)
             {
                 // 未配置密钥时直接返回空向量，由上层走降级策略。
                 return new float[0];
@@ -50,14 +50,15 @@ namespace SmartWord.Services.Embedding
 
             string payload = Serialize(new EmbeddingRequest
             {
-                model = string.IsNullOrWhiteSpace(modelOverride) ? _options.EmbeddingModel : modelOverride,
+                // Embedding 模型固定走配置项
+                model = _options.EmbeddingModel,
                 input = input ?? string.Empty
             });
 
-            string url = _options.BaseUrl + "/embeddings";
+            string url = _options.ResolveEmbeddingBaseUrl() + "/embeddings";
             using (var request = new HttpRequestMessage(HttpMethod.Post, url))
             {
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.ApiKey);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.ResolveEmbeddingApiKey());
                 request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
                 request.Content = new StringContent(payload, Encoding.UTF8, "application/json");
 

@@ -23,6 +23,10 @@ namespace SmartWord.Services.Model
         /// </summary>
         public string ApiKey { get; private set; }
 
+        public string EmbeddingBaseUrl { get; private set; }
+
+        public string EmbeddingApiKey { get; private set; }
+
         /// <summary>
         /// 默认聊天模型。
         /// </summary>
@@ -63,6 +67,11 @@ namespace SmartWord.Services.Model
             get { return !string.IsNullOrWhiteSpace(ApiKey); }
         }
 
+        public bool IsEmbeddingConfigured
+        {
+            get { return !string.IsNullOrWhiteSpace(ResolveEmbeddingApiKey()); }
+        }
+
         /// <summary>
         /// 解析最终使用模型，优先使用调用方覆盖项。
         /// </summary>
@@ -76,6 +85,26 @@ namespace SmartWord.Services.Model
             }
 
             return string.IsNullOrWhiteSpace(Model) ? "gpt-4o-mini" : Model.Trim();
+        }
+
+        public string ResolveEmbeddingBaseUrl()
+        {
+            if (!string.IsNullOrWhiteSpace(EmbeddingBaseUrl))
+            {
+                return NormalizeBaseUrl(EmbeddingBaseUrl);
+            }
+
+            return NormalizeBaseUrl(BaseUrl);
+        }
+
+        public string ResolveEmbeddingApiKey()
+        {
+            if (!string.IsNullOrWhiteSpace(EmbeddingApiKey))
+            {
+                return EmbeddingApiKey.Trim();
+            }
+
+            return ApiKey;
         }
 
         /// <summary>
@@ -126,6 +155,16 @@ namespace SmartWord.Services.Model
                 settingsFile == null ? null : settingsFile.embeddingModel,
                 "text-embedding-3-small");
 
+            string embeddingBaseUrl = GetFirstNonEmpty(
+                Environment.GetEnvironmentVariable("SMARTWORD_EMBEDDING_API_BASE_URL"),
+                settingsFile == null ? null : settingsFile.embeddingApiBaseUrl,
+                baseUrl);
+
+            string embeddingApiKey = GetFirstNonEmpty(
+                Environment.GetEnvironmentVariable("SMARTWORD_EMBEDDING_API_KEY"),
+                settingsFile == null ? null : settingsFile.embeddingApiKey,
+                apiKey);
+
             string chatStorePath = GetFirstNonEmpty(
                 Environment.GetEnvironmentVariable("SMARTWORD_CHAT_STORE_FILE"),
                 settingsFile == null ? null : settingsFile.chatStorePath,
@@ -152,6 +191,8 @@ namespace SmartWord.Services.Model
                 PromptCatalogPath = NormalizePath(root, promptCatalogPath),
                 DefaultPromptVersion = defaultPromptVersion,
                 EmbeddingModel = embeddingModel,
+                EmbeddingBaseUrl = NormalizeBaseUrl(embeddingBaseUrl),
+                EmbeddingApiKey = embeddingApiKey,
                 ChatStorePath = NormalizePath(root, chatStorePath),
                 VectorIndexDirectory = NormalizePath(root, vectorIndexDirectory)
             };
@@ -394,6 +435,12 @@ namespace SmartWord.Services.Model
             /// </summary>
             [DataMember(Name = "embeddingModel")]
             public string embeddingModel { get; set; }
+
+            [DataMember(Name = "embeddingApiBaseUrl")]
+            public string embeddingApiBaseUrl { get; set; }
+
+            [DataMember(Name = "embeddingApiKey")]
+            public string embeddingApiKey { get; set; }
 
             /// <summary>
             /// 会话存储文件路径。

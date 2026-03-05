@@ -236,7 +236,7 @@ namespace SmartWord.AddIn
         /// <returns>可用的向量化服务实例。</returns>
         private IEmbeddingService CreateEmbeddingService(OpenAiApiOptions options)
         {
-            if (options.IsConfigured)
+            if (options.IsEmbeddingConfigured)
             {
                 try
                 {
