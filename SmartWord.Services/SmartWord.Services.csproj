@@ -43,13 +43,21 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Conversation\ConversationOrchestrator.cs" />
+    <Compile Include="Embedding\LocalEmbeddingService.cs" />
+    <Compile Include="Embedding\OpenAiEmbeddingService.cs" />
     <Compile Include="Model\LocalModelService.cs" />
     <Compile Include="Model\OpenAiApiOptions.cs" />
     <Compile Include="Model\OpenAiCompatibleModelService.cs" />
     <Compile Include="Orchestration\EditorAgentOrchestrator.cs" />
     <Compile Include="Orchestration\VbaAgentOrchestrator.cs" />
     <Compile Include="Prompts\PromptCatalogProvider.cs" />
+    <Compile Include="Retrieval\HybridDocumentRetriever.cs" />
+    <Compile Include="Retrieval\WordDocumentChunkProvider.cs" />
+    <Compile Include="Routing\CommandRouteService.cs" />
     <Compile Include="Selection\WordSelectionService.cs" />
+    <Compile Include="Storage\FileConversationStore.cs" />
+    <Compile Include="Storage\VectorIndexStore.cs" />
     <Compile Include="Undo\NoopUndoScope.cs" />
     <Compile Include="Undo\WordUndoScope.cs" />
     <Compile Include="Undo\WordUndoScopeFactory.cs" />

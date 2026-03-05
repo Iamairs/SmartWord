@@ -73,6 +73,15 @@ namespace SmartWord.Services.Model
                 0.1d);
         }
 
+        public Task<string> ChatWithPromptsAsync(string systemPrompt, string userPrompt, string modelOverride, double temperature)
+        {
+            return ExecuteChatAsync(
+                _options.ResolveModel(modelOverride),
+                systemPrompt ?? string.Empty,
+                userPrompt ?? string.Empty,
+                temperature);
+        }
+
         private async Task<string> ExecuteChatAsync(string model, string systemPrompt, string userPrompt, double temperature)
         {
             var request = new ChatCompletionRequest

@@ -20,6 +20,12 @@ namespace SmartWord.Services.Model
 
         public string DefaultPromptVersion { get; private set; }
 
+        public string EmbeddingModel { get; private set; }
+
+        public string ChatStorePath { get; private set; }
+
+        public string VectorIndexDirectory { get; private set; }
+
         public bool IsConfigured
         {
             get { return !string.IsNullOrWhiteSpace(ApiKey); }
@@ -72,6 +78,21 @@ namespace SmartWord.Services.Model
                 Environment.GetEnvironmentVariable("SMARTWORD_PROMPT_VERSION"),
                 settingsFile == null ? null : settingsFile.defaultPromptVersion);
 
+            string embeddingModel = GetFirstNonEmpty(
+                Environment.GetEnvironmentVariable("SMARTWORD_EMBEDDING_MODEL"),
+                settingsFile == null ? null : settingsFile.embeddingModel,
+                "text-embedding-3-small");
+
+            string chatStorePath = GetFirstNonEmpty(
+                Environment.GetEnvironmentVariable("SMARTWORD_CHAT_STORE_FILE"),
+                settingsFile == null ? null : settingsFile.chatStorePath,
+                Path.Combine(root, "Config", "chat.sessions.local.json"));
+
+            string vectorIndexDirectory = GetFirstNonEmpty(
+                Environment.GetEnvironmentVariable("SMARTWORD_VECTOR_INDEX_DIR"),
+                settingsFile == null ? null : settingsFile.vectorIndexDirectory,
+                Path.Combine(root, "Config", "vector-index"));
+
             string[] availableModels = settingsFile == null ? null : settingsFile.availableModels;
             if (availableModels == null || availableModels.Length == 0)
             {
@@ -85,7 +106,10 @@ namespace SmartWord.Services.Model
                 Model = model,
                 AvailableModels = NormalizeModels(availableModels, model),
                 PromptCatalogPath = NormalizePath(root, promptCatalogPath),
-                DefaultPromptVersion = defaultPromptVersion
+                DefaultPromptVersion = defaultPromptVersion,
+                EmbeddingModel = embeddingModel,
+                ChatStorePath = NormalizePath(root, chatStorePath),
+                VectorIndexDirectory = NormalizePath(root, vectorIndexDirectory)
             };
         }
 
@@ -273,6 +297,15 @@ namespace SmartWord.Services.Model
 
             [DataMember(Name = "defaultPromptVersion")]
             public string defaultPromptVersion { get; set; }
+
+            [DataMember(Name = "embeddingModel")]
+            public string embeddingModel { get; set; }
+
+            [DataMember(Name = "chatStorePath")]
+            public string chatStorePath { get; set; }
+
+            [DataMember(Name = "vectorIndexDirectory")]
+            public string vectorIndexDirectory { get; set; }
         }
     }
 }

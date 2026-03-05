@@ -55,5 +55,25 @@ namespace SmartWord.Services.Model
 
             return Task.FromResult(code);
         }
+
+        public Task<string> ChatWithPromptsAsync(string systemPrompt, string userPrompt, string modelOverride, double temperature)
+        {
+            string prompt = (userPrompt ?? string.Empty).ToLowerInvariant();
+            bool hasRewriteIntent = prompt.Contains("润色") || prompt.Contains("改写") || prompt.Contains("rewrite");
+            bool hasVbaIntent = prompt.Contains("排版") || prompt.Contains("格式") || prompt.Contains("vba") || prompt.Contains("macro");
+
+            string route = "rewrite";
+            if (hasRewriteIntent && hasVbaIntent)
+            {
+                route = "hybrid";
+            }
+            else if (hasVbaIntent)
+            {
+                route = "vba";
+            }
+
+            string json = "{\"route\":\"" + route + "\",\"confidence\":0.60,\"reason\":\"local-fallback\"}";
+            return Task.FromResult(json);
+        }
     }
 }
