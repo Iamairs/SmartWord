@@ -1,18 +1,22 @@
-using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Runtime.InteropServices;
-using System.Text.RegularExpressions;
-using System.Threading.Tasks;
-using SmartWord.AddIn.Infrastructure;
-using SmartWord.AddIn.UI;
+﻿using SmartWord.AddIn.Infrastructure;
 using SmartWord.Core.Abstractions;
+using SmartWord.Core.Abstractions.Conversation;
 using SmartWord.Core.Orchestration;
+using SmartWord.Core.Orchestration.Conversation;
+using SmartWord.Services.Conversation;
+using SmartWord.Services.Embedding;
 using SmartWord.Services.Model;
 using SmartWord.Services.Orchestration;
+using SmartWord.Services.Retrieval;
+using SmartWord.Services.Routing;
 using SmartWord.Services.Selection;
+using SmartWord.Services.Storage;
 using SmartWord.Services.Undo;
 using SmartWord.Services.Vba;
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 
 namespace SmartWord.AddIn
 {
@@ -23,8 +27,10 @@ namespace SmartWord.AddIn
         private IVbaExecutor _vbaExecutor;
         private IEditorAgentOrchestrator _editorAgentOrchestrator;
         private IVbaAgentOrchestrator _vbaAgentOrchestrator;
+        private IConversationOrchestrator _conversationOrchestrator;
+        private TaskPaneManager _taskPaneManager;
         private GlobalHotKeyManager _hotKeyManager;
-        private bool _isRunningCommand;
+        private bool _isOpeningPane;
         private OpenAiApiOptions _apiOptions;
         private string[] _availableModels = new string[0];
         private string _defaultModel = string.Empty;
@@ -35,15 +41,43 @@ namespace SmartWord.AddIn
             _notificationService = new MessageBoxNotificationService();
             _undoScopeFactory = new WordUndoScopeFactory(Application, _notificationService);
             _vbaExecutor = new VbaExecutor(Application, _undoScopeFactory);
+
             var selectionService = new WordSelectionService(Application);
             _apiOptions = OpenAiApiOptions.LoadFromEnvironment(AppDomain.CurrentDomain.BaseDirectory);
             var modelService = CreateModelService(_apiOptions);
+            var embeddingService = CreateEmbeddingService(_apiOptions);
             var sanitizer = new VbaCodeSanitizer();
+
+            // 兼容保留旧链路，实现回退能力。
             _editorAgentOrchestrator = new EditorAgentOrchestrator(selectionService, modelService, _notificationService);
             _vbaAgentOrchestrator = new VbaAgentOrchestrator(selectionService, modelService, sanitizer, _vbaExecutor, _notificationService);
+
+            var conversationStore = new FileConversationStore(_apiOptions.ChatStorePath);
+            var chunkProvider = new WordDocumentChunkProvider(Application);
+            var vectorIndexStore = new VectorIndexStore(_apiOptions.VectorIndexDirectory);
+            var documentRetriever = new HybridDocumentRetriever(chunkProvider, embeddingService, vectorIndexStore, modelService);
+            var routeService = new CommandRouteService(modelService);
+            _conversationOrchestrator = new ConversationOrchestrator(
+                conversationStore,
+                documentRetriever,
+                routeService,
+                selectionService,
+                modelService,
+                sanitizer,
+                _vbaExecutor,
+                _notificationService);
+
             _availableModels = _apiOptions.AvailableModels ?? new string[0];
             _defaultModel = _apiOptions.Model ?? string.Empty;
             _defaultPromptVersion = _apiOptions.DefaultPromptVersion ?? string.Empty;
+
+            _taskPaneManager = new TaskPaneManager(
+                this,
+                _conversationOrchestrator,
+                _notificationService,
+                _availableModels,
+                _defaultModel,
+                _defaultPromptVersion);
 
             try
             {
@@ -66,150 +100,73 @@ namespace SmartWord.AddIn
                 _hotKeyManager.Dispose();
                 _hotKeyManager = null;
             }
+
+            if (_taskPaneManager != null)
+            {
+                _taskPaneManager.Dispose();
+                _taskPaneManager = null;
+            }
         }
 
-        private async Task HandleAltKHotKeyAsync()
+        private Task HandleAltKHotKeyAsync()
         {
             if (!IsWordForeground())
             {
-                return;
+                return Task.CompletedTask;
             }
 
-            if (_isRunningCommand)
+            if (_isOpeningPane)
             {
-                return;
+                return Task.CompletedTask;
             }
 
-            _isRunningCommand = true;
+            _isOpeningPane = true;
             try
             {
-                if (Application == null || Application.ActiveDocument == null)
+                if (Application == null)
                 {
-                    _notificationService.Error("No active document found.");
-                    return;
+                    _notificationService.Error("Word application is not ready.");
+                    return Task.CompletedTask;
                 }
 
-                using (var promptWindow = new PromptWindow(_availableModels, _defaultModel, _defaultPromptVersion))
-                {
-                    if (promptWindow.ShowDialog() != System.Windows.Forms.DialogResult.OK)
-                    {
-                        return;
-                    }
-
-                    string instruction = promptWindow.Instruction == null ? string.Empty : promptWindow.Instruction.Trim();
-                    var command = ParseCommand(instruction, promptWindow.SelectedModel, promptWindow.PromptVersion);
-                    if (command.Instruction.Length == 0)
-                    {
-                        _notificationService.Info("Instruction is empty.");
-                        return;
-                    }
-
-                    if (command.IsVba)
-                    {
-                        await _vbaAgentOrchestrator.RunFormattingAsync(command.Instruction, command.ModelOverride, command.PromptVersion);
-                    }
-                    else
-                    {
-                        await _editorAgentOrchestrator.RunRewriteAsync(command.Instruction, command.ModelOverride, command.PromptVersion);
-                    }
-                }
+                _taskPaneManager.ShowAndFocus();
             }
             catch (Exception ex)
             {
-                _notificationService.Error("Command execution failed: " + ex.Message);
+                _notificationService.Error("Open chat pane failed: " + ex.Message);
             }
             finally
             {
-                _isRunningCommand = false;
+                _isOpeningPane = false;
             }
+
+            return Task.CompletedTask;
         }
 
-        private static CommandExecutionOptions ParseCommand(string instruction, string selectedModel, string selectedPromptVersion)
+        internal bool SetChatPaneVisible(bool visible)
         {
-            string working = instruction == null ? string.Empty : instruction.Trim();
-            bool isVba = false;
-
-            if (working.StartsWith("/vba", StringComparison.OrdinalIgnoreCase))
+            if (_taskPaneManager == null)
             {
-                working = RemoveLeadingDirective(working, "/vba");
-                isVba = true;
-            }
-            else if (working.StartsWith("/format", StringComparison.OrdinalIgnoreCase))
-            {
-                working = RemoveLeadingDirective(working, "/format");
-                isVba = true;
+                return false;
             }
 
-            string modelOverride = string.IsNullOrWhiteSpace(selectedModel) ? string.Empty : selectedModel.Trim();
-            string promptVersion = string.IsNullOrWhiteSpace(selectedPromptVersion) ? string.Empty : selectedPromptVersion.Trim();
-
-            working = ExtractInlineOption(working, "/model", ref modelOverride);
-            working = ExtractInlineOption(working, "/prompt", ref promptVersion);
-
-            return new CommandExecutionOptions
-            {
-                IsVba = isVba,
-                Instruction = working.Trim(),
-                ModelOverride = modelOverride,
-                PromptVersion = promptVersion
-            };
+            return _taskPaneManager.SetVisible(visible);
         }
 
-        private static string RemoveLeadingDirective(string input, string directive)
+        internal void NotifyChatPaneVisibilityChanged(bool isVisible)
         {
-            if (input.Length <= directive.Length)
+            try
             {
-                return string.Empty;
-            }
-
-            return input.Substring(directive.Length).Trim();
-        }
-
-        private static string ExtractInlineOption(string input, string optionName, ref string targetValue)
-        {
-            string pattern = @"(?:^|\s)" + Regex.Escape(optionName) + @"\s+([^\s]+)";
-            Match match = Regex.Match(input, pattern, RegexOptions.IgnoreCase);
-            if (!match.Success)
-            {
-                return input;
-            }
-
-            targetValue = match.Groups[1].Value.Trim();
-
-            var spans = new List<Tuple<int, int>>();
-            spans.Add(Tuple.Create(match.Index, match.Length));
-            return RemoveSpans(input, spans).Trim();
-        }
-
-        private static string RemoveSpans(string text, List<Tuple<int, int>> spans)
-        {
-            if (spans == null || spans.Count == 0)
-            {
-                return text;
-            }
-
-            spans.Sort((a, b) => a.Item1.CompareTo(b.Item1));
-            int cursor = 0;
-            var builder = new System.Text.StringBuilder(text.Length);
-
-            for (int i = 0; i < spans.Count; i++)
-            {
-                int start = spans[i].Item1;
-                int length = spans[i].Item2;
-                if (start > cursor)
+                var ribbon = Globals.Ribbons.SmartWordRibbon;
+                if (ribbon != null)
                 {
-                    builder.Append(text.Substring(cursor, start - cursor));
+                    ribbon.SyncPaneState(isVisible);
                 }
-
-                cursor = Math.Min(text.Length, start + length);
             }
-
-            if (cursor < text.Length)
+            catch
             {
-                builder.Append(text.Substring(cursor));
+                // Ribbon 在未初始化时忽略同步异常。
             }
-
-            return builder.ToString();
         }
 
         private IModelService CreateModelService(OpenAiApiOptions options)
@@ -230,15 +187,22 @@ namespace SmartWord.AddIn
             return new LocalModelService();
         }
 
-        private sealed class CommandExecutionOptions
+        private IEmbeddingService CreateEmbeddingService(OpenAiApiOptions options)
         {
-            public bool IsVba { get; set; }
+            if (options.IsConfigured)
+            {
+                try
+                {
+                    return new OpenAiEmbeddingService(options);
+                }
+                catch (Exception ex)
+                {
+                    _notificationService.Error("Failed to initialize OpenAI embedding service, fallback to local embedding: " + ex.Message);
+                    return new LocalEmbeddingService();
+                }
+            }
 
-            public string Instruction { get; set; }
-
-            public string ModelOverride { get; set; }
-
-            public string PromptVersion { get; set; }
+            return new LocalEmbeddingService();
         }
 
         private bool IsWordForeground()
@@ -277,3 +241,4 @@ namespace SmartWord.AddIn
         #endregion
     }
 }
+

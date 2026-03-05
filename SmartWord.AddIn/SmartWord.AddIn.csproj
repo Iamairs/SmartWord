@@ -190,9 +190,19 @@
     </Compile>
     <Compile Include="Infrastructure\GlobalHotKeyManager.cs" />
     <Compile Include="Infrastructure\MessageBoxNotificationService.cs" />
+    <Compile Include="Infrastructure\TaskPaneManager.cs" />
+    <Compile Include="UI\ChatPaneControl.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
     <Compile Include="UI\PromptWindow.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="UI\SmartWordRibbon.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Themes\IThemeProvider.cs" />
+    <Compile Include="UI\Themes\LightThemeProvider.cs" />
+    <Compile Include="UI\ThisRibbonCollectionExtensions.cs" />
     <EmbeddedResource Include="Properties\Resources.resx">
       <Generator>ResXFileCodeGenerator</Generator>
       <LastGenOutput>Resources.Designer.cs</LastGenOutput>
@@ -202,6 +212,9 @@
       <AutoGen>True</AutoGen>
       <DependentUpon>Resources.resx</DependentUpon>
     </Compile>
+    <EmbeddedResource Include="UI\SmartWordRibbon.resx">
+      <DependentUpon>SmartWordRibbon.cs</DependentUpon>
+    </EmbeddedResource>
     <None Include="Properties\Settings.settings">
       <Generator>SettingsSingleFileGenerator</Generator>
       <LastGenOutput>Settings.Designer.cs</LastGenOutput>
