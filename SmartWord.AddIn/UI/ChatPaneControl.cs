@@ -34,6 +34,7 @@ namespace SmartWord.AddIn.UI
         private readonly ComboBox _modelComboBox;
         private readonly TextBox _promptVersionTextBox;
         private readonly Label _statusLabel;
+        private readonly int _uiThreadId;
 
         private string _activeSessionId;
         private string _pendingActionId;
@@ -58,6 +59,7 @@ namespace SmartWord.AddIn.UI
             _conversationOrchestrator = conversationOrchestrator;
             _notificationService = notificationService;
             _themeProvider = new LightThemeProvider();
+            _uiThreadId = Environment.CurrentManagedThreadId;
 
             // 统一设置主题基础属性，保证控件观感一致。
             BackColor = _themeProvider.BackgroundColor;
@@ -274,7 +276,7 @@ namespace SmartWord.AddIn.UI
         /// </summary>
         public async Task InitializeAsync()
         {
-            await LoadSessionsAsync().ConfigureAwait(true);
+            await LoadSessionsAsync().ConfigureAwait(false);
         }
 
         /// <summary>
@@ -282,7 +284,27 @@ namespace SmartWord.AddIn.UI
         /// </summary>
         public void FocusInput()
         {
-            _inputTextBox.Focus();
+            if (IsDisposed)
+            {
+                return;
+            }
+
+            if (Environment.CurrentManagedThreadId == _uiThreadId)
+            {
+                _inputTextBox.Focus();
+                return;
+            }
+
+            if (IsHandleCreated)
+            {
+                BeginInvoke(new Action(() =>
+                {
+                    if (!IsDisposed)
+                    {
+                        _inputTextBox.Focus();
+                    }
+                }));
+            }
         }
 
         /// <summary>
@@ -294,12 +316,16 @@ namespace SmartWord.AddIn.UI
         {
             await RunSafeAsync(async () =>
             {
-                ConversationSession session = await _conversationOrchestrator.CreateSessionAsync("新对话").ConfigureAwait(true);
-                _activeSessionId = session == null ? string.Empty : session.SessionId;
-                _pendingActionId = string.Empty;
-                await LoadSessionsAsync().ConfigureAwait(true);
-                _inputTextBox.Focus();
-            }).ConfigureAwait(false);
+                ConversationSession session = await _conversationOrchestrator.CreateSessionAsync("新对话").ConfigureAwait(false);
+                await RunOnUiThreadAsync(() =>
+                {
+                    _activeSessionId = session == null ? string.Empty : session.SessionId;
+                    _pendingActionId = string.Empty;
+                }).ConfigureAwait(false);
+
+                await LoadSessionsAsync().ConfigureAwait(false);
+                await RunOnUiThreadAsync(() => _inputTextBox.Focus()).ConfigureAwait(false);
+            });
         }
 
         /// <summary>
@@ -324,9 +350,9 @@ namespace SmartWord.AddIn.UI
             await RunSafeAsync(async () =>
             {
                 _activeSessionId = item.SessionId;
-                await _conversationOrchestrator.SetActiveSessionAsync(item.SessionId).ConfigureAwait(true);
-                await LoadSessionsAsync().ConfigureAwait(true);
-            }).ConfigureAwait(false);
+                await _conversationOrchestrator.SetActiveSessionAsync(item.SessionId).ConfigureAwait(false);
+                await LoadSessionsAsync().ConfigureAwait(false);
+            });
         }
 
         /// <summary>
@@ -336,7 +362,7 @@ namespace SmartWord.AddIn.UI
         /// <param name="e">事件参数。</param>
         private async void SendButton_Click(object sender, EventArgs e)
         {
-            await SubmitTurnAsync().ConfigureAwait(false);
+            await SubmitTurnAsync();
         }
 
         /// <summary>
@@ -344,10 +370,24 @@ namespace SmartWord.AddIn.UI
         /// </summary>
         private async Task SubmitTurnAsync()
         {
-            string message = _inputTextBox.Text == null ? string.Empty : _inputTextBox.Text.Trim();
+            string message = string.Empty;
+            string modelOverride = string.Empty;
+            string promptVersion = string.Empty;
+            string activeSessionId = string.Empty;
+            await RunOnUiThreadAsync(() =>
+            {
+                message = _inputTextBox.Text == null ? string.Empty : _inputTextBox.Text.Trim();
+                modelOverride = _modelComboBox.Text;
+                promptVersion = _promptVersionTextBox.Text;
+                activeSessionId = _activeSessionId;
+            }).ConfigureAwait(false);
+
             if (message.Length == 0)
             {
-                _statusLabel.Text = "请输入内容后再发送。";
+                await RunOnUiThreadAsync(() =>
+                {
+                    _statusLabel.Text = "请输入内容后再发送。";
+                }).ConfigureAwait(false);
                 return;
             }
 
@@ -356,27 +396,30 @@ namespace SmartWord.AddIn.UI
                 // 每一轮对话都允许用户临时覆盖模型与 Prompt 版本，便于快速试验。
                 ChatTurnResult result = await _conversationOrchestrator.RunTurnAsync(new ChatTurnRequest
                 {
-                    SessionId = _activeSessionId,
+                    SessionId = activeSessionId,
                     UserMessage = message,
-                    ModelOverride = _modelComboBox.Text,
-                    PromptVersion = _promptVersionTextBox.Text
-                }).ConfigureAwait(true);
+                    ModelOverride = modelOverride,
+                    PromptVersion = promptVersion
+                }).ConfigureAwait(false);
 
-                _inputTextBox.Clear();
-                _activeSessionId = result == null ? _activeSessionId : result.SessionId;
-                _pendingActionId = result == null ? string.Empty : result.PendingActionId;
-                _applyButton.Enabled = result != null && result.RequiresUserConfirmation && !string.IsNullOrWhiteSpace(_pendingActionId);
-                _cancelActionButton.Enabled = _applyButton.Enabled;
-
-                if (result != null)
+                await RunOnUiThreadAsync(() =>
                 {
-                    _statusLabel.Text = result.RequiresUserConfirmation
-                        ? "已生成建议，请点击“确认执行”。"
-                        : "已返回结果。";
-                }
+                    _inputTextBox.Clear();
+                    _activeSessionId = result == null ? _activeSessionId : result.SessionId;
+                    _pendingActionId = result == null ? string.Empty : result.PendingActionId;
+                    _applyButton.Enabled = result != null && result.RequiresUserConfirmation && !string.IsNullOrWhiteSpace(_pendingActionId);
+                    _cancelActionButton.Enabled = _applyButton.Enabled;
 
-                await LoadSessionsAsync().ConfigureAwait(true);
-            }).ConfigureAwait(false);
+                    if (result != null)
+                    {
+                        _statusLabel.Text = result.RequiresUserConfirmation
+                            ? "已生成建议，请点击“确认执行”。"
+                            : "已返回结果。";
+                    }
+                }).ConfigureAwait(false);
+
+                await LoadSessionsAsync().ConfigureAwait(false);
+            });
         }
 
         /// <summary>
@@ -386,24 +429,32 @@ namespace SmartWord.AddIn.UI
         /// <param name="e">事件参数。</param>
         private async void ApplyButton_Click(object sender, EventArgs e)
         {
-            if (string.IsNullOrWhiteSpace(_activeSessionId) || string.IsNullOrWhiteSpace(_pendingActionId))
+            string activeSessionId = _activeSessionId;
+            string pendingActionId = _pendingActionId;
+            if (string.IsNullOrWhiteSpace(activeSessionId) || string.IsNullOrWhiteSpace(pendingActionId))
             {
-                _statusLabel.Text = "当前没有待执行动作。";
+                await RunOnUiThreadAsync(() =>
+                {
+                    _statusLabel.Text = "当前没有待执行动作。";
+                }).ConfigureAwait(false);
                 return;
             }
 
             await RunSafeAsync(async () =>
             {
                 ApplyActionResult result = await _conversationOrchestrator
-                    .ApplyPendingActionAsync(_activeSessionId, _pendingActionId)
-                    .ConfigureAwait(true);
+                    .ApplyPendingActionAsync(activeSessionId, pendingActionId)
+                    .ConfigureAwait(false);
 
-                _pendingActionId = string.Empty;
-                _applyButton.Enabled = false;
-                _cancelActionButton.Enabled = false;
-                _statusLabel.Text = result == null ? "执行完成。" : result.Message;
-                await LoadSessionsAsync().ConfigureAwait(true);
-            }).ConfigureAwait(false);
+                await RunOnUiThreadAsync(() =>
+                {
+                    _pendingActionId = string.Empty;
+                    _applyButton.Enabled = false;
+                    _cancelActionButton.Enabled = false;
+                    _statusLabel.Text = result == null ? "执行完成。" : result.Message;
+                }).ConfigureAwait(false);
+                await LoadSessionsAsync().ConfigureAwait(false);
+            });
         }
 
         /// <summary>
@@ -429,7 +480,7 @@ namespace SmartWord.AddIn.UI
             if (e.KeyCode == Keys.Enter && !e.Shift)
             {
                 e.SuppressKeyPress = true;
-                await SubmitTurnAsync().ConfigureAwait(false);
+                await SubmitTurnAsync();
             }
         }
 
@@ -438,56 +489,60 @@ namespace SmartWord.AddIn.UI
         /// </summary>
         private async Task LoadSessionsAsync()
         {
-            IReadOnlyList<ConversationSession> sessions = await _conversationOrchestrator.LoadSessionsAsync().ConfigureAwait(true);
-            _isRefreshingSessions = true;
-            try
+            IReadOnlyList<ConversationSession> sessions = await _conversationOrchestrator.LoadSessionsAsync().ConfigureAwait(false);
+
+            await RunOnUiThreadAsync(() =>
             {
-                _sessionListBox.BeginUpdate();
-                _sessionListBox.Items.Clear();
-
-                ConversationSession active = null;
-                for (int i = 0; i < sessions.Count; i++)
+                _isRefreshingSessions = true;
+                try
                 {
-                    ConversationSession session = sessions[i];
-                    var item = new SessionListItem(session.SessionId, session.Title, session.IsActive);
-                    _sessionListBox.Items.Add(item);
+                    _sessionListBox.BeginUpdate();
+                    _sessionListBox.Items.Clear();
 
-                    if (active == null)
+                    ConversationSession active = null;
+                    for (int i = 0; i < sessions.Count; i++)
                     {
-                        if (!string.IsNullOrWhiteSpace(_activeSessionId) && string.Equals(session.SessionId, _activeSessionId, StringComparison.OrdinalIgnoreCase))
+                        ConversationSession session = sessions[i];
+                        var item = new SessionListItem(session.SessionId, session.Title, session.IsActive);
+                        _sessionListBox.Items.Add(item);
+
+                        if (active == null)
                         {
-                            active = session;
-                        }
-                        else if (session.IsActive)
-                        {
-                            active = session;
+                            if (!string.IsNullOrWhiteSpace(_activeSessionId) && string.Equals(session.SessionId, _activeSessionId, StringComparison.OrdinalIgnoreCase))
+                            {
+                                active = session;
+                            }
+                            else if (session.IsActive)
+                            {
+                                active = session;
+                            }
                         }
                     }
-                }
 
-                _sessionListBox.EndUpdate();
+                    _sessionListBox.EndUpdate();
 
-                if (active == null && sessions.Count > 0)
-                {
-                    // 未找到匹配活跃会话时，默认展示第一条，保证 UI 有稳定落点。
-                    active = sessions[0];
-                }
+                    if (active == null && sessions.Count > 0)
+                    {
+                        // 未找到匹配活跃会话时，默认展示第一条，保证 UI 有稳定落点。
+                        active = sessions[0];
+                    }
 
-                if (active != null)
-                {
-                    _activeSessionId = active.SessionId;
-                    SelectSessionItem(_activeSessionId);
-                    RenderMessages(active.Messages);
+                    if (active != null)
+                    {
+                        _activeSessionId = active.SessionId;
+                        SelectSessionItem(_activeSessionId);
+                        RenderMessages(active.Messages);
+                    }
+                    else
+                    {
+                        _messageBox.Clear();
+                    }
                 }
-                else
+                finally
                 {
-                    _messageBox.Clear();
+                    _isRefreshingSessions = false;
                 }
-            }
-            finally
-            {
-                _isRefreshingSessions = false;
-            }
+            }).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -535,46 +590,67 @@ namespace SmartWord.AddIn.UI
         /// <param name="callback">实际执行的异步逻辑。</param>
         private async Task RunSafeAsync(Func<Task> callback)
         {
-            await EnsureOnUiThreadAsync().ConfigureAwait(false);
+            bool canExecute = false;
+            await RunOnUiThreadAsync(() =>
+            {
+                if (_isBusy)
+                {
+                    canExecute = false;
+                    return;
+                }
 
-            if (_isBusy)
+                _isBusy = true;
+                SetBusyState(true);
+                canExecute = true;
+            });
+
+            if (!canExecute)
             {
                 return;
             }
 
-            _isBusy = true;
-            SetBusyState(true);
             try
             {
-                await callback().ConfigureAwait(true);
+                await callback().ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 // UI 层统一收口异常，避免事件处理链中断。
                 string error = "操作失败：" + ex.Message;
-                await EnsureOnUiThreadAsync().ConfigureAwait(false);
-                _statusLabel.Text = error;
-                if (_notificationService != null)
+                await RunOnUiThreadAsync(() =>
                 {
-                    _notificationService.Error(error);
-                }
+                    _statusLabel.Text = error;
+                    if (_notificationService != null)
+                    {
+                        _notificationService.Error(error);
+                    }
+                });
             }
             finally
             {
-                await EnsureOnUiThreadAsync().ConfigureAwait(false);
-                _isBusy = false;
-                SetBusyState(false);
+                await RunOnUiThreadAsync(() =>
+                {
+                    _isBusy = false;
+                    SetBusyState(false);
+                });
             }
         }
 
         /// <summary>
-        /// 切换到 UI 线程执行后续逻辑。
+        /// 将指定逻辑封送到 UI 线程执行，避免跨线程访问 WinForms 控件。
         /// </summary>
-        /// <returns>当已在 UI 线程或切换完成时返回已完成任务。</returns>
-        private Task EnsureOnUiThreadAsync()
+        /// <param name="action">需要在 UI 线程执行的同步逻辑。</param>
+        /// <returns>逻辑执行完成后返回已完成任务。</returns>
+        private Task RunOnUiThreadAsync(Action action)
         {
-            if (IsDisposed || !InvokeRequired)
+            if (action == null || IsDisposed)
             {
+                return Task.CompletedTask;
+            }
+
+            if (Environment.CurrentManagedThreadId == _uiThreadId)
+            {
+                action();
                 return Task.CompletedTask;
             }
 
@@ -584,7 +660,22 @@ namespace SmartWord.AddIn.UI
             }
 
             var tcs = new TaskCompletionSource<bool>();
-            BeginInvoke(new Action(() => tcs.SetResult(true)));
+            BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    if (!IsDisposed)
+                    {
+                        action();
+                    }
+
+                    tcs.SetResult(true);
+                }
+                catch (Exception ex)
+                {
+                    tcs.SetException(ex);
+                }
+            }));
             return tcs.Task;
         }
 
