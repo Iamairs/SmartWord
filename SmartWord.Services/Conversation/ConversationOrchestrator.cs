@@ -3,10 +3,13 @@ using SmartWord.Core.Abstractions.Conversation;
 using SmartWord.Core.Models;
 using SmartWord.Core.Models.Conversation;
 using SmartWord.Core.Orchestration.Conversation;
+using SmartWord.Services.Logging;
 using SmartWord.Services.Vba;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 // 文件说明：
@@ -26,6 +29,7 @@ namespace SmartWord.Services.Conversation
         private readonly VbaCodeSanitizer _vbaCodeSanitizer;
         private readonly IVbaExecutor _vbaExecutor;
         private readonly INotificationService _notificationService;
+        private readonly IAppLogger _logger;
 
         /// <summary>
         /// 初始化会话编排器。
@@ -46,7 +50,8 @@ namespace SmartWord.Services.Conversation
             IModelService modelService,
             VbaCodeSanitizer vbaCodeSanitizer,
             IVbaExecutor vbaExecutor,
-            INotificationService notificationService)
+            INotificationService notificationService,
+            IAppLogger logger)
         {
             _conversationStore = conversationStore;
             _documentRetriever = documentRetriever;
@@ -56,6 +61,7 @@ namespace SmartWord.Services.Conversation
             _vbaCodeSanitizer = vbaCodeSanitizer;
             _vbaExecutor = vbaExecutor;
             _notificationService = notificationService;
+            _logger = logger ?? NullAppLogger.Instance;
         }
 
         /// <summary>
@@ -100,74 +106,149 @@ namespace SmartWord.Services.Conversation
                 {
                     AssistantReply = "请输入问题后再发送。",
                     RequiresUserConfirmation = false,
-                    RouteType = ConversationRouteType.Rewrite
+                    RouteType = ConversationRouteType.Writing,
+                    ResolvedMode = ConversationRouteType.Writing
                 };
             }
 
-            ConversationSession session = await ResolveSessionAsync(request.SessionId).ConfigureAwait(false);
-            if (session == null)
+            string correlationId = Guid.NewGuid().ToString("N");
+            var stopwatch = Stopwatch.StartNew();
+            using (_logger.BeginScope("CorrelationId", correlationId))
             {
-                // 会话不存在时自动创建新会话，确保流程可继续。
-                session = await _conversationStore.CreateSessionAsync("新对话").ConfigureAwait(false);
+                _logger.Info(
+                    "chat.turn.start",
+                    "RunTurn start. SessionId={SessionId} UserMessage={UserMessage} ModelOverride={ModelOverride} PromptVersion={PromptVersion} ModeLock={ModeLock}",
+                    request.SessionId,
+                    request.UserMessage,
+                    request.ModelOverride,
+                    request.PromptVersion,
+                    request.ModeLock.HasValue ? request.ModeLock.Value.ToString() : "auto");
+
+                try
+                {
+                    ConversationSession session = await ResolveSessionAsync(request.SessionId).ConfigureAwait(false);
+                    if (session == null)
+                    {
+                        // 会话不存在时自动创建新会话，确保流程可继续。
+                        session = await _conversationStore.CreateSessionAsync("新对话").ConfigureAwait(false);
+                    }
+
+                    using (_logger.BeginScope("SessionId", session.SessionId))
+                    {
+                        string selectedText = _selectionService == null ? string.Empty : _selectionService.GetSelectedText();
+                        // 先完成模式判定；仅当问答模式时再执行检索，避免非问答场景产生额外检索成本。
+                        RouteDecision route = await _commandRouteService.DecideRouteAsync(new RouteInput
+                        {
+                            UserMessage = request.UserMessage,
+                            SelectedText = selectedText,
+                            RetrievedContext = string.Empty,
+                            ModelOverride = request.ModelOverride,
+                            ModeLock = request.ModeLock
+                        }).ConfigureAwait(false);
+
+                        ConversationRouteType resolvedMode = NormalizeRouteType(route == null ? ConversationRouteType.Writing : route.RouteType);
+                        _logger.Info(
+                            "chat.route.decided",
+                            "Route decided. RouteType={RouteType} ResolvedMode={ResolvedMode} Confidence={Confidence} Reason={Reason} Category={Category}",
+                            route == null ? ConversationRouteType.Writing.ToString() : route.RouteType.ToString(),
+                            resolvedMode.ToString(),
+                            route == null ? 0d : route.Confidence,
+                            route == null ? string.Empty : route.Reason,
+                            route == null ? string.Empty : (route.ModeReasonCategory ?? string.Empty));
+
+                        RetrievedContext retrieved = null;
+                        if (resolvedMode == ConversationRouteType.Qa)
+                        {
+                            _logger.Info("chat.retrieval.start", "Retrieval start for QA mode. SessionId={SessionId}", session.SessionId);
+                            retrieved = await _documentRetriever.RetrieveAsync(new DocumentQuery
+                            {
+                                QueryText = request.UserMessage,
+                                SelectedText = selectedText,
+                                MaxChunks = 5,
+                                ModelOverride = request.ModelOverride
+                            }).ConfigureAwait(false);
+                            _logger.Info(
+                                "chat.retrieval.end",
+                                "Retrieval completed for QA mode. SessionId={SessionId} ChunkCount={ChunkCount}",
+                                session.SessionId,
+                                retrieved == null || retrieved.Chunks == null ? 0 : retrieved.Chunks.Count);
+                        }
+
+                        PendingAction pendingAction = null;
+                        string assistantReply;
+
+                        if (resolvedMode == ConversationRouteType.Qa)
+                        {
+                            assistantReply = await BuildQuestionAnswerReplyAsync(route, request, selectedText, retrieved).ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            // 非问答模式统一走“先建议后执行”流程。
+                            pendingAction = await BuildPendingActionAsync(resolvedMode, route, request, selectedText, retrieved).ConfigureAwait(false);
+                            assistantReply = BuildAssistantReply(resolvedMode, route, pendingAction, selectedText);
+                        }
+
+                        session.Messages.Add(new ConversationMessage
+                        {
+                            Role = "user",
+                            Content = request.UserMessage,
+                            TimestampUtc = DateTime.UtcNow,
+                            Metadata = "{}"
+                        });
+
+                        session.Messages.Add(new ConversationMessage
+                        {
+                            Role = "assistant",
+                            Content = assistantReply,
+                            TimestampUtc = DateTime.UtcNow,
+                            Metadata = "{}"
+                        });
+
+                        if (pendingAction != null)
+                        {
+                            // 将待执行动作持久化到会话，供用户确认执行。
+                            session.PendingActions.Add(pendingAction);
+                        }
+
+                        session.IsActive = true;
+                        session.UpdatedAtUtc = DateTime.UtcNow;
+                        await _conversationStore.SaveSessionAsync(session).ConfigureAwait(false);
+                        await _conversationStore.SetActiveSessionAsync(session.SessionId).ConfigureAwait(false);
+
+                        ChatTurnResult result = new ChatTurnResult
+                        {
+                            SessionId = session.SessionId,
+                            AssistantReply = assistantReply,
+                            PendingActionId = pendingAction == null ? string.Empty : pendingAction.ActionId,
+                            RequiresUserConfirmation = pendingAction != null,
+                            RouteType = resolvedMode,
+                            ResolvedMode = resolvedMode
+                        };
+                        stopwatch.Stop();
+                        _logger.Info(
+                            "chat.turn.end",
+                            "RunTurn completed. SessionId={SessionId} RouteType={RouteType} RequiresUserConfirmation={RequiresUserConfirmation} DurationMs={DurationMs}",
+                            result.SessionId,
+                            result.RouteType.ToString(),
+                            result.RequiresUserConfirmation,
+                            stopwatch.ElapsedMilliseconds);
+
+                        return result;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    stopwatch.Stop();
+                    _logger.Error(
+                        "chat.turn.failed",
+                        ex,
+                        "RunTurn failed. SessionId={SessionId} UserMessage={UserMessage} DurationMs={DurationMs}",
+                        request.SessionId,
+                        request.UserMessage,
+                        stopwatch.ElapsedMilliseconds);
+                    throw;
+                }
             }
-
-            string selectedText = _selectionService == null ? string.Empty : _selectionService.GetSelectedText();
-            // 对当前文档做检索增强，为后续路由与生成提供上下文。
-            RetrievedContext retrieved = await _documentRetriever.RetrieveAsync(new DocumentQuery
-            {
-                QueryText = request.UserMessage,
-                SelectedText = selectedText,
-                MaxChunks = 5,
-                ModelOverride = request.ModelOverride
-            }).ConfigureAwait(false);
-
-            RouteDecision route = await _commandRouteService.DecideRouteAsync(new RouteInput
-            {
-                UserMessage = request.UserMessage,
-                SelectedText = selectedText,
-                RetrievedContext = retrieved == null ? string.Empty : retrieved.CombinedText,
-                ModelOverride = request.ModelOverride
-            }).ConfigureAwait(false);
-
-            // 基于路由生成待执行动作，但不立即修改文档，保持“先建议后执行”。
-            PendingAction pendingAction = await BuildPendingActionAsync(route, request, selectedText, retrieved).ConfigureAwait(false);
-            string assistantReply = BuildAssistantReply(route, pendingAction, selectedText);
-
-            session.Messages.Add(new ConversationMessage
-            {
-                Role = "user",
-                Content = request.UserMessage,
-                TimestampUtc = DateTime.UtcNow,
-                Metadata = "{}"
-            });
-
-            session.Messages.Add(new ConversationMessage
-            {
-                Role = "assistant",
-                Content = assistantReply,
-                TimestampUtc = DateTime.UtcNow,
-                Metadata = "{}"
-            });
-
-            if (pendingAction != null)
-            {
-                // 将待执行动作持久化到会话，供用户确认执行。
-                session.PendingActions.Add(pendingAction);
-            }
-
-            session.IsActive = true;
-            session.UpdatedAtUtc = DateTime.UtcNow;
-            await _conversationStore.SaveSessionAsync(session).ConfigureAwait(false);
-            await _conversationStore.SetActiveSessionAsync(session.SessionId).ConfigureAwait(false);
-
-            return new ChatTurnResult
-            {
-                SessionId = session.SessionId,
-                AssistantReply = assistantReply,
-                PendingActionId = pendingAction == null ? string.Empty : pendingAction.ActionId,
-                RequiresUserConfirmation = pendingAction != null,
-                RouteType = route == null ? ConversationRouteType.Rewrite : route.RouteType
-            };
         }
 
         /// <summary>
@@ -178,89 +259,105 @@ namespace SmartWord.Services.Conversation
         /// <returns>动作执行结果。</returns>
         public async Task<ApplyActionResult> ApplyPendingActionAsync(string sessionId, string actionId)
         {
-            ConversationSession session = await _conversationStore.GetSessionAsync(sessionId).ConfigureAwait(false);
-            if (session == null)
+            var stopwatch = Stopwatch.StartNew();
+            using (_logger.BeginScope("SessionId", sessionId))
+            using (_logger.BeginScope("ActionId", actionId))
             {
-                return new ApplyActionResult
+                _logger.Info("chat.action.apply.start", "Apply action start. SessionId={SessionId} ActionId={ActionId}", sessionId, actionId);
+                ConversationSession session = await _conversationStore.GetSessionAsync(sessionId).ConfigureAwait(false);
+                if (session == null)
                 {
-                    SessionId = sessionId,
-                    ActionId = actionId,
-                    Success = false,
-                    Message = "未找到会话。"
-                };
-            }
+                    stopwatch.Stop();
+                    _logger.Warn("chat.action.apply.not-found-session", "Apply action failed because session was not found. SessionId={SessionId} DurationMs={DurationMs}", sessionId, stopwatch.ElapsedMilliseconds);
+                    return new ApplyActionResult
+                    {
+                        SessionId = sessionId,
+                        ActionId = actionId,
+                        Success = false,
+                        Message = "未找到会话。"
+                    };
+                }
 
-            PendingAction action = FindPendingAction(session, actionId);
-            if (action == null)
-            {
-                return new ApplyActionResult
+                PendingAction action = FindPendingAction(session, actionId);
+                if (action == null)
                 {
-                    SessionId = session.SessionId,
-                    ActionId = actionId,
-                    Success = false,
-                    Message = "未找到待执行动作。"
-                };
-            }
+                    stopwatch.Stop();
+                    _logger.Warn("chat.action.apply.not-found-action", "Apply action failed because pending action was not found. SessionId={SessionId} ActionId={ActionId} DurationMs={DurationMs}", session.SessionId, actionId, stopwatch.ElapsedMilliseconds);
+                    return new ApplyActionResult
+                    {
+                        SessionId = session.SessionId,
+                        ActionId = actionId,
+                        Success = false,
+                        Message = "未找到待执行动作。"
+                    };
+                }
 
-            if (action.IsApplied)
-            {
-                return new ApplyActionResult
+                if (action.IsApplied)
                 {
-                    SessionId = session.SessionId,
-                    ActionId = action.ActionId,
-                    Success = false,
-                    Message = "该动作已执行。"
-                };
-            }
+                    stopwatch.Stop();
+                    _logger.Warn("chat.action.apply.already-applied", "Apply action skipped because action already applied. SessionId={SessionId} ActionId={ActionId} DurationMs={DurationMs}", session.SessionId, action.ActionId, stopwatch.ElapsedMilliseconds);
+                    return new ApplyActionResult
+                    {
+                        SessionId = session.SessionId,
+                        ActionId = action.ActionId,
+                        Success = false,
+                        Message = "该动作已执行。"
+                    };
+                }
 
-            try
-            {
-                // 执行成功后打已应用标记，避免重复执行同一动作。
-                ExecuteAction(action);
-                action.IsApplied = true;
-
-                string resultMessage = "已执行建议动作。";
-                session.Messages.Add(new ConversationMessage
+                try
                 {
-                    Role = "assistant",
-                    Content = resultMessage,
-                    TimestampUtc = DateTime.UtcNow,
-                    Metadata = "{\"type\":\"apply\"}"
-                });
+                    // 执行成功后打已应用标记，避免重复执行同一动作。
+                    ExecuteAction(action);
+                    action.IsApplied = true;
 
-                session.UpdatedAtUtc = DateTime.UtcNow;
-                await _conversationStore.SaveSessionAsync(session).ConfigureAwait(false);
+                    string resultMessage = "已执行建议动作。";
+                    session.Messages.Add(new ConversationMessage
+                    {
+                        Role = "assistant",
+                        Content = resultMessage,
+                        TimestampUtc = DateTime.UtcNow,
+                        Metadata = "{\"type\":\"apply\"}"
+                    });
 
-                return new ApplyActionResult
+                    session.UpdatedAtUtc = DateTime.UtcNow;
+                    await _conversationStore.SaveSessionAsync(session).ConfigureAwait(false);
+                    stopwatch.Stop();
+                    _logger.Info("chat.action.apply.end", "Apply action completed. SessionId={SessionId} ActionId={ActionId} DurationMs={DurationMs}", session.SessionId, action.ActionId, stopwatch.ElapsedMilliseconds);
+
+                    return new ApplyActionResult
+                    {
+                        SessionId = session.SessionId,
+                        ActionId = action.ActionId,
+                        Success = true,
+                        Message = resultMessage
+                    };
+                }
+                catch (Exception ex)
                 {
-                    SessionId = session.SessionId,
-                    ActionId = action.ActionId,
-                    Success = true,
-                    Message = resultMessage
-                };
-            }
-            catch (Exception ex)
-            {
-                string error = "执行失败：" + ex.Message;
-                _notificationService.Error(error);
+                    string error = "执行失败：" + ex.Message;
+                    _notificationService.Error(error);
+                    stopwatch.Stop();
+                    _logger.Error("chat.action.apply.failed", ex, "Apply action failed. SessionId={SessionId} ActionId={ActionId} DurationMs={DurationMs}", session.SessionId, action.ActionId, stopwatch.ElapsedMilliseconds);
 
-                session.Messages.Add(new ConversationMessage
-                {
-                    Role = "assistant",
-                    Content = error,
-                    TimestampUtc = DateTime.UtcNow,
-                    Metadata = "{\"type\":\"error\"}"
-                });
-                session.UpdatedAtUtc = DateTime.UtcNow;
-                await _conversationStore.SaveSessionAsync(session).ConfigureAwait(false);
+                    session.Messages.Add(new ConversationMessage
+                    {
+                        Role = "assistant",
+                        Content = error,
+                        TimestampUtc = DateTime.UtcNow,
+                        Metadata = "{\"type\":\"error\"}"
+                    });
+                    session.UpdatedAtUtc = DateTime.UtcNow;
+                    await _conversationStore.SaveSessionAsync(session).ConfigureAwait(false);
 
-                return new ApplyActionResult
-                {
-                    SessionId = session.SessionId,
-                    ActionId = action.ActionId,
-                    Success = false,
-                    Message = error
-                };
+                    return new ApplyActionResult
+                    {
+                        SessionId = session.SessionId,
+                        ActionId = action.ActionId,
+                        Success = false,
+                        Message = error
+                    };
+                }
             }
         }
 
@@ -287,26 +384,22 @@ namespace SmartWord.Services.Conversation
         /// <summary>
         /// 按路由生成待执行动作。
         /// </summary>
+        /// <param name="resolvedMode">归一化后的模式。</param>
         /// <param name="route">路由决策。</param>
         /// <param name="request">对话轮次请求。</param>
         /// <param name="selectedText">当前选区文本。</param>
         /// <param name="retrieved">检索上下文。</param>
         /// <returns>待执行动作；无有效载荷时返回空值。</returns>
         private async Task<PendingAction> BuildPendingActionAsync(
+            ConversationRouteType resolvedMode,
             RouteDecision route,
             ChatTurnRequest request,
             string selectedText,
             RetrievedContext retrieved)
         {
-            if (route == null)
+            if (resolvedMode == ConversationRouteType.Qa)
             {
-                // 路由异常时默认走改写，避免中断主流程。
-                route = new RouteDecision
-                {
-                    RouteType = ConversationRouteType.Rewrite,
-                    Confidence = 0.5d,
-                    Reason = "默认路由"
-                };
+                return null;
             }
 
             string mergedInstruction = BuildMergedInstruction(request.UserMessage, retrieved);
@@ -319,25 +412,37 @@ namespace SmartWord.Services.Conversation
                 ActionId = Guid.NewGuid().ToString("N"),
                 CreatedAtUtc = DateTime.UtcNow,
                 EntryPoint = "SmartWord_Run",
-                RouteType = route.RouteType,
+                RouteType = resolvedMode,
                 ActionType = ConversationActionType.None
             };
 
-            if (route.RouteType == ConversationRouteType.Rewrite || route.RouteType == ConversationRouteType.Hybrid)
+            bool shouldGenerateRewrite = resolvedMode == ConversationRouteType.Writing || resolvedMode == ConversationRouteType.Processing;
+            bool shouldGenerateVba = resolvedMode == ConversationRouteType.Execute;
+
+            // 执行模式下若同时包含明显改写意图，则生成混合动作。
+            if (resolvedMode == ConversationRouteType.Execute && IsExecuteHybridInstruction(request.UserMessage))
             {
-                if (!string.IsNullOrWhiteSpace(rewriteSource))
-                {
-                    action.RewriteText = await _modelService.RewriteTextAsync(new EditorRewriteRequest
-                    {
-                        Instruction = mergedInstruction,
-                        SelectedText = rewriteSource,
-                        ModelOverride = request.ModelOverride,
-                        PromptVersion = request.PromptVersion
-                    }).ConfigureAwait(false);
-                }
+                shouldGenerateRewrite = !string.IsNullOrWhiteSpace(rewriteSource);
             }
 
-            if (route.RouteType == ConversationRouteType.Vba || route.RouteType == ConversationRouteType.Hybrid)
+            if (shouldGenerateRewrite && !string.IsNullOrWhiteSpace(rewriteSource))
+            {
+                string rewriteInstruction = mergedInstruction;
+                if (resolvedMode == ConversationRouteType.Processing)
+                {
+                    rewriteInstruction = "请按结构化处理方式完成以下任务：\n" + mergedInstruction;
+                }
+
+                action.RewriteText = await _modelService.RewriteTextAsync(new EditorRewriteRequest
+                {
+                    Instruction = rewriteInstruction,
+                    SelectedText = rewriteSource,
+                    ModelOverride = request.ModelOverride,
+                    PromptVersion = request.PromptVersion
+                }).ConfigureAwait(false);
+            }
+
+            if (shouldGenerateVba)
             {
                 action.VbaCode = await _modelService.GenerateVbaCodeAsync(new VbaGenerationRequest
                 {
@@ -349,26 +454,92 @@ namespace SmartWord.Services.Conversation
                 }).ConfigureAwait(false);
             }
 
-            if (route.RouteType == ConversationRouteType.Hybrid)
+            bool hasRewrite = !string.IsNullOrWhiteSpace(action.RewriteText);
+            bool hasVba = !string.IsNullOrWhiteSpace(action.VbaCode);
+            if (hasRewrite && hasVba)
             {
                 action.ActionType = ConversationActionType.Hybrid;
             }
-            else if (route.RouteType == ConversationRouteType.Vba)
+            else if (hasVba)
             {
                 action.ActionType = ConversationActionType.Vba;
             }
-            else
+            else if (hasRewrite)
             {
                 action.ActionType = ConversationActionType.Rewrite;
             }
+            else
+            {
+                action.ActionType = ConversationActionType.None;
+            }
 
-            bool hasPayload = !string.IsNullOrWhiteSpace(action.RewriteText) || !string.IsNullOrWhiteSpace(action.VbaCode);
-            if (!hasPayload)
+            if (action.ActionType == ConversationActionType.None)
             {
                 return null;
             }
 
             return action;
+        }
+
+        /// <summary>
+        /// 构建文档问答回复。
+        /// </summary>
+        /// <param name="route">路由决策。</param>
+        /// <param name="request">对话轮次请求。</param>
+        /// <param name="selectedText">当前选区文本。</param>
+        /// <param name="retrieved">检索上下文。</param>
+        /// <returns>问答回复文本。</returns>
+        private async Task<string> BuildQuestionAnswerReplyAsync(
+            RouteDecision route,
+            ChatTurnRequest request,
+            string selectedText,
+            RetrievedContext retrieved)
+        {
+            string retrievedContext = retrieved == null ? string.Empty : retrieved.CombinedText;
+            if (string.IsNullOrWhiteSpace(retrievedContext))
+            {
+                _logger.Warn("qa.no-context", "No retrieved context for QA. Question={Question}", request.UserMessage);
+            }
+
+            _logger.Info("qa.request.start", "QA request start. Question={Question}", request.UserMessage);
+            string answer = await _modelService.AnswerQuestionAsync(new DocumentQaRequest
+            {
+                Question = request.UserMessage,
+                SelectedText = selectedText,
+                RetrievedContext = retrievedContext,
+                ModelOverride = request.ModelOverride,
+                PromptVersion = request.PromptVersion
+            }).ConfigureAwait(false);
+            _logger.Info("qa.request.end", "QA request completed. AnswerLength={AnswerLength}", string.IsNullOrWhiteSpace(answer) ? 0 : answer.Length);
+
+            if (string.IsNullOrWhiteSpace(answer))
+            {
+                if (string.IsNullOrWhiteSpace(retrievedContext))
+                {
+                    return "未检索到足够文档依据，建议缩小问题范围或先选中相关段落后重试。";
+                }
+
+                return "暂时无法生成稳定答案，请调整提问后重试。";
+            }
+
+            var builder = new StringBuilder();
+            builder.Append("模式：").Append(RouteTypeToText(ConversationRouteType.Qa));
+            if (!string.IsNullOrWhiteSpace(route == null ? null : route.Reason))
+            {
+                builder.Append("（").Append(route.Reason).Append("）");
+            }
+
+            builder.AppendLine();
+            builder.AppendLine(answer.Trim());
+
+            string refs = BuildChunkReferences(retrieved);
+            if (!string.IsNullOrWhiteSpace(refs))
+            {
+                builder.AppendLine();
+                builder.Append("参考片段：").Append(refs);
+            }
+
+            return builder.ToString();
         }
 
         /// <summary>
@@ -391,11 +562,12 @@ namespace SmartWord.Services.Conversation
         /// <summary>
         /// 生成展示给用户的建议回复文本。
         /// </summary>
+        /// <param name="resolvedMode">归一化后的模式。</param>
         /// <param name="route">路由决策。</param>
         /// <param name="action">待执行动作。</param>
         /// <param name="selectedText">当前选区文本。</param>
         /// <returns>回复文本。</returns>
-        private static string BuildAssistantReply(RouteDecision route, PendingAction action, string selectedText)
+        private static string BuildAssistantReply(ConversationRouteType resolvedMode, RouteDecision route, PendingAction action, string selectedText)
         {
             if (action == null)
             {
@@ -403,7 +575,7 @@ namespace SmartWord.Services.Conversation
             }
 
             var builder = new StringBuilder();
-            builder.Append("路由结果：").Append(RouteTypeToText(route == null ? ConversationRouteType.Rewrite : route.RouteType));
+            builder.Append("模式：").Append(RouteTypeToText(resolvedMode));
 
             if (!string.IsNullOrWhiteSpace(route == null ? null : route.Reason))
             {
@@ -414,17 +586,17 @@ namespace SmartWord.Services.Conversation
 
             if (!string.IsNullOrWhiteSpace(action.RewriteText))
             {
-                builder.AppendLine("建议改写如下：");
+                builder.AppendLine("建议内容预览：");
                 builder.AppendLine(TrimForPreview(action.RewriteText, 600));
             }
-            else if ((route != null && route.RouteType != ConversationRouteType.Vba) && string.IsNullOrWhiteSpace(selectedText))
+            else if ((resolvedMode == ConversationRouteType.Writing || resolvedMode == ConversationRouteType.Processing) && string.IsNullOrWhiteSpace(selectedText))
             {
-                builder.AppendLine("未检测到选中文本，确认执行前请先选中要替换的内容。");
+                builder.AppendLine("未检测到选中文本，确认执行前请先选中要替换的内容。\n");
             }
 
             if (!string.IsNullOrWhiteSpace(action.VbaCode))
             {
-                builder.AppendLine("已生成排版脚本（预览）：");
+                builder.AppendLine("已生成执行脚本（预览）：");
                 builder.AppendLine(TrimForPreview(action.VbaCode, 300));
             }
 
@@ -439,17 +611,22 @@ namespace SmartWord.Services.Conversation
         /// <returns>展示文案。</returns>
         private static string RouteTypeToText(ConversationRouteType routeType)
         {
-            if (routeType == ConversationRouteType.Vba)
+            if (routeType == ConversationRouteType.Qa)
             {
-                return "排版脚本";
+                return "文档问答";
             }
 
-            if (routeType == ConversationRouteType.Hybrid)
+            if (routeType == ConversationRouteType.Processing)
             {
-                return "改写 + 排版";
+                return "结构化处理";
             }
 
-            return "文本改写";
+            if (routeType == ConversationRouteType.Execute || routeType == ConversationRouteType.Vba || routeType == ConversationRouteType.Hybrid)
+            {
+                return "执行操作";
+            }
+
+            return "写作改写";
         }
 
         /// <summary>
@@ -465,6 +642,7 @@ namespace SmartWord.Services.Conversation
                     throw new InvalidOperationException("改写结果为空，无法执行替换。");
                 }
 
+                _logger.Info("chat.action.execute.rewrite", "Applying rewrite action. ActionId={ActionId} RewriteLength={RewriteLength}", action.ActionId, action.RewriteText.Length);
                 _selectionService.ReplaceSelection(action.RewriteText);
             }
 
@@ -477,6 +655,7 @@ namespace SmartWord.Services.Conversation
 
                 // 执行前进行代码净化与入口校验，避免注入非法脚本。
                 string safeCode = _vbaCodeSanitizer.SanitizeAndValidate(action.VbaCode, action.EntryPoint);
+                _logger.Info("chat.action.execute.vba", "Executing VBA action. ActionId={ActionId} EntryPoint={EntryPoint} VbaLength={VbaLength}", action.ActionId, action.EntryPoint, safeCode.Length);
                 _vbaExecutor.Execute(safeCode, action.EntryPoint);
             }
         }
@@ -503,6 +682,65 @@ namespace SmartWord.Services.Conversation
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// 判断执行模式下是否需要生成混合动作。
+        /// </summary>
+        /// <param name="instruction">用户指令。</param>
+        /// <returns>是否同时包含写作意图。</returns>
+        private static bool IsExecuteHybridInstruction(string instruction)
+        {
+            string text = instruction ?? string.Empty;
+            return Regex.IsMatch(text, "润色|改写|优化|重写|rewrite|polish", RegexOptions.IgnoreCase);
+        }
+
+        /// <summary>
+        /// 根据检索结果生成参考片段标识串。
+        /// </summary>
+        /// <param name="retrieved">检索上下文。</param>
+        /// <returns>参考片段标识。</returns>
+        private static string BuildChunkReferences(RetrievedContext retrieved)
+        {
+            if (retrieved == null || retrieved.Chunks == null || retrieved.Chunks.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var refs = new List<string>();
+            int maxCount = Math.Min(3, retrieved.Chunks.Count);
+            for (int i = 0; i < maxCount; i++)
+            {
+                RetrievedChunk chunk = retrieved.Chunks[i];
+                if (chunk == null || string.IsNullOrWhiteSpace(chunk.ChunkId))
+                {
+                    continue;
+                }
+
+                refs.Add(chunk.ChunkId);
+            }
+
+            return refs.Count == 0 ? string.Empty : string.Join(",", refs.ToArray());
+        }
+
+        /// <summary>
+        /// 将历史兼容路由值归一化为新模式。
+        /// </summary>
+        /// <param name="routeType">原始路由类型。</param>
+        /// <returns>归一化后的路由类型。</returns>
+        private static ConversationRouteType NormalizeRouteType(ConversationRouteType routeType)
+        {
+            if (routeType == ConversationRouteType.Rewrite)
+            {
+                return ConversationRouteType.Writing;
+            }
+
+            if (routeType == ConversationRouteType.Vba || routeType == ConversationRouteType.Hybrid)
+            {
+                return ConversationRouteType.Execute;
+            }
+
+            return routeType;
         }
 
         /// <summary>
