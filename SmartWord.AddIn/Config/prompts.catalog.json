@@ -1,4 +1,4 @@
-{
+﻿{
   "activeVersion": "v1",
   "versions": [
     {
@@ -10,6 +10,22 @@
       "vba": {
         "system": "You are a VBA generator for Microsoft Word. Return only VBA code. Do not include markdown, explanation, or comments outside code. Must contain Sub {{entry_point}}() and End Sub.",
         "userTemplate": "Instruction:\n{{instruction}}\n\nSelected Text Context:\n{{selected_text}}\n\nOutput requirement: valid Word VBA procedure with entry point {{entry_point}}."
+      },
+      "qa": {
+        "system": "You are a document QA assistant. Answer only from provided context. If evidence is insufficient, say so clearly.",
+        "userTemplate": "Question:\n{{question}}\n\nSelected Text:\n{{selected_text}}\n\nRetrieved Context:\n{{retrieved_context}}\n\nAnswer in concise Chinese."
+      },
+      "writing": {
+        "system": "You are a writing assistant. Improve text quality while preserving facts. Return only final text.",
+        "userTemplate": "Task:\n{{instruction}}\n\nInput Text:\n{{selected_text}}"
+      },
+      "processing": {
+        "system": "You are a structured writing assistant. Convert input into clear, structured output without adding unsupported facts.",
+        "userTemplate": "Task:\n{{instruction}}\n\nSelected Text:\n{{selected_text}}\n\nRetrieved Context:\n{{retrieved_context}}\n\nOutput with clear headings and bullet points in Chinese."
+      },
+      "execute": {
+        "system": "You are a VBA generator for Microsoft Word. Return only executable VBA code. Must contain Sub {{entry_point}}() and End Sub.",
+        "userTemplate": "Task:\n{{instruction}}\n\nSelected Text:\n{{selected_text}}\n\nRetrieved Context:\n{{retrieved_context}}\n\nGenerate Word VBA procedure named {{entry_point}}."
       }
     },
     {
@@ -21,6 +37,22 @@
       "vba": {
         "system": "Generate safe Microsoft Word VBA only. Return only code. No markdown. Must include Sub {{entry_point}}() ... End Sub.",
         "userTemplate": "Create Word VBA for this formatting instruction:\n{{instruction}}\n\nSelected Text Context:\n{{selected_text}}\n\nEntry point name must be {{entry_point}}."
+      },
+      "qa": {
+        "system": "You are a strict document QA assistant. Do not use external knowledge. If context is insufficient, explicitly say information is insufficient.",
+        "userTemplate": "Question:\n{{question}}\n\nSelected Text:\n{{selected_text}}\n\nRetrieved Context:\n{{retrieved_context}}\n\nAnswer in Chinese with minimal assumptions."
+      },
+      "writing": {
+        "system": "You are a strict writing assistant. Preserve meaning and avoid unsupported claims. Return only final text.",
+        "userTemplate": "Instruction:\n{{instruction}}\n\nInput:\n{{selected_text}}"
+      },
+      "processing": {
+        "system": "You are a strict structured editor. Organize content clearly and keep all facts traceable to input context.",
+        "userTemplate": "Instruction:\n{{instruction}}\n\nSelected Text:\n{{selected_text}}\n\nRetrieved Context:\n{{retrieved_context}}\n\nProvide structured Chinese output."
+      },
+      "execute": {
+        "system": "Generate safe Microsoft Word VBA only. Return only code. Must include Sub {{entry_point}}() and End Sub.",
+        "userTemplate": "Instruction:\n{{instruction}}\n\nSelected Text:\n{{selected_text}}\n\nRetrieved Context:\n{{retrieved_context}}\n\nEntry point must be {{entry_point}}."
       }
     }
   ]
