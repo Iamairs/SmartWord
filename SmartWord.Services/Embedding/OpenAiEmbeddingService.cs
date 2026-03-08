@@ -1,6 +1,9 @@
-﻿using SmartWord.Core.Abstractions.Conversation;
+﻿using SmartWord.Core.Abstractions;
+using SmartWord.Core.Abstractions.Conversation;
+using SmartWord.Services.Logging;
 using SmartWord.Services.Model;
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -24,14 +27,17 @@ namespace SmartWord.Services.Embedding
         };
 
         private readonly OpenAiApiOptions _options;
+        private readonly IAppLogger _logger;
 
         /// <summary>
         /// 初始化远端向量服务。
         /// </summary>
         /// <param name="options">API 配置。</param>
-        public OpenAiEmbeddingService(OpenAiApiOptions options)
+        /// <param name="logger">日志服务。</param>
+        public OpenAiEmbeddingService(OpenAiApiOptions options, IAppLogger logger)
         {
             _options = options;
+            _logger = logger ?? NullAppLogger.Instance;
         }
 
         /// <summary>
@@ -45,9 +51,11 @@ namespace SmartWord.Services.Embedding
             if (_options == null || !_options.IsEmbeddingConfigured)
             {
                 // 未配置密钥时直接返回空向量，由上层走降级策略。
+                _logger.Warn("embedding.skipped", "Embedding request skipped because embedding service is not configured.");
                 return new float[0];
             }
 
+            var stopwatch = Stopwatch.StartNew();
             string payload = Serialize(new EmbeddingRequest
             {
                 // Embedding 模型固定走配置项
@@ -56,6 +64,13 @@ namespace SmartWord.Services.Embedding
             });
 
             string url = _options.ResolveEmbeddingBaseUrl() + "/embeddings";
+            _logger.Info(
+                "embedding.request.start",
+                "Sending embedding request. Model={Model} Url={Url} Input={Input}",
+                _options.EmbeddingModel,
+                url,
+                input ?? string.Empty);
+
             using (var request = new HttpRequestMessage(HttpMethod.Post, url))
             {
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.ResolveEmbeddingApiKey());
@@ -65,8 +80,24 @@ namespace SmartWord.Services.Embedding
                 using (HttpResponseMessage response = await SharedHttpClient.SendAsync(request).ConfigureAwait(false))
                 {
                     string body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    stopwatch.Stop();
+                    _logger.Info(
+                        "embedding.request.end",
+                        "Embedding response received. Model={Model} StatusCode={StatusCode} DurationMs={DurationMs} ResponseLength={ResponseLength}",
+                        _options.EmbeddingModel,
+                        (int)response.StatusCode,
+                        stopwatch.ElapsedMilliseconds,
+                        string.IsNullOrWhiteSpace(body) ? 0 : body.Length);
+
                     if (!response.IsSuccessStatusCode)
                     {
+                        _logger.Error(
+                            "embedding.request.failed",
+                            null,
+                            "Embedding request failed. Model={Model} StatusCode={StatusCode} Body={Body}",
+                            _options.EmbeddingModel,
+                            (int)response.StatusCode,
+                            body);
                         throw new InvalidOperationException("Embedding API request failed (" + (int)response.StatusCode + "): " + body);
                     }
 
@@ -74,9 +105,15 @@ namespace SmartWord.Services.Embedding
                     if (embeddingResponse == null || embeddingResponse.data == null || embeddingResponse.data.Length == 0 || embeddingResponse.data[0] == null || embeddingResponse.data[0].embedding == null)
                     {
                         // 协议合法但无数据时返回空向量，避免上层空引用。
+                        _logger.Warn("embedding.response.empty", "Embedding response is empty. Model={Model}", _options.EmbeddingModel);
                         return new float[0];
                     }
 
+                    _logger.Debug(
+                        "embedding.response.parsed",
+                        "Embedding parsed. Model={Model} VectorLength={VectorLength}",
+                        _options.EmbeddingModel,
+                        embeddingResponse.data[0].embedding.Length);
                     return embeddingResponse.data[0].embedding;
                 }
             }
