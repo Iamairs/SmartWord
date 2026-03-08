@@ -46,8 +46,10 @@
     <Compile Include="Abstractions\Conversation\IConversationStore.cs" />
     <Compile Include="Abstractions\Conversation\IDocumentRetriever.cs" />
     <Compile Include="Abstractions\Conversation\IEmbeddingService.cs" />
+    <Compile Include="Abstractions\IAppLogger.cs" />
     <Compile Include="Abstractions\IModelService.cs" />
     <Compile Include="Abstractions\INotificationService.cs" />
+    <Compile Include="Abstractions\IWordThreadInvoker.cs" />
     <Compile Include="Abstractions\ISelectionService.cs" />
     <Compile Include="Abstractions\IUndoScope.cs" />
     <Compile Include="Abstractions\IUndoScopeFactory.cs" />
@@ -60,6 +62,7 @@
     <Compile Include="Models\Conversation\ConversationRouteType.cs" />
     <Compile Include="Models\Conversation\ConversationSession.cs" />
     <Compile Include="Models\Conversation\DocumentQuery.cs" />
+    <Compile Include="Models\Conversation\DocumentQaRequest.cs" />
     <Compile Include="Models\Conversation\PendingAction.cs" />
     <Compile Include="Models\Conversation\RetrievedChunk.cs" />
     <Compile Include="Models\Conversation\RetrievedContext.cs" />
