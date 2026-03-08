@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.Serialization;
@@ -68,7 +68,132 @@ namespace SmartWord.Services.Prompts
         }
 
         /// <summary>
-        /// 构建改写场景提示词。
+        /// 构建写作场景提示词。
+        /// </summary>
+        /// <param name="requestedVersion">请求版本。</param>
+        /// <param name="instruction">用户指令。</param>
+        /// <param name="selectedText">选中文本。</param>
+        /// <returns>系统/用户提示词对。</returns>
+        public PromptPair BuildWritingPrompts(string requestedVersion, string instruction, string selectedText)
+        {
+            PromptVersionItem item = ResolveVersion(requestedVersion);
+            PromptTemplate template = item.writing ?? item.rewrite;
+            if (template == null)
+            {
+                throw new InvalidOperationException("Writing prompt template is missing.");
+            }
+
+            var tokens = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "instruction", instruction ?? string.Empty },
+                { "selected_text", selectedText ?? string.Empty },
+                { "retrieved_context", string.Empty }
+            };
+
+            return new PromptPair
+            {
+                SystemPrompt = Render(template.system, tokens),
+                UserPrompt = Render(template.userTemplate, tokens)
+            };
+        }
+
+        /// <summary>
+        /// 构建处理场景提示词。
+        /// </summary>
+        /// <param name="requestedVersion">请求版本。</param>
+        /// <param name="instruction">用户指令。</param>
+        /// <param name="selectedText">选中文本。</param>
+        /// <param name="retrievedContext">检索上下文。</param>
+        /// <returns>系统/用户提示词对。</returns>
+        public PromptPair BuildProcessingPrompts(string requestedVersion, string instruction, string selectedText, string retrievedContext)
+        {
+            PromptVersionItem item = ResolveVersion(requestedVersion);
+            PromptTemplate template = item.processing ?? item.writing ?? item.rewrite;
+            if (template == null)
+            {
+                throw new InvalidOperationException("Processing prompt template is missing.");
+            }
+
+            var tokens = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "instruction", instruction ?? string.Empty },
+                { "selected_text", selectedText ?? string.Empty },
+                { "retrieved_context", retrievedContext ?? string.Empty }
+            };
+
+            return new PromptPair
+            {
+                SystemPrompt = Render(template.system, tokens),
+                UserPrompt = Render(template.userTemplate, tokens)
+            };
+        }
+
+        /// <summary>
+        /// 构建问答场景提示词。
+        /// </summary>
+        /// <param name="requestedVersion">请求版本。</param>
+        /// <param name="question">用户问题。</param>
+        /// <param name="selectedText">选中文本。</param>
+        /// <param name="retrievedContext">检索上下文。</param>
+        /// <returns>系统/用户提示词对。</returns>
+        public PromptPair BuildQaPrompts(string requestedVersion, string question, string selectedText, string retrievedContext)
+        {
+            PromptVersionItem item = ResolveVersion(requestedVersion);
+            PromptTemplate template = item.qa;
+            if (template == null)
+            {
+                throw new InvalidOperationException("QA prompt template is missing.");
+            }
+
+            var tokens = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "question", question ?? string.Empty },
+                { "selected_text", selectedText ?? string.Empty },
+                { "retrieved_context", retrievedContext ?? string.Empty }
+            };
+
+            return new PromptPair
+            {
+                SystemPrompt = Render(template.system, tokens),
+                UserPrompt = Render(template.userTemplate, tokens)
+            };
+        }
+
+        /// <summary>
+        /// 构建执行场景提示词。
+        /// </summary>
+        /// <param name="requestedVersion">请求版本。</param>
+        /// <param name="instruction">用户指令。</param>
+        /// <param name="selectedText">选中文本。</param>
+        /// <param name="entryPoint">入口过程名称。</param>
+        /// <param name="retrievedContext">检索上下文。</param>
+        /// <returns>系统/用户提示词对。</returns>
+        public PromptPair BuildExecutePrompts(string requestedVersion, string instruction, string selectedText, string entryPoint, string retrievedContext)
+        {
+            PromptVersionItem item = ResolveVersion(requestedVersion);
+            PromptTemplate template = item.execute ?? item.vba;
+            if (template == null)
+            {
+                throw new InvalidOperationException("Execute prompt template is missing.");
+            }
+
+            var tokens = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "instruction", instruction ?? string.Empty },
+                { "selected_text", selectedText ?? string.Empty },
+                { "entry_point", entryPoint ?? "SmartWord_Run" },
+                { "retrieved_context", retrievedContext ?? string.Empty }
+            };
+
+            return new PromptPair
+            {
+                SystemPrompt = Render(template.system, tokens),
+                UserPrompt = Render(template.userTemplate, tokens)
+            };
+        }
+
+        /// <summary>
+        /// 构建改写场景提示词（兼容旧接口）。
         /// </summary>
         /// <param name="requestedVersion">请求版本。</param>
         /// <param name="instruction">用户指令。</param>
@@ -76,27 +201,11 @@ namespace SmartWord.Services.Prompts
         /// <returns>系统/用户提示词对。</returns>
         public PromptPair BuildRewritePrompts(string requestedVersion, string instruction, string selectedText)
         {
-            PromptVersionItem item = ResolveVersion(requestedVersion);
-            if (item.rewrite == null)
-            {
-                throw new InvalidOperationException("Rewrite prompt template is missing.");
-            }
-
-            var tokens = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                { "instruction", instruction ?? string.Empty },
-                { "selected_text", selectedText ?? string.Empty }
-            };
-
-            return new PromptPair
-            {
-                SystemPrompt = Render(item.rewrite.system, tokens),
-                UserPrompt = Render(item.rewrite.userTemplate, tokens)
-            };
+            return BuildWritingPrompts(requestedVersion, instruction, selectedText);
         }
 
         /// <summary>
-        /// 构建 VBA 场景提示词。
+        /// 构建 VBA 场景提示词（兼容旧接口）。
         /// </summary>
         /// <param name="requestedVersion">请求版本。</param>
         /// <param name="instruction">用户指令。</param>
@@ -105,24 +214,7 @@ namespace SmartWord.Services.Prompts
         /// <returns>系统/用户提示词对。</returns>
         public PromptPair BuildVbaPrompts(string requestedVersion, string instruction, string selectedText, string entryPoint)
         {
-            PromptVersionItem item = ResolveVersion(requestedVersion);
-            if (item.vba == null)
-            {
-                throw new InvalidOperationException("VBA prompt template is missing.");
-            }
-
-            var tokens = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                { "instruction", instruction ?? string.Empty },
-                { "selected_text", selectedText ?? string.Empty },
-                { "entry_point", entryPoint ?? "SmartWord_Run" }
-            };
-
-            return new PromptPair
-            {
-                SystemPrompt = Render(item.vba.system, tokens),
-                UserPrompt = Render(item.vba.userTemplate, tokens)
-            };
+            return BuildExecutePrompts(requestedVersion, instruction, selectedText, entryPoint, string.Empty);
         }
 
         /// <summary>
@@ -236,16 +328,40 @@ namespace SmartWord.Services.Prompts
             public string version { get; set; }
 
             /// <summary>
-            /// 改写模板。
+            /// 旧版改写模板。
             /// </summary>
             [DataMember(Name = "rewrite")]
             public PromptTemplate rewrite { get; set; }
 
             /// <summary>
-            /// VBA 模板。
+            /// 旧版 VBA 模板。
             /// </summary>
             [DataMember(Name = "vba")]
             public PromptTemplate vba { get; set; }
+
+            /// <summary>
+            /// 写作模板。
+            /// </summary>
+            [DataMember(Name = "writing")]
+            public PromptTemplate writing { get; set; }
+
+            /// <summary>
+            /// 处理模板。
+            /// </summary>
+            [DataMember(Name = "processing")]
+            public PromptTemplate processing { get; set; }
+
+            /// <summary>
+            /// 问答模板。
+            /// </summary>
+            [DataMember(Name = "qa")]
+            public PromptTemplate qa { get; set; }
+
+            /// <summary>
+            /// 执行模板。
+            /// </summary>
+            [DataMember(Name = "execute")]
+            public PromptTemplate execute { get; set; }
         }
 
         [DataContract]
