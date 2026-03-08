@@ -1,8 +1,9 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Text;
+using SmartWord.Services.Logging;
 
 // 文件说明：
 // OpenAI 兼容服务配置模型，负责聚合环境变量与本地配置文件并输出标准化运行参数。
@@ -61,6 +62,11 @@ namespace SmartWord.Services.Model
         /// 向量索引目录。
         /// </summary>
         public string VectorIndexDirectory { get; private set; }
+
+        /// <summary>
+        /// 日志配置。
+        /// </summary>
+        public LoggingOptions Logging { get; private set; }
 
         public bool IsConfigured
         {
@@ -175,6 +181,45 @@ namespace SmartWord.Services.Model
                 settingsFile == null ? null : settingsFile.vectorIndexDirectory,
                 Path.Combine(root, "Config", "vector-index"));
 
+            LoggingOptions defaultLogging = LoggingOptions.CreateDefault(root);
+            string loggingLevel = GetFirstNonEmpty(
+                Environment.GetEnvironmentVariable("SMARTWORD_LOG_LEVEL"),
+                settingsFile == null || settingsFile.logging == null ? null : settingsFile.logging.logLevel,
+                defaultLogging.LogLevel);
+
+            string loggingDirectory = GetFirstNonEmpty(
+                Environment.GetEnvironmentVariable("SMARTWORD_LOG_DIR"),
+                settingsFile == null || settingsFile.logging == null ? null : settingsFile.logging.logDirectory,
+                defaultLogging.LogDirectory);
+
+            int retainedFileCountLimit = GetFirstValidInt(
+                Environment.GetEnvironmentVariable("SMARTWORD_LOG_RETAINED_FILES"),
+                settingsFile == null || settingsFile.logging == null ? null : settingsFile.logging.retainedFileCountLimit,
+                defaultLogging.RetainedFileCountLimit);
+
+            long fileSizeLimitBytes = GetFirstValidLong(
+                Environment.GetEnvironmentVariable("SMARTWORD_LOG_FILE_SIZE_BYTES"),
+                settingsFile == null || settingsFile.logging == null ? null : settingsFile.logging.fileSizeLimitBytes,
+                defaultLogging.FileSizeLimitBytes);
+
+            bool enableDebugSink = GetFirstValidBool(
+                Environment.GetEnvironmentVariable("SMARTWORD_LOG_DEBUG_SINK"),
+                settingsFile == null || settingsFile.logging == null ? null : settingsFile.logging.enableDebugSink,
+                defaultLogging.EnableDebugSink);
+
+            string outputTemplate = GetFirstNonEmpty(
+                settingsFile == null || settingsFile.logging == null ? null : settingsFile.logging.outputTemplate,
+                defaultLogging.OutputTemplate);
+
+            LoggingOptions loggingOptions = LoggingOptions.Create(
+                root,
+                loggingLevel,
+                loggingDirectory,
+                retainedFileCountLimit,
+                fileSizeLimitBytes,
+                enableDebugSink,
+                outputTemplate);
+
             string[] availableModels = settingsFile == null ? null : settingsFile.availableModels;
             if (availableModels == null || availableModels.Length == 0)
             {
@@ -194,7 +239,8 @@ namespace SmartWord.Services.Model
                 EmbeddingBaseUrl = NormalizeBaseUrl(embeddingBaseUrl),
                 EmbeddingApiKey = embeddingApiKey,
                 ChatStorePath = NormalizePath(root, chatStorePath),
-                VectorIndexDirectory = NormalizePath(root, vectorIndexDirectory)
+                VectorIndexDirectory = NormalizePath(root, vectorIndexDirectory),
+                Logging = loggingOptions
             };
         }
 
@@ -336,6 +382,63 @@ namespace SmartWord.Services.Model
         }
 
         /// <summary>
+        /// 解析第一个有效整数，失败时回退默认值。
+        /// </summary>
+        private static int GetFirstValidInt(string first, string second, int fallback)
+        {
+            int value;
+            if (int.TryParse(first, out value) && value > 0)
+            {
+                return value;
+            }
+
+            if (int.TryParse(second, out value) && value > 0)
+            {
+                return value;
+            }
+
+            return fallback;
+        }
+
+        /// <summary>
+        /// 解析第一个有效长整型，失败时回退默认值。
+        /// </summary>
+        private static long GetFirstValidLong(string first, string second, long fallback)
+        {
+            long value;
+            if (long.TryParse(first, out value) && value > 0L)
+            {
+                return value;
+            }
+
+            if (long.TryParse(second, out value) && value > 0L)
+            {
+                return value;
+            }
+
+            return fallback;
+        }
+
+        /// <summary>
+        /// 解析第一个有效布尔值，失败时回退默认值。
+        /// </summary>
+        private static bool GetFirstValidBool(string first, string second, bool fallback)
+        {
+            bool value;
+            if (bool.TryParse(first, out value))
+            {
+                return value;
+            }
+
+            if (bool.TryParse(second, out value))
+            {
+                return value;
+            }
+
+            return fallback;
+        }
+
+        /// <summary>
         /// 标准化基础地址并移除尾部斜杠。
         /// </summary>
         private static string NormalizeBaseUrl(string baseUrl)
@@ -453,6 +556,32 @@ namespace SmartWord.Services.Model
             /// </summary>
             [DataMember(Name = "vectorIndexDirectory")]
             public string vectorIndexDirectory { get; set; }
+
+            [DataMember(Name = "logging")]
+            public RuntimeLoggingSettings logging { get; set; }
+        }
+
+        [DataContract]
+        private sealed class RuntimeLoggingSettings
+        {
+            [DataMember(Name = "logLevel")]
+            public string logLevel { get; set; }
+
+            [DataMember(Name = "logDirectory")]
+            public string logDirectory { get; set; }
+
+            [DataMember(Name = "retainedFileCountLimit")]
+            public string retainedFileCountLimit { get; set; }
+
+            [DataMember(Name = "fileSizeLimitBytes")]
+            public string fileSizeLimitBytes { get; set; }
+
+            [DataMember(Name = "enableDebugSink")]
+            public string enableDebugSink { get; set; }
+
+            [DataMember(Name = "outputTemplate")]
+            public string outputTemplate { get; set; }
         }
     }
 }
+

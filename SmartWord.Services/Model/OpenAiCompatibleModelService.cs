@@ -6,8 +6,11 @@ using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Threading.Tasks;
+using System.Diagnostics;
 using SmartWord.Core.Abstractions;
 using SmartWord.Core.Models;
+using SmartWord.Core.Models.Conversation;
+using SmartWord.Services.Logging;
 using SmartWord.Services.Prompts;
 
 // 文件说明：
@@ -26,14 +29,16 @@ namespace SmartWord.Services.Model
 
         private readonly OpenAiApiOptions _options;
         private readonly PromptCatalogProvider _promptCatalogProvider;
+        private readonly IAppLogger _logger;
 
         /// <summary>
         /// 初始化模型服务并加载 Prompt 目录。
         /// </summary>
         /// <param name="options">API 配置。</param>
-        public OpenAiCompatibleModelService(OpenAiApiOptions options)
+        public OpenAiCompatibleModelService(OpenAiApiOptions options, IAppLogger logger)
         {
             _options = options ?? throw new ArgumentNullException(nameof(options));
+            _logger = logger ?? NullAppLogger.Instance;
             if (!_options.IsConfigured)
             {
                 throw new InvalidOperationException("Missing API key. Set SMARTWORD_API_KEY or OPENAI_API_KEY.");
@@ -54,7 +59,7 @@ namespace SmartWord.Services.Model
                 return Task.FromResult(string.Empty);
             }
 
-            var promptPair = _promptCatalogProvider.BuildRewritePrompts(
+            var promptPair = _promptCatalogProvider.BuildWritingPrompts(
                 ResolvePromptVersion(request.PromptVersion),
                 request.Instruction,
                 request.SelectedText);
@@ -79,17 +84,43 @@ namespace SmartWord.Services.Model
 
             string instruction = request == null ? string.Empty : request.Instruction ?? string.Empty;
 
-            var promptPair = _promptCatalogProvider.BuildVbaPrompts(
+            var promptPair = _promptCatalogProvider.BuildExecutePrompts(
                 ResolvePromptVersion(request == null ? null : request.PromptVersion),
                 instruction,
                 request == null ? string.Empty : request.SelectedText,
-                entryPoint);
+                entryPoint,
+                string.Empty);
 
             return ExecuteChatAsync(
                 _options.ResolveModel(request == null ? null : request.ModelOverride),
                 promptPair.SystemPrompt,
                 promptPair.UserPrompt,
                 0.1d);
+        }
+
+        /// <summary>
+        /// 调用模型生成文档问答结果。
+        /// </summary>
+        /// <param name="request">问答请求。</param>
+        /// <returns>问答结果文本。</returns>
+        public Task<string> AnswerQuestionAsync(DocumentQaRequest request)
+        {
+            if (request == null || string.IsNullOrWhiteSpace(request.Question))
+            {
+                return Task.FromResult(string.Empty);
+            }
+
+            var promptPair = _promptCatalogProvider.BuildQaPrompts(
+                ResolvePromptVersion(request.PromptVersion),
+                request.Question,
+                request.SelectedText,
+                request.RetrievedContext);
+
+            return ExecuteChatAsync(
+                _options.ResolveModel(request.ModelOverride),
+                promptPair.SystemPrompt,
+                promptPair.UserPrompt,
+                0.2d);
         }
 
         /// <summary>
@@ -114,6 +145,7 @@ namespace SmartWord.Services.Model
         /// </summary>
         private async Task<string> ExecuteChatAsync(string model, string systemPrompt, string userPrompt, double temperature)
         {
+            var stopwatch = Stopwatch.StartNew();
             var request = new ChatCompletionRequest
             {
                 model = model,
@@ -127,6 +159,14 @@ namespace SmartWord.Services.Model
 
             string url = _options.BaseUrl + "/chat/completions";
             string requestJson = Serialize(request);
+            _logger.Info(
+                "llm.request.start",
+                "Sending LLM request. Model={Model} Url={Url} Temperature={Temperature} SystemPrompt={SystemPrompt} UserPrompt={UserPrompt}",
+                model,
+                url,
+                temperature,
+                systemPrompt,
+                userPrompt);
 
             using (var httpRequest = new HttpRequestMessage(HttpMethod.Post, url))
             {
@@ -138,9 +178,24 @@ namespace SmartWord.Services.Model
                 using (HttpResponseMessage response = await SharedHttpClient.SendAsync(httpRequest).ConfigureAwait(false))
                 {
                     string responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    stopwatch.Stop();
+                    _logger.Info(
+                        "llm.request.end",
+                        "Received LLM response. Model={Model} StatusCode={StatusCode} DurationMs={DurationMs} ResponseLength={ResponseLength}",
+                        model,
+                        (int)response.StatusCode,
+                        stopwatch.ElapsedMilliseconds,
+                        string.IsNullOrWhiteSpace(responseBody) ? 0 : responseBody.Length);
 
                     if (!response.IsSuccessStatusCode)
                     {
+                        _logger.Error(
+                            "llm.request.failed",
+                            null,
+                            "LLM API returned failure. Model={Model} StatusCode={StatusCode} Body={Body}",
+                            model,
+                            (int)response.StatusCode,
+                            TrimForError(responseBody));
                         throw new InvalidOperationException(
                             "LLM API request failed (" + (int)response.StatusCode + "): " + TrimForError(responseBody));
                     }
@@ -154,10 +209,13 @@ namespace SmartWord.Services.Model
                         string.IsNullOrWhiteSpace(chatResponse.choices[0].message.content))
                     {
                         // 协议成功但无有效内容时主动抛错，便于上层统一处理。
+                        _logger.Warn("llm.response.empty", "LLM returned empty content. Model={Model}", model);
                         throw new InvalidOperationException("LLM API returned empty content.");
                     }
 
-                    return chatResponse.choices[0].message.content.Trim();
+                    string content = chatResponse.choices[0].message.content.Trim();
+                    _logger.Debug("llm.response.parsed", "Parsed LLM response. Model={Model} ContentLength={ContentLength}", model, content.Length);
+                    return content;
                 }
             }
         }
