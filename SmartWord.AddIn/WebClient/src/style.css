@@ -1,0 +1,233 @@
+:root {
+  --bg: #f2f4f7;
+  --panel: #ffffff;
+  --panel-soft: #f9fafb;
+  --line: #d6dbe5;
+  --text: #1e293b;
+  --muted: #64748b;
+  --primary: #1d4ed8;
+  --primary-strong: #1e40af;
+  --accent: #0f766e;
+  --danger: #b91c1c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  color: var(--text);
+  background: radial-gradient(circle at top right, #e2ebff 0%, var(--bg) 52%);
+}
+
+.app-shell {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  border-left: 1px solid var(--line);
+}
+
+.session-pane {
+  background: linear-gradient(180deg, #f6f8fb 0%, #edf2fa 100%);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.session-header {
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.session-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.session-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  text-align: left;
+  padding: 8px 10px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.session-item.active {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(29, 78, 216, 0.15);
+}
+
+.chat-pane {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  min-height: 0;
+}
+
+.toolbar {
+  display: grid;
+  grid-template-columns: 1fr 120px 120px;
+  gap: 10px;
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-soft);
+}
+
+.field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.field span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.field input,
+.field select,
+textarea,
+button {
+  font: inherit;
+}
+
+.field input,
+.field select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: #fff;
+  color: var(--text);
+}
+
+.message-area {
+  padding: 14px;
+  overflow: auto;
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.placeholder {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 10px;
+}
+
+.bubble {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 10px 12px;
+}
+
+.bubble.user {
+  border-color: #95b6ff;
+  background: #edf4ff;
+}
+
+.bubble.assistant {
+  border-color: #b6d7d3;
+  background: #f3fbfa;
+}
+
+.bubble h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
+.bubble pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.composer {
+  border-top: 1px solid var(--line);
+  background: var(--panel-soft);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.composer textarea {
+  width: 100%;
+  min-height: 96px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  resize: none;
+  background: #fff;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+button {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 12px;
+  background: #fff;
+  color: var(--text);
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+
+button.accent {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+button:hover:enabled {
+  filter: brightness(0.97);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.status {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  min-height: 18px;
+}
+
+@media (max-width: 700px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: 180px 1fr;
+  }
+
+  .toolbar {
+    grid-template-columns: 1fr;
+  }
+}
+
