@@ -1,4 +1,5 @@
-﻿using SmartWord.Core.Abstractions.Conversation;
+﻿using SmartWord.Core.Abstractions;
+using SmartWord.Core.Abstractions.Conversation;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -7,6 +8,7 @@ using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Threading.Tasks;
 using SmartWord.Core.Models.Conversation;
+using SmartWord.Services.Logging;
 
 // 文件说明：
 // 基于 JSON 文件的会话存储实现，负责会话读写、活动会话切换与并发保护。
@@ -19,16 +21,18 @@ namespace SmartWord.Services.Storage
     {
         private readonly string _storeFilePath;
         private readonly object _syncRoot = new object();
+        private readonly IAppLogger _logger;
 
         /// <summary>
         /// 初始化文件会话存储。
         /// </summary>
         /// <param name="storeFilePath">存储文件路径。</param>
-        public FileConversationStore(string storeFilePath)
+        public FileConversationStore(string storeFilePath, IAppLogger logger)
         {
             _storeFilePath = string.IsNullOrWhiteSpace(storeFilePath)
                 ? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Config", "chat.sessions.local.json")
                 : storeFilePath;
+            _logger = logger ?? NullAppLogger.Instance;
         }
 
         /// <summary>
@@ -42,6 +46,7 @@ namespace SmartWord.Services.Storage
                 // 锁内读取，确保多线程场景下文件读写一致。
                 StoreFileModel model = LoadFile();
                 var result = new List<ConversationSession>(model.Sessions);
+                _logger.Debug("store.load", "Loaded sessions. Path={StorePath} Count={SessionCount}", _storeFilePath, result.Count);
                 return Task.FromResult((IReadOnlyList<ConversationSession>)result);
             }
         }
@@ -75,6 +80,7 @@ namespace SmartWord.Services.Storage
                 model.ActiveSessionId = session.SessionId;
                 model.Sessions.Insert(0, session);
                 SaveFile(model);
+                _logger.Info("store.create", "Created session. SessionId={SessionId} Title={Title}", session.SessionId, session.Title);
                 return Task.FromResult(session);
             }
         }
@@ -159,6 +165,7 @@ namespace SmartWord.Services.Storage
                 {
                     model.ActiveSessionId = sessionId;
                     SaveFile(model);
+                    _logger.Debug("store.set-active", "Active session updated. SessionId={SessionId}", sessionId);
                 }
 
                 return Task.CompletedTask;
@@ -174,6 +181,8 @@ namespace SmartWord.Services.Storage
             {
                 return Task.CompletedTask;
             }
+
+            NormalizeSessionRoutes(session);
 
             lock (_syncRoot)
             {
@@ -210,6 +219,12 @@ namespace SmartWord.Services.Storage
                 }
 
                 SaveFile(model);
+                _logger.Debug(
+                    "store.save",
+                    "Saved session. SessionId={SessionId} MessageCount={MessageCount} PendingCount={PendingCount}",
+                    session.SessionId,
+                    session.Messages == null ? 0 : session.Messages.Count,
+                    session.PendingActions == null ? 0 : session.PendingActions.Count);
                 return Task.CompletedTask;
             }
         }
@@ -239,6 +254,8 @@ namespace SmartWord.Services.Storage
                 // 兼容旧文件或异常文件结构。
                 model.Sessions = new List<ConversationSession>();
             }
+
+            NormalizeLegacyRoutes(model);
 
             return model;
         }
@@ -297,6 +314,66 @@ namespace SmartWord.Services.Storage
             }
         }
 
+        /// <summary>
+        /// 对存储模型中的历史路由值做归一化映射。
+        /// </summary>
+        /// <param name="model">存储模型。</param>
+        private static void NormalizeLegacyRoutes(StoreFileModel model)
+        {
+            if (model == null || model.Sessions == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < model.Sessions.Count; i++)
+            {
+                NormalizeSessionRoutes(model.Sessions[i]);
+            }
+        }
+
+        /// <summary>
+        /// 对会话内动作路由做归一化映射。
+        /// </summary>
+        /// <param name="session">会话对象。</param>
+        private static void NormalizeSessionRoutes(ConversationSession session)
+        {
+            if (session == null || session.PendingActions == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < session.PendingActions.Count; i++)
+            {
+                PendingAction action = session.PendingActions[i];
+                if (action == null)
+                {
+                    continue;
+                }
+
+                action.RouteType = NormalizeRouteType(action.RouteType);
+            }
+        }
+
+        /// <summary>
+        /// 将历史路由值映射为新模式值。
+        /// </summary>
+        /// <param name="routeType">原始路由类型。</param>
+        /// <returns>归一化后的路由类型。</returns>
+        private static ConversationRouteType NormalizeRouteType(ConversationRouteType routeType)
+        {
+            if (routeType == ConversationRouteType.Rewrite)
+            {
+                return ConversationRouteType.Writing;
+            }
+
+            if (routeType == ConversationRouteType.Vba || routeType == ConversationRouteType.Hybrid)
+            {
+                return ConversationRouteType.Execute;
+            }
+
+            return routeType;
+        }
+
         [DataContract]
         private sealed class StoreFileModel
         {
@@ -322,3 +399,6 @@ namespace SmartWord.Services.Storage
         }
     }
 }
+
+
+
