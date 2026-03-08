@@ -1,4 +1,5 @@
-﻿using System;
+﻿using SmartWord.Core.Abstractions;
+using System;
 
 // 文件说明：
 // VBA 模块管理器，负责在 Word 文档中创建临时模块并在执行后安全清理。
@@ -18,14 +19,17 @@ namespace SmartWord.Services.Vba
         /// Word 应用程序动态引用（COM 互操作）。
         /// </summary>
         private readonly dynamic _wordApplication;
+        private readonly IWordThreadInvoker _wordThreadInvoker;
 
         /// <summary>
         /// 初始化 VBA 模块管理器。
         /// </summary>
         /// <param name="wordApplication">Word 应用实例。</param>
-        public VbaModuleManager(dynamic wordApplication)
+        /// <param name="wordThreadInvoker">Word 主线程调用器。</param>
+        public VbaModuleManager(dynamic wordApplication, IWordThreadInvoker wordThreadInvoker)
         {
             _wordApplication = wordApplication;
+            _wordThreadInvoker = wordThreadInvoker;
         }
 
         /// <summary>
@@ -34,6 +38,25 @@ namespace SmartWord.Services.Vba
         /// <param name="vbaCode">VBA 代码文本。</param>
         /// <returns>临时模块名称。</returns>
         public string CreateTemporaryModule(string vbaCode)
+        {
+            return InvokeOnWordThread(() => CreateTemporaryModuleCore(vbaCode));
+        }
+
+        /// <summary>
+        /// 安全移除指定 VBA 模块。
+        /// </summary>
+        /// <param name="moduleName">模块名称。</param>
+        public void RemoveModuleIfExists(string moduleName)
+        {
+            InvokeOnWordThread(() => RemoveModuleIfExistsCore(moduleName));
+        }
+
+        /// <summary>
+        /// 在 Word 主线程创建临时模块并注入代码。
+        /// </summary>
+        /// <param name="vbaCode">VBA 代码文本。</param>
+        /// <returns>临时模块名称。</returns>
+        private string CreateTemporaryModuleCore(string vbaCode)
         {
             // 获取当前活动文档的 VBA 项目。
             dynamic vbProject = _wordApplication.ActiveDocument.VBProject;
@@ -53,10 +76,10 @@ namespace SmartWord.Services.Vba
         }
 
         /// <summary>
-        /// 安全移除指定 VBA 模块。
+        /// 在 Word 主线程安全移除指定 VBA 模块。
         /// </summary>
         /// <param name="moduleName">模块名称。</param>
-        public void RemoveModuleIfExists(string moduleName)
+        private void RemoveModuleIfExistsCore(string moduleName)
         {
             // 参数为空时直接返回。
             if (string.IsNullOrWhiteSpace(moduleName))
@@ -81,6 +104,47 @@ namespace SmartWord.Services.Vba
             {
                 // 忽略清理异常，避免掩盖主流程异常。
             }
+        }
+
+        /// <summary>
+        /// 在 Word 主线程执行无返回值逻辑。
+        /// </summary>
+        /// <param name="action">待执行逻辑。</param>
+        private void InvokeOnWordThread(Action action)
+        {
+            if (action == null)
+            {
+                return;
+            }
+
+            if (_wordThreadInvoker == null)
+            {
+                action();
+                return;
+            }
+
+            _wordThreadInvoker.Invoke(action);
+        }
+
+        /// <summary>
+        /// 在 Word 主线程执行带返回值逻辑。
+        /// </summary>
+        /// <typeparam name="T">返回值类型。</typeparam>
+        /// <param name="func">待执行逻辑。</param>
+        /// <returns>执行结果。</returns>
+        private T InvokeOnWordThread<T>(Func<T> func)
+        {
+            if (func == null)
+            {
+                return default(T);
+            }
+
+            if (_wordThreadInvoker == null)
+            {
+                return func();
+            }
+
+            return _wordThreadInvoker.Invoke(func);
         }
     }
 }
