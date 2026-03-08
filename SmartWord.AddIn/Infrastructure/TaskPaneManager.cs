@@ -1,5 +1,5 @@
 ﻿using Microsoft.Office.Tools;
-using SmartWord.AddIn.UI;
+using SmartWord.AddIn.UI.Web;
 using SmartWord.Core.Abstractions;
 using SmartWord.Core.Orchestration.Conversation;
 using SmartWord.Services.Logging;
@@ -23,7 +23,7 @@ namespace SmartWord.AddIn.Infrastructure
         private readonly string _defaultPromptVersion;
         private readonly IAppLogger _logger;
 
-        private ChatPaneControl _chatPaneControl;
+        private WebChatPaneControl _chatPaneControl;
         private CustomTaskPane _chatPane;
 
         /// <summary>
@@ -143,12 +143,13 @@ namespace SmartWord.AddIn.Infrastructure
                 return;
             }
 
-            _chatPaneControl = new ChatPaneControl(
+            _chatPaneControl = new WebChatPaneControl(
                 _conversationOrchestrator,
                 _notificationService,
                 _availableModels,
                 _defaultModel,
-                _defaultPromptVersion);
+                _defaultPromptVersion,
+                _logger);
 
             _chatPane = _addIn.CustomTaskPanes.Add(_chatPaneControl, "SmartWord 对话");
             _chatPane.DockPosition = Microsoft.Office.Core.MsoCTPDockPosition.msoCTPDockPositionRight;
