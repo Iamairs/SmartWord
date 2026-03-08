@@ -1,16 +1,16 @@
 ﻿// 文件说明：
-// 定义路由判定输入模型，聚合用户消息、选区与检索上下文。
+// 定义文档问答请求模型，聚合问题、选区与检索上下文。
 namespace SmartWord.Core.Models.Conversation
 {
     /// <summary>
-    /// 路由输入。
+    /// 文档问答请求。
     /// </summary>
-    public sealed class RouteInput
+    public sealed class DocumentQaRequest
     {
         /// <summary>
-        /// 用户消息文本。
+        /// 用户问题。
         /// </summary>
-        public string UserMessage { get; set; }
+        public string Question { get; set; }
 
         /// <summary>
         /// 当前选中文本。
@@ -18,7 +18,7 @@ namespace SmartWord.Core.Models.Conversation
         public string SelectedText { get; set; }
 
         /// <summary>
-        /// 检索增强上下文文本。
+        /// 检索上下文。
         /// </summary>
         public string RetrievedContext { get; set; }
 
@@ -28,8 +28,8 @@ namespace SmartWord.Core.Models.Conversation
         public string ModelOverride { get; set; }
 
         /// <summary>
-        /// 模式锁定项；为空表示自动识别模式。
+        /// Prompt 版本。
         /// </summary>
-        public ConversationRouteType? ModeLock { get; set; }
+        public string PromptVersion { get; set; }
     }
 }

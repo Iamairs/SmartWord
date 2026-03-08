@@ -31,5 +31,10 @@ namespace SmartWord.Core.Models.Conversation
         /// 本轮路由类型。
         /// </summary>
         public ConversationRouteType RouteType { get; set; }
+
+        /// <summary>
+        /// 本轮最终模式（已完成兼容值归一化）。
+        /// </summary>
+        public ConversationRouteType ResolvedMode { get; set; }
     }
 }

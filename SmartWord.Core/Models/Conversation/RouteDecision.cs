@@ -21,5 +21,10 @@ namespace SmartWord.Core.Models.Conversation
         /// 判定原因说明。
         /// </summary>
         public string Reason { get; set; }
+
+        /// <summary>
+        /// 判定分类标签（用于日志与 UI 解释）。
+        /// </summary>
+        public string ModeReasonCategory { get; set; }
     }
 }

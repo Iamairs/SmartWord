@@ -1,4 +1,5 @@
 ﻿using SmartWord.Core.Models;
+using SmartWord.Core.Models.Conversation;
 using System.Threading.Tasks;
 
 // 文件说明：
@@ -33,5 +34,12 @@ namespace SmartWord.Core.Abstractions
         /// <param name="temperature">采样温度。</param>
         /// <returns>模型对话响应文本。</returns>
         Task<string> ChatWithPromptsAsync(string systemPrompt, string userPrompt, string modelOverride, double temperature);
+
+        /// <summary>
+        /// 根据文档上下文回答用户问题。
+        /// </summary>
+        /// <param name="request">问答请求参数。</param>
+        /// <returns>问答结果文本。</returns>
+        Task<string> AnswerQuestionAsync(DocumentQaRequest request);
     }
 }

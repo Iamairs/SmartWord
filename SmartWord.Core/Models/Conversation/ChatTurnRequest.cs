@@ -26,5 +26,10 @@ namespace SmartWord.Core.Models.Conversation
         /// Prompt 版本标识。
         /// </summary>
         public string PromptVersion { get; set; }
+
+        /// <summary>
+        /// 模式锁定项；为空表示自动识别模式。
+        /// </summary>
+        public ConversationRouteType? ModeLock { get; set; }
     }
 }
