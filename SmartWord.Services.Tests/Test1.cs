@@ -1,0 +1,411 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using SmartWord.Core.Abstractions;
+using SmartWord.Core.Abstractions.Conversation;
+using SmartWord.Core.Models;
+using SmartWord.Core.Models.Conversation;
+using SmartWord.Services.Conversation;
+using SmartWord.Services.Logging;
+using SmartWord.Services.Model;
+using SmartWord.Services.Routing;
+using SmartWord.Services.Vba;
+
+namespace SmartWord.Services.Tests;
+
+[TestClass]
+public sealed class ConversationModeTests
+{
+    [TestMethod]
+    public async Task DecideRouteAsync_QuestionIntent_ReturnsQaMode()
+    {
+        var service = new CommandRouteService(new LocalModelService());
+
+        RouteDecision decision = await service.DecideRouteAsync(new RouteInput
+        {
+            UserMessage = "这段合同主要讲了什么？",
+            SelectedText = string.Empty,
+            RetrievedContext = string.Empty,
+            ModelOverride = string.Empty
+        });
+
+        Assert.IsNotNull(decision);
+        Assert.AreEqual(ConversationRouteType.Qa, decision.RouteType);
+    }
+
+    [TestMethod]
+    public async Task DecideRouteAsync_ModeLockWriting_ReturnsWritingMode()
+    {
+        var service = new CommandRouteService(new LocalModelService());
+
+        RouteDecision decision = await service.DecideRouteAsync(new RouteInput
+        {
+            UserMessage = "请把这段内容做成目录并优化表达",
+            ModeLock = ConversationRouteType.Writing
+        });
+
+        Assert.IsNotNull(decision);
+        Assert.AreEqual(ConversationRouteType.Writing, decision.RouteType);
+        Assert.AreEqual("mode-lock", decision.ModeReasonCategory);
+    }
+
+    [TestMethod]
+    public async Task RunTurnAsync_QaRoute_ReturnsAnswerWithoutPendingAction()
+    {
+        var store = new InMemoryConversationStore();
+        var retriever = new FixedRetriever("p1", "[1] 这是合同总则", "p1");
+        var routeService = new FixedRouteService(ConversationRouteType.Qa);
+        var modelService = new FakeModelService
+        {
+            QaAnswer = "该段主要定义了双方的基本义务。"
+        };
+        var orchestrator = BuildOrchestrator(store, retriever, routeService, modelService, "");
+
+        ChatTurnResult result = await orchestrator.RunTurnAsync(new ChatTurnRequest
+        {
+            UserMessage = "这段讲了什么？"
+        });
+
+        Assert.IsNotNull(result);
+        Assert.AreEqual(ConversationRouteType.Qa, result.ResolvedMode);
+        Assert.IsFalse(result.RequiresUserConfirmation);
+        Assert.IsTrue(string.IsNullOrWhiteSpace(result.PendingActionId));
+        StringAssert.Contains(result.AssistantReply ?? string.Empty, "双方的基本义务");
+    }
+
+    [TestMethod]
+    public async Task RunTurnAsync_QaRouteNoContext_ReturnsGuidanceMessage()
+    {
+        var store = new InMemoryConversationStore();
+        var retriever = new FixedRetriever("doc-empty", string.Empty, string.Empty);
+        var routeService = new FixedRouteService(ConversationRouteType.Qa);
+        var modelService = new FakeModelService
+        {
+            QaAnswer = string.Empty
+        };
+        var orchestrator = BuildOrchestrator(store, retriever, routeService, modelService, string.Empty);
+
+        ChatTurnResult result = await orchestrator.RunTurnAsync(new ChatTurnRequest
+        {
+            UserMessage = "这个条款的违约责任是什么？"
+        });
+
+        Assert.IsNotNull(result);
+        Assert.IsFalse(result.RequiresUserConfirmation);
+        StringAssert.Contains(result.AssistantReply ?? string.Empty, "未检索到足够文档依据");
+    }
+
+    [TestMethod]
+    public async Task RunTurnAsync_WritingRoute_GeneratesPendingRewriteAction()
+    {
+        var store = new InMemoryConversationStore();
+        var retriever = new FixedRetriever("doc-1", "[1] 原文片段", "p1");
+        var routeService = new FixedRouteService(ConversationRouteType.Writing);
+        var modelService = new FakeModelService
+        {
+            RewriteText = "改写后的文本"
+        };
+        var orchestrator = BuildOrchestrator(store, retriever, routeService, modelService, "原文");
+
+        ChatTurnResult result = await orchestrator.RunTurnAsync(new ChatTurnRequest
+        {
+            UserMessage = "请优化这段话"
+        });
+
+        Assert.IsNotNull(result);
+        Assert.AreEqual(ConversationRouteType.Writing, result.ResolvedMode);
+        Assert.IsTrue(result.RequiresUserConfirmation);
+        Assert.IsFalse(string.IsNullOrWhiteSpace(result.PendingActionId));
+    }
+
+    [TestMethod]
+    public async Task RunTurnAsync_WritingRoute_DoesNotTriggerRetrieval()
+    {
+        var store = new InMemoryConversationStore();
+        var retriever = new CountingRetriever("doc-1", "[1] 原文片段", "p1");
+        var routeService = new FixedRouteService(ConversationRouteType.Writing);
+        var modelService = new FakeModelService
+        {
+            RewriteText = "改写后的文本"
+        };
+        var orchestrator = BuildOrchestrator(store, retriever, routeService, modelService, "原文");
+
+        ChatTurnResult result = await orchestrator.RunTurnAsync(new ChatTurnRequest
+        {
+            UserMessage = "请优化这段话"
+        });
+
+        Assert.IsNotNull(result);
+        Assert.AreEqual(ConversationRouteType.Writing, result.ResolvedMode);
+        Assert.AreEqual(0, retriever.CallCount);
+    }
+
+    [TestMethod]
+    public async Task RunTurnAsync_QaRoute_TriggersRetrievalOnce()
+    {
+        var store = new InMemoryConversationStore();
+        var retriever = new CountingRetriever("doc-qa", "[1] QA 上下文", "p1");
+        var routeService = new FixedRouteService(ConversationRouteType.Qa);
+        var modelService = new FakeModelService
+        {
+            QaAnswer = "这是基于上下文的答案。"
+        };
+        var orchestrator = BuildOrchestrator(store, retriever, routeService, modelService, string.Empty);
+
+        ChatTurnResult result = await orchestrator.RunTurnAsync(new ChatTurnRequest
+        {
+            UserMessage = "这段内容说了什么？"
+        });
+
+        Assert.IsNotNull(result);
+        Assert.AreEqual(ConversationRouteType.Qa, result.ResolvedMode);
+        Assert.AreEqual(1, retriever.CallCount);
+    }
+
+    private static ConversationOrchestrator BuildOrchestrator(
+        IConversationStore store,
+        IDocumentRetriever retriever,
+        ICommandRouteService routeService,
+        IModelService modelService,
+        string selectedText)
+    {
+        return new ConversationOrchestrator(
+            store,
+            retriever,
+            routeService,
+            new FixedSelectionService(selectedText),
+            modelService,
+            new VbaCodeSanitizer(),
+            new NoopVbaExecutor(),
+            new NoopNotificationService(),
+            NullAppLogger.Instance);
+    }
+
+    private sealed class FixedRouteService : ICommandRouteService
+    {
+        private readonly ConversationRouteType _routeType;
+
+        public FixedRouteService(ConversationRouteType routeType)
+        {
+            _routeType = routeType;
+        }
+
+        public Task<RouteDecision> DecideRouteAsync(RouteInput input)
+        {
+            return Task.FromResult(new RouteDecision
+            {
+                RouteType = _routeType,
+                Confidence = 0.9d,
+                Reason = "test",
+                ModeReasonCategory = "test"
+            });
+        }
+    }
+
+    private sealed class FixedRetriever : IDocumentRetriever
+    {
+        private readonly string _documentId;
+        private readonly string _combinedText;
+        private readonly string _chunkId;
+
+        public FixedRetriever(string documentId, string combinedText, string chunkId)
+        {
+            _documentId = documentId;
+            _combinedText = combinedText;
+            _chunkId = chunkId;
+        }
+
+        public Task<RetrievedContext> RetrieveAsync(DocumentQuery query)
+        {
+            var context = new RetrievedContext
+            {
+                DocumentId = _documentId,
+                CombinedText = _combinedText
+            };
+
+            if (!string.IsNullOrWhiteSpace(_chunkId))
+            {
+                context.Chunks.Add(new RetrievedChunk
+                {
+                    ChunkId = _chunkId,
+                    Text = _combinedText,
+                    Position = 1,
+                    Score = 0.8d
+                });
+            }
+
+            return Task.FromResult(context);
+        }
+    }
+
+    private sealed class CountingRetriever : IDocumentRetriever
+    {
+        private readonly FixedRetriever _inner;
+
+        public CountingRetriever(string documentId, string combinedText, string chunkId)
+        {
+            _inner = new FixedRetriever(documentId, combinedText, chunkId);
+        }
+
+        public int CallCount { get; private set; }
+
+        public async Task<RetrievedContext> RetrieveAsync(DocumentQuery query)
+        {
+            CallCount++;
+            return await _inner.RetrieveAsync(query);
+        }
+    }
+
+    private sealed class FixedSelectionService : ISelectionService
+    {
+        private readonly string _selectedText;
+
+        public FixedSelectionService(string selectedText)
+        {
+            _selectedText = selectedText;
+        }
+
+        public string GetSelectedText()
+        {
+            return _selectedText;
+        }
+
+        public void ReplaceSelection(string newText)
+        {
+        }
+    }
+
+    private sealed class NoopNotificationService : INotificationService
+    {
+        public void Error(string message)
+        {
+        }
+
+        public void Info(string message)
+        {
+        }
+
+        public void Success(string message)
+        {
+        }
+
+        public void Warn(string message)
+        {
+        }
+    }
+
+    private sealed class NoopVbaExecutor : IVbaExecutor
+    {
+        public void Execute(string vbaCode, string entryPoint)
+        {
+        }
+    }
+
+    private sealed class FakeModelService : IModelService
+    {
+        public string RewriteText { get; set; }
+
+        public string QaAnswer { get; set; }
+
+        public Task<string> RewriteTextAsync(EditorRewriteRequest request)
+        {
+            return Task.FromResult(RewriteText ?? string.Empty);
+        }
+
+        public Task<string> GenerateVbaCodeAsync(VbaGenerationRequest request)
+        {
+            return Task.FromResult("Public Sub SmartWord_Run()\r\nEnd Sub");
+        }
+
+        public Task<string> ChatWithPromptsAsync(string systemPrompt, string userPrompt, string modelOverride, double temperature)
+        {
+            return Task.FromResult("{}");
+        }
+
+        public Task<string> AnswerQuestionAsync(DocumentQaRequest request)
+        {
+            return Task.FromResult(QaAnswer ?? string.Empty);
+        }
+    }
+
+    private sealed class InMemoryConversationStore : IConversationStore
+    {
+        private readonly List<ConversationSession> _sessions = new List<ConversationSession>();
+        private string _activeSessionId;
+
+        public Task<IReadOnlyList<ConversationSession>> LoadSessionsAsync()
+        {
+            return Task.FromResult((IReadOnlyList<ConversationSession>)new List<ConversationSession>(_sessions));
+        }
+
+        public Task<ConversationSession> CreateSessionAsync(string title)
+        {
+            var session = new ConversationSession
+            {
+                SessionId = Guid.NewGuid().ToString("N"),
+                Title = string.IsNullOrWhiteSpace(title) ? "新对话" : title,
+                IsActive = true,
+                CreatedAtUtc = DateTime.UtcNow,
+                UpdatedAtUtc = DateTime.UtcNow
+            };
+
+            for (int i = 0; i < _sessions.Count; i++)
+            {
+                _sessions[i].IsActive = false;
+            }
+
+            _activeSessionId = session.SessionId;
+            _sessions.Insert(0, session);
+            return Task.FromResult(session);
+        }
+
+        public Task<ConversationSession> GetSessionAsync(string sessionId)
+        {
+            for (int i = 0; i < _sessions.Count; i++)
+            {
+                if (string.Equals(_sessions[i].SessionId, sessionId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return Task.FromResult(_sessions[i]);
+                }
+            }
+
+            return Task.FromResult<ConversationSession>(null);
+        }
+
+        public Task<ConversationSession> GetActiveSessionAsync()
+        {
+            return GetSessionAsync(_activeSessionId);
+        }
+
+        public Task SetActiveSessionAsync(string sessionId)
+        {
+            _activeSessionId = sessionId;
+            for (int i = 0; i < _sessions.Count; i++)
+            {
+                _sessions[i].IsActive = string.Equals(_sessions[i].SessionId, sessionId, StringComparison.OrdinalIgnoreCase);
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task SaveSessionAsync(ConversationSession session)
+        {
+            if (session == null)
+            {
+                return Task.CompletedTask;
+            }
+
+            for (int i = 0; i < _sessions.Count; i++)
+            {
+                if (string.Equals(_sessions[i].SessionId, session.SessionId, StringComparison.OrdinalIgnoreCase))
+                {
+                    _sessions[i] = session;
+                    return Task.CompletedTask;
+                }
+            }
+
+            _sessions.Insert(0, session);
+            return Task.CompletedTask;
+        }
+    }
+}
