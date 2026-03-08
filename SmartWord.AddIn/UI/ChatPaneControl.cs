@@ -33,6 +33,7 @@ namespace SmartWord.AddIn.UI
         private readonly Button _cancelActionButton;
         private readonly ComboBox _modelComboBox;
         private readonly TextBox _promptVersionTextBox;
+        private readonly ComboBox _modeComboBox;
         private readonly Label _statusLabel;
         private readonly int _uiThreadId;
 
@@ -145,7 +146,7 @@ namespace SmartWord.AddIn.UI
             {
                 Left = 48,
                 Top = 9,
-                Width = 150,
+                Width = 130,
                 DropDownStyle = ComboBoxStyle.DropDown
             };
             if (availableModels != null)
@@ -166,7 +167,7 @@ namespace SmartWord.AddIn.UI
             {
                 Text = "Prompt",
                 AutoSize = true,
-                Left = 208,
+                Left = 186,
                 Top = 13,
                 Font = _themeProvider.SmallFont,
                 ForeColor = _themeProvider.TextColor
@@ -175,12 +176,34 @@ namespace SmartWord.AddIn.UI
 
             _promptVersionTextBox = new TextBox
             {
-                Left = 255,
+                Left = 232,
                 Top = 9,
-                Width = 120,
+                Width = 80,
                 Text = defaultPromptVersion ?? string.Empty
             };
             topPanel.Controls.Add(_promptVersionTextBox);
+
+            var modeLabel = new Label
+            {
+                Text = "模式",
+                AutoSize = true,
+                Left = 320,
+                Top = 13,
+                Font = _themeProvider.SmallFont,
+                ForeColor = _themeProvider.TextColor
+            };
+            topPanel.Controls.Add(modeLabel);
+
+            _modeComboBox = new ComboBox
+            {
+                Left = 360,
+                Top = 9,
+                Width = 96,
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            _modeComboBox.Items.AddRange(new object[] { "自动", "问答", "写作", "处理", "执行" });
+            _modeComboBox.SelectedIndex = 0;
+            topPanel.Controls.Add(_modeComboBox);
 
             _messageBox = new RichTextBox
             {
@@ -266,7 +289,7 @@ namespace SmartWord.AddIn.UI
                 Height = 44,
                 Font = _themeProvider.SmallFont,
                 ForeColor = _themeProvider.TextColor,
-                Text = "在此输入指令，系统会先给建议，再确认执行。"
+                Text = "默认自动识别模式，可在顶部锁定问答/写作/处理/执行。"
             };
             bottomPanel.Controls.Add(_statusLabel);
         }
@@ -373,12 +396,14 @@ namespace SmartWord.AddIn.UI
             string message = string.Empty;
             string modelOverride = string.Empty;
             string promptVersion = string.Empty;
+            string modeText = string.Empty;
             string activeSessionId = string.Empty;
             await RunOnUiThreadAsync(() =>
             {
                 message = _inputTextBox.Text == null ? string.Empty : _inputTextBox.Text.Trim();
                 modelOverride = _modelComboBox.Text;
                 promptVersion = _promptVersionTextBox.Text;
+                modeText = _modeComboBox.Text;
                 activeSessionId = _activeSessionId;
             }).ConfigureAwait(false);
 
@@ -394,12 +419,14 @@ namespace SmartWord.AddIn.UI
             await RunSafeAsync(async () =>
             {
                 // 每一轮对话都允许用户临时覆盖模型与 Prompt 版本，便于快速试验。
+                ConversationRouteType? modeLock = ParseModeLock(modeText);
                 ChatTurnResult result = await _conversationOrchestrator.RunTurnAsync(new ChatTurnRequest
                 {
                     SessionId = activeSessionId,
                     UserMessage = message,
                     ModelOverride = modelOverride,
-                    PromptVersion = promptVersion
+                    PromptVersion = promptVersion,
+                    ModeLock = modeLock
                 }).ConfigureAwait(false);
 
                 await RunOnUiThreadAsync(() =>
@@ -412,9 +439,10 @@ namespace SmartWord.AddIn.UI
 
                     if (result != null)
                     {
+                        string displayModeText = RouteTypeToModeText(result.ResolvedMode);
                         _statusLabel.Text = result.RequiresUserConfirmation
-                            ? "已生成建议，请点击“确认执行”。"
-                            : "已返回结果。";
+                            ? ("模式：" + displayModeText + "，已生成建议，请点击“确认执行”。")
+                            : ("模式：" + displayModeText + "，已返回结果。");
                     }
                 }).ConfigureAwait(false);
 
@@ -704,6 +732,7 @@ namespace SmartWord.AddIn.UI
             _newSessionButton.Enabled = !isBusy;
             _sessionListBox.Enabled = !isBusy;
             _inputTextBox.Enabled = !isBusy;
+            _modeComboBox.Enabled = !isBusy;
             if (isBusy)
             {
                 _applyButton.Enabled = false;
@@ -716,6 +745,62 @@ namespace SmartWord.AddIn.UI
                 _applyButton.Enabled = hasPending;
                 _cancelActionButton.Enabled = hasPending;
             }
+        }
+
+        /// <summary>
+        /// 将 UI 文案解析为模式锁定枚举。
+        /// </summary>
+        /// <param name="modeText">模式文案。</param>
+        /// <returns>锁定模式；自动时返回空值。</returns>
+        private static ConversationRouteType? ParseModeLock(string modeText)
+        {
+            string text = (modeText ?? string.Empty).Trim();
+            if (text == "问答")
+            {
+                return ConversationRouteType.Qa;
+            }
+
+            if (text == "写作")
+            {
+                return ConversationRouteType.Writing;
+            }
+
+            if (text == "处理")
+            {
+                return ConversationRouteType.Processing;
+            }
+
+            if (text == "执行")
+            {
+                return ConversationRouteType.Execute;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 将路由枚举转换为模式展示文案。
+        /// </summary>
+        /// <param name="routeType">路由类型。</param>
+        /// <returns>模式文案。</returns>
+        private static string RouteTypeToModeText(ConversationRouteType routeType)
+        {
+            if (routeType == ConversationRouteType.Qa)
+            {
+                return "问答";
+            }
+
+            if (routeType == ConversationRouteType.Processing)
+            {
+                return "处理";
+            }
+
+            if (routeType == ConversationRouteType.Execute || routeType == ConversationRouteType.Vba || routeType == ConversationRouteType.Hybrid)
+            {
+                return "执行";
+            }
+
+            return "写作";
         }
 
         /// <summary>
