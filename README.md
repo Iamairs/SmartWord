@@ -1,59 +1,232 @@
-﻿📦 SmartWord v1.0 MVP 功能清单
+﻿# SmartWord
 
-模块一：写作辅助 (Basic Editor Agent)
+SmartWord 是一个基于 VSTO 的 Word 插件（`.NET Framework 4.7.2`），目标是把自然语言指令转成可执行的文档操作。  
+当前实现采用“先判定任务模式，再执行对应链路”的交互模式，支持文档问答、写作改写、结构化处理与执行操作（VBA/混合）。
 
-目标：跑通 C# 抓取 Word 内容，并调用大模型 API 返回结果的基本链路。
+## 项目现状
 
-功能点 ID功能名称优先级MVP 阶段实现标准 (Scope)MVP-1.1快捷唤起P0按下 Alt+K，在屏幕中央弹出一个简单的 WinForm/WPF 输入框（无需做到完美的无边框悬浮和跟随光标）。MVP-1.2基础指令输入P0用户输入自然语言指令（如：“帮我润色这段话，语气更正式一点”）。MVP-1.3选区上下文抓取P0极简版感知：C# 仅抓取用户当前高亮选中的文本（Selection.Text）和指令一起发给大模型。（砍掉：获取文档元数据和自动抓取前后段落）。MVP-1.4直接文本替换P1大模型返回结果后，直接覆盖替换掉用户选中的文本。
+### 已实现能力
 
-模块二：核心 VBA 引擎 (Core VBA Agent Engine)
+1. `Alt+K` 全局热键唤起右侧聊天面板。
+2. 会话管理（新建会话、切换会话、历史消息展示、本地持久化）。
+3. 路由决策（`Qa` / `Writing` / `Processing` / `Execute`）与模式锁定（自动、问答、写作、处理、执行）。
+4. 检索增强（段落分块 + 关键词 + 向量相似度 + 可选重排），且仅在 `Qa`（问答）模式触发。
+5. 先建议后执行（写作/处理/执行模式生成 `PendingAction`，用户点击“确认执行”后才修改文档）。
+6. VBA 动态注入执行（临时模块注入、执行入口过程、执行后清理）。
+7. 撤销分组（尽可能走 `UndoRecord`，失败时降级）。
+8. OpenAI 兼容 API + 本地降级模型（`LocalModelService` / `LocalEmbeddingService`）。
+9. 结构化日志（Serilog 文件滚动日志）。
 
-目标：跑通产品的核心护城河——动态注入并执行代码。
+### 已知限制
 
-功能点 ID功能名称优先级MVP 阶段实现标准 (Scope)MVP-2.1意图转代码 (NL2VBA)P0用户输入排版指令（如：“把所有红色的字改成加粗的黑体”），系统在后台组装特殊的 System Prompt，要求大模型仅返回标准的 VBA 代码。MVP-2.2动态注入与执行P0C# 接收到大模型返回的 VBA 字符串后，通过 VBProject.VBComponents.Add 动态创建一个临时模块，写入代码，调用 Application.Run 执行，然后删除模块。MVP-2.3安全撤销 (Undo)P0将动态执行的 VBA 宏包裹在 Word 提供的 Application.UndoRecord 中。这极其重要，因为大模型写的 VBA 可能搞乱文档，必须让用户能按 Ctrl+Z 一键恢复。MVP-2.4极简报错提示P1砍掉复杂的“自愈循环”。如果在执行 VBA 时 C# 捕获到了 COMException，直接在界面上弹窗提示用户：“AI 生成的排版代码执行失败，请尝试换一种说法描述。”🗑️ 哪些功能被送进了“停车场” (Parking Lot) 及原因
+1. Ribbon 按钮点击事件在当前代码中未绑定，主入口实际是 `Alt+K`。
+2. `dotnet build SmartWord.sln` 在未安装 Office VSTO targets 的环境下会失败（仅 Core/Services 可编译）。
+3. 向量缓存重建采用锁内同步等待，超长文档场景下可能有等待感。
+4. 向量缓存已支持按分块文本哈希做增量，但文档键与分块键仍有优化空间（见“检索与向量索引策略”）。
 
-为了让你专注，以下功能在 v1.0 阶段被严格禁止开发，它们将被放入后续版本的规划池中：
+## 仓库结构
 
-M4 本地 RAG 引擎（全砍）：涉及文档智能切片、本地 Embedding 模型集成、SQLite/向量库本地部署。技术跨度太大，直接延期至 v2.0。
-
-M2 文档合规编译器（全砍）：基于正则的检查比较鸡肋，基于语义的检查依赖 RAG。暂时用不到，延期至 v1.5。
-
-自愈循环 (Self-Healing)：虽然是绝佳的卖点，但对于 0 经验开发者，处理 C# 异步等待大模型重试、死循环熔断机制等非常痛苦。v1.0 允许 AI 犯错，只要能 Undo 就行。
-
-跨文件静默扫描 (OpenXML)：极易引发文件被占用、多线程死锁等问题。
-
-## 大模型 API 配置（OpenAI 兼容）
-
-当前项目已支持 OpenAI 兼容接口，配置方式为**环境变量**，不会把密钥写入仓库文件。
-
-### 1) 必填变量
-
-- `SMARTWORD_API_KEY`：你的 API Key（必填）
-
-### 2) 可选变量
-
-- `SMARTWORD_API_BASE_URL`：默认 `https://api.openai.com/v1`
-- `SMARTWORD_API_MODEL`：默认 `gpt-4o-mini`
-- `SMARTWORD_PROMPT_VERSION`：默认使用 Prompt 配置中的 `activeVersion`
-- `SMARTWORD_SETTINGS_FILE`：可指定本地设置文件路径
-- `SMARTWORD_PROMPTS_FILE`：可指定 Prompt 目录文件路径
-
-### 3) 快速示例（PowerShell）
-
-```powershell
-$env:SMARTWORD_API_BASE_URL = "https://api.openai.com/v1"
-$env:SMARTWORD_API_MODEL = "gpt-4o-mini"
-$env:SMARTWORD_API_KEY = "sk-xxxx"
-$env:SMARTWORD_PROMPT_VERSION = "v1"
+```text
+SmartWord.sln
+├─ SmartWord.Core/        # 领域契约、请求/响应模型、编排接口
+├─ SmartWord.Services/    # 模型调用、检索、路由、存储、VBA执行、日志
+└─ SmartWord.AddIn/       # VSTO入口、UI、热键、TaskPane、配置
 ```
 
-### 4) 文件配置（推荐）
+关键目录说明：
 
-可在本地创建（不要提交）：
+- `SmartWord.AddIn/ThisAddIn.cs`：插件生命周期入口，负责依赖装配。
+- `SmartWord.AddIn/UI/ChatPaneControl.cs`：侧栏主界面。
+- `SmartWord.Services/Conversation/ConversationOrchestrator.cs`：会话主编排。
+- `SmartWord.Services/Model/OpenAiApiOptions.cs`：配置加载与优先级合并。
+- `SmartWord.Services/Vba/*`：VBA 代码净化、模块注入与执行。
+- `SmartWord.Services/Storage/*`：会话与向量索引本地落盘。
 
-- `SmartWord.AddIn/Config/runtime-settings.local.json`
+## 核心执行链路
 
-示例结构：
+### 1) 启动阶段
+
+`ThisAddIn_Startup` 完成以下初始化：
+
+1. 加载运行配置（环境变量 + 本地配置文件）。
+2. 初始化日志。
+3. 创建选区服务、模型服务、向量服务、路由服务、检索服务、会话存储。
+4. 组装 `ConversationOrchestrator`。
+5. 初始化 `TaskPaneManager`。
+6. 注册全局热键 `Alt+K`。
+
+### 2) 用户发送消息
+
+1. 侧栏提交 `ChatTurnRequest`。
+2. 编排器读取当前选区文本（仅当存在真实选区时才带入；光标停留不算选区）。
+3. 路由服务判定本轮走 `Qa` / `Writing` / `Processing` / `Execute`。
+4. 若是 `Qa`：触发文档检索并直接生成答案（不生成待执行动作）。
+5. 若是 `Writing` / `Processing` / `Execute`：生成待执行动作 `PendingAction`（改写文本和/或 VBA 代码），返回建议预览。
+6. 将结果写入会话。
+
+### 3) 用户确认执行
+
+1. 点击“确认执行”触发 `ApplyPendingActionAsync`。
+2. 若是改写：替换当前选区文本。
+3. 若是 VBA：净化/校验代码，注入临时模块并执行入口过程。
+4. 标记动作已执行，写回会话，支持后续追溯。
+
+### 4) 时序图（Mermaid）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as 用户
+    participant W as Word宿主
+    participant HK as GlobalHotKeyManager
+    participant TP as TaskPaneManager
+    participant UI as ChatPaneControl
+    participant CO as ConversationOrchestrator
+    participant RS as CommandRouteService
+    participant DR as DocumentRetriever
+    participant MS as ModelService
+    participant ST as ConversationStore
+    participant VE as VbaExecutor
+
+    U->>W: 按下 Alt+K
+    W->>HK: 接收 WM_HOTKEY
+    HK->>TP: ShowAndFocus()
+    TP->>UI: InitializeAsync()（首次）
+    UI->>ST: LoadSessionsAsync()
+    ST-->>UI: 会话列表
+
+    U->>UI: 输入指令并发送
+    UI->>CO: RunTurnAsync(ChatTurnRequest)
+    CO->>RS: DecideRouteAsync(RouteInput)
+    RS->>MS: ChatWithPromptsAsync(路由判定)
+    MS-->>RS: route/confidence/reason
+    RS-->>CO: RouteDecision
+
+    alt Qa（问答）
+        CO->>DR: RetrieveAsync(DocumentQuery)
+        DR-->>CO: RetrievedContext
+        CO->>MS: AnswerQuestionAsync()
+        MS-->>CO: AnswerText
+        CO->>ST: SaveSessionAsync(仅消息，无 PendingAction)
+        CO-->>UI: ChatTurnResult(RequiresUserConfirmation=false)
+        UI-->>U: 展示答案
+    else Writing / Processing / Execute
+    alt Writing 或 Processing（含 Execute 混合改写）
+        CO->>MS: RewriteTextAsync()
+        MS-->>CO: RewriteText
+    end
+
+    alt Execute（含 Hybrid）
+        CO->>MS: GenerateVbaCodeAsync()
+        MS-->>CO: VbaCode
+    end
+
+    CO->>ST: SaveSessionAsync(含 PendingAction)
+    CO-->>UI: ChatTurnResult(RequiresUserConfirmation=true)
+    UI-->>U: 展示建议预览，等待“确认执行”
+    end
+
+    U->>UI: 点击“确认执行”
+    UI->>CO: ApplyPendingActionAsync(sessionId, actionId)
+
+    alt 动作为 Rewrite/Hybrid
+        CO->>W: Selection.ReplaceSelection()
+    end
+
+    alt 动作为 Vba/Hybrid
+        CO->>VE: Execute(vbaCode, entryPoint)
+        VE->>W: 注入临时模块并 Application.Run()
+        VE->>W: 清理临时模块
+    end
+
+    CO->>ST: SaveSessionAsync(标记 IsApplied=true)
+    CO-->>UI: ApplyActionResult
+    UI-->>U: 显示执行结果
+```
+
+## 快速开始
+
+### 1. 环境要求
+
+- Windows（VSTO 插件运行环境）。
+- Microsoft Word 桌面版（支持 COM/VBA）。
+- Visual Studio 2022（建议安装 Office/SharePoint 开发相关组件）。
+- .NET Framework 4.7.2 Targeting Pack。
+
+VBA 执行相关建议：
+
+1. 在 Word 信任中心启用“信任对 VBA 项目对象模型的访问”。
+2. 若企业策略限制宏/VBA 项目访问，VBA 执行链路会失败。
+
+### 2. 打开与调试
+
+推荐方式（完整）：
+
+1. 使用 Visual Studio 打开 `SmartWord.sln`。
+2. 将 `SmartWord.AddIn` 设为启动项目。
+3. `F5` 调试，Word 会随 AddIn 启动。
+
+CLI 方式（仅验证 Core/Services）：
+
+```powershell
+dotnet build SmartWord.Core/SmartWord.Core.csproj
+dotnet build SmartWord.Services/SmartWord.Services.csproj
+```
+
+说明：在当前机器执行 `dotnet build SmartWord.sln` 会报缺少 `Microsoft.VisualStudio.Tools.Office.targets`，这是 VSTO 工程常见依赖问题。
+
+## 使用方式
+
+1. 在 Word 中按 `Alt+K` 打开 SmartWord 侧栏。
+2. 选择模式（自动/问答/写作/处理/执行）、模型（可选）和 Prompt 版本（可选）。
+3. 输入自然语言指令并发送。
+4. 若当前模式为问答：直接查看答案（不会修改文档）。
+5. 若当前模式为写作/处理/执行：查看“建议预览”。
+6. 点击“确认执行”应用到文档，或“取消”放弃本次动作。
+
+## 配置说明
+
+配置由 `OpenAiApiOptions.LoadFromEnvironment` 统一加载，优先级如下：
+
+1. 环境变量
+2. `runtime-settings.local.json`
+3. 代码内默认值
+
+### 1. 主要环境变量
+
+| 变量名 | 说明 | 默认值 |
+|---|---|---|
+| `SMARTWORD_API_KEY` | Chat API Key（必需，除非走本地降级） | 空 |
+| `SMARTWORD_API_BASE_URL` | Chat API 基地址 | `https://api.openai.com/v1` |
+| `SMARTWORD_API_MODEL` | 默认聊天模型 | `gpt-4o-mini` |
+| `SMARTWORD_PROMPTS_FILE` | Prompt 目录文件路径 | `Config/prompts.catalog.json` |
+| `SMARTWORD_PROMPT_VERSION` | 默认 Prompt 版本 | `prompts.catalog.json` 的 `activeVersion` |
+| `SMARTWORD_EMBEDDING_MODEL` | Embedding 模型 | `text-embedding-3-small` |
+| `SMARTWORD_EMBEDDING_API_BASE_URL` | Embedding API 基地址 | 继承 `SMARTWORD_API_BASE_URL` |
+| `SMARTWORD_EMBEDDING_API_KEY` | Embedding API Key | 继承 `SMARTWORD_API_KEY` |
+| `SMARTWORD_CHAT_STORE_FILE` | 会话存储文件路径 | `Config/chat.sessions.local.json` |
+| `SMARTWORD_VECTOR_INDEX_DIR` | 向量索引目录 | `Config/vector-index` |
+| `SMARTWORD_SETTINGS_FILE` | 本地运行配置文件路径 | `Config/runtime-settings.local.json` |
+| `SMARTWORD_LOG_LEVEL` | 日志级别 | `Information` |
+| `SMARTWORD_LOG_DIR` | 日志目录 | `%LOCALAPPDATA%/SmartWord/Logs` |
+| `SMARTWORD_LOG_RETAINED_FILES` | 日志保留文件数 | `14` |
+| `SMARTWORD_LOG_FILE_SIZE_BYTES` | 单日志文件上限 | `10485760` |
+| `SMARTWORD_LOG_DEBUG_SINK` | 是否输出到 Debug Sink | `false` |
+
+兼容变量：
+
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL`
+- `OPENAI_MODEL`
+
+### 2. 本地配置文件
+
+模板文件：`SmartWord.AddIn/Config/runtime-settings.template.json`  
+建议复制为本地文件并按需修改：
+
+`SmartWord.AddIn/Config/runtime-settings.local.json`
+
+示例：
 
 ```json
 {
@@ -62,32 +235,59 @@ $env:SMARTWORD_PROMPT_VERSION = "v1"
   "defaultModel": "gpt-4o-mini",
   "availableModels": ["gpt-4o-mini", "gpt-4.1-mini"],
   "promptCatalogPath": "Config/prompts.catalog.json",
-  "defaultPromptVersion": "v1"
+  "defaultPromptVersion": "v1",
+  "embeddingModel": "text-embedding-3-small",
+  "embeddingApiBaseUrl": "",
+  "embeddingApiKey": "",
+  "chatStorePath": "Config/chat.sessions.local.json",
+  "vectorIndexDirectory": "Config/vector-index"
 }
 ```
 
-Prompt 版本目录文件：
+### 3. Prompt 配置
 
-- `SmartWord.AddIn/Config/prompts.catalog.json`
+Prompt 目录文件：`SmartWord.AddIn/Config/prompts.catalog.json`
 
-你可以新增 `versions` 节点并切换 `activeVersion` 来做版本评测，也可在命令中临时指定。
+结构要点：
 
-### 5) 命令行指令约定（Alt+K 输入框）
+1. `activeVersion`：默认启用版本。
+2. `versions[]`：可配置多个版本。
+3. 每个版本包含 `qa`、`writing`、`processing`、`execute` 四组模板（并兼容旧键 `rewrite` / `vba` 作为回退）。
+4. 支持占位符：`{{question}}`、`{{instruction}}`、`{{selected_text}}`、`{{retrieved_context}}`、`{{entry_point}}`。
 
-- 默认：写作改写链路
-- `/vba xxx`：VBA 排版链路
-- `/model <modelName> xxx`：临时指定模型
-- `/prompt <version> xxx`：临时指定 Prompt 版本
+## 检索与向量索引策略
 
-可组合示例：
+### 1. 何时触发检索
 
-```text
-/vba /model gpt-4o-mini /prompt v1_strict 把全文字号改为 14
-```
+1. 仅当本轮模式判定为 `Qa`（问答）时，才触发文档检索。
+2. `Writing` / `Processing` / `Execute` 默认不触发检索。
+3. 自动模式下是否检索，取决于路由结果是否为 `Qa`。
 
-### 6) 安全说明
+### 2. 向量索引何时构建
 
-- 仓库已忽略 `.env` 和 `secrets.json`。
-- 仓库已忽略 `SmartWord.AddIn/Config/runtime-settings.local.json`。
-- 请勿把真实密钥写入 `README.md`、源码文件、提交记录。
-- 可参考仓库根目录 `.env.example`，复制为本地 `.env` 使用（`.env` 不会提交）。
+1. 不在插件启动时预构建。
+2. 在问答检索链路中按需构建/更新（懒加载）。
+3. 本地索引落盘目录为 `Config/vector-index`（可通过配置覆盖）。
+
+### 3. 是否支持“仅重建变化部分”
+
+当前实现为“分块级增量 + 文档级换桶”：
+
+1. 同一索引文件内：按 `chunkId + textHash` 判断是否重算向量，文本未变则复用缓存。
+2. 分块删除：会清理索引中的陈旧分块，避免无限增长。
+3. 限制：`DocumentId` 当前包含文档长度信息，文档长度变化可能导致切换到新索引文件，表现为一次性重建较多分块。
+4. 限制：分块 ID 当前为段落序号（`p1/p2/...`），在文档前部插入/删除段落时，后续分块 ID 会连锁变化，影响增量命中率。
+
+## 数据与日志落盘
+
+- 会话文件：`Config/chat.sessions.local.json`
+- 向量索引目录：`Config/vector-index`
+- 日志目录：默认 `%LOCALAPPDATA%/SmartWord/Logs`
+- 日志文件名：`smartword-YYYYMMDD.log`
+
+## 开发建议
+
+1. 分层职责保持清晰：`Core` 放契约，`Services` 放实现，`AddIn` 放宿主/UI。
+2. 新功能优先接入 `ConversationOrchestrator` 主链路，避免新增并行入口。
+3. 代码注释保持中文并强调“为什么”，不要重复代码字面意思。
+4. 测试建议新增独立 `*.Tests` 项目，不在生产项目中写测试逻辑。
