@@ -1,4 +1,5 @@
-﻿using SmartWord.Services.Storage;
+﻿using SmartWord.Core.Abstractions;
+using SmartWord.Services.Storage;
 using System;
 using System.Collections.Generic;
 using System.Security.Cryptography;
@@ -14,14 +15,17 @@ namespace SmartWord.Services.Retrieval
     public sealed class WordDocumentChunkProvider
     {
         private readonly dynamic _wordApplication;
+        private readonly IWordThreadInvoker _wordThreadInvoker;
 
         /// <summary>
         /// 初始化文档分块提供器。
         /// </summary>
         /// <param name="wordApplication">Word 应用实例。</param>
-        public WordDocumentChunkProvider(dynamic wordApplication)
+        /// <param name="wordThreadInvoker">Word 主线程调用器。</param>
+        public WordDocumentChunkProvider(dynamic wordApplication, IWordThreadInvoker wordThreadInvoker)
         {
             _wordApplication = wordApplication;
+            _wordThreadInvoker = wordThreadInvoker;
         }
 
         /// <summary>
@@ -29,6 +33,15 @@ namespace SmartWord.Services.Retrieval
         /// </summary>
         /// <returns>文档快照。</returns>
         public DocumentSnapshot CaptureSnapshot()
+        {
+            return InvokeOnWordThread(CaptureSnapshotCore);
+        }
+
+        /// <summary>
+        /// 在 Word 主线程抓取当前文档快照。
+        /// </summary>
+        /// <returns>文档快照。</returns>
+        private DocumentSnapshot CaptureSnapshotCore()
         {
             var snapshot = new DocumentSnapshot();
             if (_wordApplication == null)
@@ -154,6 +167,27 @@ namespace SmartWord.Services.Retrieval
         private static string SafeToString(object value)
         {
             return value as string ?? string.Empty;
+        }
+
+        /// <summary>
+        /// 在 Word 主线程执行带返回值逻辑。
+        /// </summary>
+        /// <typeparam name="T">返回值类型。</typeparam>
+        /// <param name="func">待执行逻辑。</param>
+        /// <returns>执行结果。</returns>
+        private T InvokeOnWordThread<T>(Func<T> func)
+        {
+            if (func == null)
+            {
+                return default(T);
+            }
+
+            if (_wordThreadInvoker == null)
+            {
+                return func();
+            }
+
+            return _wordThreadInvoker.Invoke(func);
         }
     }
 
