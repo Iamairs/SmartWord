@@ -1,7 +1,8 @@
-﻿using SmartWord.AddIn.UI;
+﻿using Microsoft.Office.Tools;
+using SmartWord.AddIn.UI;
 using SmartWord.Core.Abstractions;
 using SmartWord.Core.Orchestration.Conversation;
-using Microsoft.Office.Tools;
+using SmartWord.Services.Logging;
 using System;
 
 namespace SmartWord.AddIn.Infrastructure
@@ -20,6 +21,7 @@ namespace SmartWord.AddIn.Infrastructure
         private readonly string[] _availableModels;
         private readonly string _defaultModel;
         private readonly string _defaultPromptVersion;
+        private readonly IAppLogger _logger;
 
         private ChatPaneControl _chatPaneControl;
         private CustomTaskPane _chatPane;
@@ -33,13 +35,15 @@ namespace SmartWord.AddIn.Infrastructure
         /// <param name="availableModels">可选模型列表。</param>
         /// <param name="defaultModel">默认模型。</param>
         /// <param name="defaultPromptVersion">默认 Prompt 版本。</param>
+        /// <param name="logger">日志服务。</param>
         public TaskPaneManager(
             ThisAddIn addIn,
             IConversationOrchestrator conversationOrchestrator,
             INotificationService notificationService,
             string[] availableModels,
             string defaultModel,
-            string defaultPromptVersion)
+            string defaultPromptVersion,
+            IAppLogger logger)
         {
             _addIn = addIn;
             _conversationOrchestrator = conversationOrchestrator;
@@ -47,6 +51,7 @@ namespace SmartWord.AddIn.Infrastructure
             _availableModels = availableModels ?? new string[0];
             _defaultModel = defaultModel ?? string.Empty;
             _defaultPromptVersion = defaultPromptVersion ?? string.Empty;
+            _logger = logger ?? NullAppLogger.Instance;
         }
 
         /// <summary>
@@ -79,6 +84,7 @@ namespace SmartWord.AddIn.Infrastructure
             }
 
             _chatPane.Visible = visible;
+            _logger.Info("taskpane.set-visible", "Task pane visibility changed. Visible={Visible}", visible);
             if (visible && _chatPaneControl != null)
             {
                 _chatPaneControl.FocusInput();
@@ -97,6 +103,7 @@ namespace SmartWord.AddIn.Infrastructure
             if (_chatPane != null)
             {
                 _chatPane.Visible = true;
+                _logger.Info("taskpane.show", "Task pane shown and focused.");
                 if (_chatPaneControl != null)
                 {
                     _chatPaneControl.FocusInput();
@@ -116,6 +123,7 @@ namespace SmartWord.AddIn.Infrastructure
                 _chatPane.VisibleChanged -= ChatPane_VisibleChanged;
                 _addIn.CustomTaskPanes.Remove(_chatPane);
                 _chatPane = null;
+                _logger.Debug("taskpane.dispose", "Task pane instance removed.");
             }
 
             if (_chatPaneControl != null)
@@ -147,6 +155,7 @@ namespace SmartWord.AddIn.Infrastructure
             _chatPane.Width = 520;
             _chatPane.Visible = false;
             _chatPane.VisibleChanged += ChatPane_VisibleChanged;
+            _logger.Info("taskpane.created", "Task pane created. Width={Width}", _chatPane.Width);
 
             // 异步加载历史会话，避免阻塞 UI 线程的首次展示。
             InitializePaneAsync();
@@ -170,10 +179,12 @@ namespace SmartWord.AddIn.Infrastructure
             try
             {
                 await _chatPaneControl.InitializeAsync().ConfigureAwait(true);
+                _logger.Info("taskpane.initialize.success", "Task pane initialized successfully.");
             }
             catch (Exception ex)
             {
                 _notificationService.Error("Chat pane initialization failed: " + ex.Message);
+                _logger.Error("taskpane.initialize.failed", ex, "Task pane initialization failed.");
             }
         }
     }
