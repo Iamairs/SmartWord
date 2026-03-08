@@ -5,18 +5,22 @@ using SmartWord.Core.Orchestration;
 using SmartWord.Core.Orchestration.Conversation;
 using SmartWord.Services.Conversation;
 using SmartWord.Services.Embedding;
+using SmartWord.Services.Logging;
 using SmartWord.Services.Model;
 using SmartWord.Services.Orchestration;
 using SmartWord.Services.Retrieval;
 using SmartWord.Services.Routing;
 using SmartWord.Services.Selection;
 using SmartWord.Services.Storage;
+using SmartWord.Services.Threading;
 using SmartWord.Services.Undo;
 using SmartWord.Services.Vba;
 using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
+using WinFormsApplication = System.Windows.Forms.Application;
 
 namespace SmartWord.AddIn
 {
@@ -29,19 +33,24 @@ namespace SmartWord.AddIn
     public partial class ThisAddIn
     {
         // 以下字段在 AddIn 生命周期内复用，避免重复构建造成状态不一致。
-        private INotificationService _notificationService;
-        private IUndoScopeFactory _undoScopeFactory;
-        private IVbaExecutor _vbaExecutor;
-        private IEditorAgentOrchestrator _editorAgentOrchestrator;
-        private IVbaAgentOrchestrator _vbaAgentOrchestrator;
-        private IConversationOrchestrator _conversationOrchestrator;
-        private TaskPaneManager _taskPaneManager;
-        private GlobalHotKeyManager _hotKeyManager;
-        private bool _isOpeningPane;
+        private INotificationService _notificationService;  // 通知服务：提供用户提示接口，当前实现基于 MessageBox。
+        private IAppLogger _logger = NullAppLogger.Instance; // 日志服务：统一记录结构化日志，支持关键链路追踪。
+        private IUndoScopeFactory _undoScopeFactory;        // 撤销作用域工厂：提供撤销范围创建接口，当前实现基于 Word UndoRecord。
+        private IVbaExecutor _vbaExecutor;                  // VBA 执行器：提供 VBA 代码执行接口，当前实现通过临时模块注入方式运行 VBA 代码。
+        private IEditorAgentOrchestrator _editorAgentOrchestrator;      // 文本改写编排器：负责串联选区读取、模型改写、结果替换与用户通知。
+        private IVbaAgentOrchestrator _vbaAgentOrchestrator;            // VBA 编排器：负责串联选区读取、模型生成、VBA 代码执行与用户通知。
+        private IConversationOrchestrator _conversationOrchestrator;    // 会话编排器：负责串联会话存储、文档检索、命令路由与执行反馈，支持复杂对话场景。
+        private TaskPaneManager _taskPaneManager;           // 任务侧栏管理器：负责聊天侧栏的创建、显隐控制、焦点管理与资源释放。
+        private GlobalHotKeyManager _hotKeyManager;         // 全局热键管理器：负责 Alt+K 热键的注册、事件响应与资源释放。
+        private bool _isOpeningPane;                        // 侧栏打开状态标志：防止热键连击导致的并发打开流程。
         private OpenAiApiOptions _apiOptions;
         private string[] _availableModels = new string[0];
         private string _defaultModel = string.Empty;
         private string _defaultPromptVersion = string.Empty;
+
+        private UnhandledExceptionEventHandler _unhandledExceptionHandler;
+        private EventHandler<UnobservedTaskExceptionEventArgs> _unobservedTaskExceptionHandler;
+        private ThreadExceptionEventHandler _threadExceptionHandler;
 
         /// <summary>
         /// AddIn 启动入口：装配核心服务并初始化聊天侧栏与全局热键。
@@ -50,63 +59,82 @@ namespace SmartWord.AddIn
         /// <param name="e">事件参数。</param>
         private void ThisAddIn_Startup(object sender, EventArgs e)
         {
-            // Step 1. 初始化基础能力：通知、撤销域与 VBA 执行器。
             _notificationService = new MessageBoxNotificationService();
-            _undoScopeFactory = new WordUndoScopeFactory(Application, _notificationService);
-            _vbaExecutor = new VbaExecutor(Application, _undoScopeFactory);
-
-            // Step 2. 初始化模型与检索相关服务。
-            var selectionService = new WordSelectionService(Application);
-            _apiOptions = OpenAiApiOptions.LoadFromEnvironment(AppDomain.CurrentDomain.BaseDirectory);
-            var modelService = CreateModelService(_apiOptions);
-            var embeddingService = CreateEmbeddingService(_apiOptions);
-            var sanitizer = new VbaCodeSanitizer();
-
-            // 兼容保留旧链路，实现回退能力。
-            _editorAgentOrchestrator = new EditorAgentOrchestrator(selectionService, modelService, _notificationService);
-            _vbaAgentOrchestrator = new VbaAgentOrchestrator(selectionService, modelService, sanitizer, _vbaExecutor, _notificationService);
-
-            // Step 3. 组装会话编排链路（会话存储 + 检索 + 路由 + 执行）。
-            var conversationStore = new FileConversationStore(_apiOptions.ChatStorePath);
-            var chunkProvider = new WordDocumentChunkProvider(Application);
-            var vectorIndexStore = new VectorIndexStore(_apiOptions.VectorIndexDirectory);
-            var documentRetriever = new HybridDocumentRetriever(chunkProvider, embeddingService, vectorIndexStore, modelService);
-            var routeService = new CommandRouteService(modelService);
-            _conversationOrchestrator = new ConversationOrchestrator(
-                conversationStore,
-                documentRetriever,
-                routeService,
-                selectionService,
-                modelService,
-                sanitizer,
-                _vbaExecutor,
-                _notificationService);
-
-            _availableModels = _apiOptions.AvailableModels ?? new string[0];
-            _defaultModel = _apiOptions.Model ?? string.Empty;
-            _defaultPromptVersion = _apiOptions.DefaultPromptVersion ?? string.Empty;
-
-            // Step 4. 初始化任务侧栏管理器（延迟创建实际控件，减少启动阻塞）。
-            _taskPaneManager = new TaskPaneManager(
-                this,
-                _conversationOrchestrator,
-                _notificationService,
-                _availableModels,
-                _defaultModel,
-                _defaultPromptVersion);
 
             try
             {
-                // Step 5. 注册 Alt+K 全局热键，提升对话入口唤起效率。
-                _hotKeyManager = new GlobalHotKeyManager(() =>
+                _apiOptions = OpenAiApiOptions.LoadFromEnvironment(AppDomain.CurrentDomain.BaseDirectory);
+                _logger = LoggingBootstrapper.Initialize(_apiOptions.Logging);
+                RegisterGlobalExceptionLogging();
+                _logger.Info("app.start", "SmartWord startup. BaseDirectory={BaseDirectory}", AppDomain.CurrentDomain.BaseDirectory);
+                // 在启动线程捕获同步上下文，用于后续将 COM 访问统一封送回 Word 主线程。
+                IWordThreadInvoker wordThreadInvoker = new WordThreadInvoker(SynchronizationContext.Current, Thread.CurrentThread.ManagedThreadId);
+
+                // Step 1. 初始化基础能力：通知、撤销域与 VBA 执行器。
+                _undoScopeFactory = new WordUndoScopeFactory(Application, _notificationService, wordThreadInvoker);
+                _vbaExecutor = new VbaExecutor(Application, _undoScopeFactory, _logger, wordThreadInvoker);
+
+                // Step 2. 初始化模型与检索相关服务。
+                var selectionService = new WordSelectionService(Application, wordThreadInvoker);   // 选区服务：提供当前选区文本获取接口
+                var modelService = CreateModelService(_apiOptions);
+                var embeddingService = CreateEmbeddingService(_apiOptions);
+                var sanitizer = new VbaCodeSanitizer();
+
+                // 兼容保留旧链路，实现回退能力。
+                _editorAgentOrchestrator = new EditorAgentOrchestrator(selectionService, modelService, _notificationService);
+                _vbaAgentOrchestrator = new VbaAgentOrchestrator(selectionService, modelService, sanitizer, _vbaExecutor, _notificationService);
+
+                // Step 3. 组装会话编排链路（会话存储 + 检索 + 路由 + 执行）。
+                var conversationStore = new FileConversationStore(_apiOptions.ChatStorePath, _logger);
+                var chunkProvider = new WordDocumentChunkProvider(Application, wordThreadInvoker);
+                var vectorIndexStore = new VectorIndexStore(_apiOptions.VectorIndexDirectory);
+                var documentRetriever = new HybridDocumentRetriever(chunkProvider, embeddingService, vectorIndexStore, modelService);
+                var routeService = new CommandRouteService(modelService);
+                _conversationOrchestrator = new ConversationOrchestrator(
+                    conversationStore,
+                    documentRetriever,
+                    routeService,
+                    selectionService,
+                    modelService,
+                    sanitizer,
+                    _vbaExecutor,
+                    _notificationService,
+                    _logger);
+
+                _availableModels = _apiOptions.AvailableModels ?? new string[0];
+                _defaultModel = _apiOptions.Model ?? string.Empty;
+                _defaultPromptVersion = _apiOptions.DefaultPromptVersion ?? string.Empty;
+
+                // Step 4. 初始化任务侧栏管理器（延迟创建实际控件，减少启动阻塞）。
+                _taskPaneManager = new TaskPaneManager(
+                    this,
+                    _conversationOrchestrator,
+                    _notificationService,
+                    _availableModels,
+                    _defaultModel,
+                    _defaultPromptVersion,
+                    _logger);
+
+                try
                 {
-                    _ = HandleAltKHotKeyAsync();
-                });
-                _hotKeyManager.RegisterAltK();
+                    // Step 5. 注册 Alt+K 全局热键，提升对话入口唤起效率。
+                    _hotKeyManager = new GlobalHotKeyManager(() =>
+                    {
+                        _ = HandleAltKHotKeyAsync();
+                    });
+                    _hotKeyManager.RegisterAltK();
+                    _logger.Info("hotkey.register", "Alt+K hotkey registered successfully.");
+                }
+                catch (Exception ex)
+                {
+                    _notificationService.Error("Hotkey registration failed: " + ex.Message);
+                    _logger.Error("hotkey.register.failed", ex, "Alt+K hotkey registration failed.");
+                }
             }
             catch (Exception ex)
             {
-                _notificationService.Error("Hotkey registration failed: " + ex.Message);
+                _notificationService.Error("SmartWord startup failed: " + ex.Message);
+                _logger.Error("app.start.failed", ex, "SmartWord startup failed.");
             }
         }
 
@@ -117,6 +145,9 @@ namespace SmartWord.AddIn
         /// <param name="e">事件参数。</param>
         private void ThisAddIn_Shutdown(object sender, EventArgs e)
         {
+            _logger.Info("app.shutdown", "SmartWord shutdown started.");
+            UnregisterGlobalExceptionLogging();
+
             if (_hotKeyManager != null)
             {
                 _hotKeyManager.Dispose();
@@ -128,6 +159,9 @@ namespace SmartWord.AddIn
                 _taskPaneManager.Dispose();
                 _taskPaneManager = null;
             }
+
+            _logger.Info("app.shutdown", "SmartWord shutdown completed.");
+            LoggingBootstrapper.Shutdown();
         }
 
         /// <summary>
@@ -139,12 +173,14 @@ namespace SmartWord.AddIn
             // 仅在当前前台窗口属于 Word 进程时响应热键，避免抢占其他应用焦点。
             if (!IsWordForeground())
             {
+                _logger.Debug("hotkey.ignored", "Alt+K ignored because Word is not foreground.");
                 return Task.CompletedTask;
             }
 
             // 防止热键连击导致并发打开流程。
             if (_isOpeningPane)
             {
+                _logger.Debug("hotkey.ignored", "Alt+K ignored because pane is opening.");
                 return Task.CompletedTask;
             }
 
@@ -154,14 +190,17 @@ namespace SmartWord.AddIn
                 if (Application == null)
                 {
                     _notificationService.Error("Word application is not ready.");
+                    _logger.Warn("hotkey.failed", "Alt+K failed because Word application is not ready.");
                     return Task.CompletedTask;
                 }
 
                 _taskPaneManager.ShowAndFocus();
+                _logger.Info("hotkey.triggered", "Alt+K handled and task pane opened.");
             }
             catch (Exception ex)
             {
                 _notificationService.Error("Open chat pane failed: " + ex.Message);
+                _logger.Error("hotkey.failed", ex, "Open chat pane failed when handling Alt+K.");
             }
             finally
             {
@@ -180,6 +219,7 @@ namespace SmartWord.AddIn
         {
             if (_taskPaneManager == null)
             {
+                _logger.Warn("taskpane.not-ready", "Task pane is not initialized. Visible={Visible}", visible);
                 return false;
             }
 
@@ -200,9 +240,10 @@ namespace SmartWord.AddIn
                     ribbon.SyncPaneState(isVisible);
                 }
             }
-            catch
+            catch (Exception ex)
             {
                 // Ribbon 在未初始化时忽略同步异常。
+                _logger.Debug("ribbon.sync.failed", "Ribbon sync failed. Visible={Visible} Error={Error}", isVisible, ex.Message);
             }
         }
 
@@ -217,15 +258,18 @@ namespace SmartWord.AddIn
             {
                 try
                 {
-                    return new OpenAiCompatibleModelService(options);
+                    _logger.Info("model.init", "Initializing remote model service. Model={Model}", options.Model);
+                    return new OpenAiCompatibleModelService(options, _logger);
                 }
                 catch (Exception ex)
                 {
                     _notificationService.Error("Failed to initialize OpenAI model service, fallback to local model: " + ex.Message);
+                    _logger.Error("model.init.failed", ex, "Remote model initialization failed. Falling back to local model.");
                     return new LocalModelService();
                 }
             }
 
+            _logger.Warn("model.init.local", "Remote model is not configured. Using local model service.");
             return new LocalModelService();
         }
 
@@ -240,16 +284,78 @@ namespace SmartWord.AddIn
             {
                 try
                 {
-                    return new OpenAiEmbeddingService(options);
+                    _logger.Info("embedding.init", "Initializing remote embedding service. Model={Model}", options.EmbeddingModel);
+                    return new OpenAiEmbeddingService(options, _logger);
                 }
                 catch (Exception ex)
                 {
                     _notificationService.Error("Failed to initialize OpenAI embedding service, fallback to local embedding: " + ex.Message);
+                    _logger.Error("embedding.init.failed", ex, "Remote embedding initialization failed. Falling back to local embedding.");
                     return new LocalEmbeddingService();
                 }
             }
 
+            _logger.Warn("embedding.init.local", "Remote embedding is not configured. Using local embedding service.");
             return new LocalEmbeddingService();
+        }
+
+        /// <summary>
+        /// 注册全局异常日志，确保未捕获异常可回溯。
+        /// </summary>
+        private void RegisterGlobalExceptionLogging()
+        {
+            if (_unhandledExceptionHandler == null)
+            {
+                _unhandledExceptionHandler = (sender, args) =>
+                {
+                    Exception ex = args.ExceptionObject as Exception;
+                    _logger.Fatal("app.unhandled", ex, "Unhandled exception captured. IsTerminating={IsTerminating}", args.IsTerminating);
+                };
+                AppDomain.CurrentDomain.UnhandledException += _unhandledExceptionHandler;
+            }
+
+            if (_unobservedTaskExceptionHandler == null)
+            {
+                _unobservedTaskExceptionHandler = (sender, args) =>
+                {
+                    _logger.Error("task.unobserved", args.Exception, "Unobserved task exception captured.");
+                    args.SetObserved();
+                };
+                TaskScheduler.UnobservedTaskException += _unobservedTaskExceptionHandler;
+            }
+
+            if (_threadExceptionHandler == null)
+            {
+                _threadExceptionHandler = (sender, args) =>
+                {
+                    _logger.Error("ui.thread.exception", args.Exception, "UI thread exception captured.");
+                };
+                WinFormsApplication.ThreadException += _threadExceptionHandler;
+            }
+        }
+
+        /// <summary>
+        /// 注销全局异常日志，避免重复注册。
+        /// </summary>
+        private void UnregisterGlobalExceptionLogging()
+        {
+            if (_unhandledExceptionHandler != null)
+            {
+                AppDomain.CurrentDomain.UnhandledException -= _unhandledExceptionHandler;
+                _unhandledExceptionHandler = null;
+            }
+
+            if (_unobservedTaskExceptionHandler != null)
+            {
+                TaskScheduler.UnobservedTaskException -= _unobservedTaskExceptionHandler;
+                _unobservedTaskExceptionHandler = null;
+            }
+
+            if (_threadExceptionHandler != null)
+            {
+                WinFormsApplication.ThreadException -= _threadExceptionHandler;
+                _threadExceptionHandler = null;
+            }
         }
 
         /// <summary>
@@ -292,4 +398,3 @@ namespace SmartWord.AddIn
         #endregion
     }
 }
-
