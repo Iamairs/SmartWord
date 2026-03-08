@@ -12,5 +12,13 @@
   "embeddingApiBaseUrl": "",
   "embeddingApiKey": "",
   "chatStorePath": "Config/chat.sessions.local.json",
-  "vectorIndexDirectory": "Config/vector-index"
+  "vectorIndexDirectory": "Config/vector-index",
+  "logging": {
+    "logLevel": "Information",
+    "logDirectory": "",
+    "retainedFileCountLimit": "14",
+    "fileSizeLimitBytes": "10485760",
+    "enableDebugSink": "false",
+    "outputTemplate": "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] [{EventName}] {Message:lj} {Properties:j}{NewLine}{Exception}"
+  }
 }
