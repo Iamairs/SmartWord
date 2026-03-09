@@ -8,6 +8,11 @@ namespace SmartWord.Core.Models.Conversation
     public sealed class ChatTurnResult
     {
         /// <summary>
+        /// 轮次唯一标识，用于前端取消本轮生成。
+        /// </summary>
+        public string TurnId { get; set; }
+
+        /// <summary>
         /// 会话 ID。
         /// </summary>
         public string SessionId { get; set; }
