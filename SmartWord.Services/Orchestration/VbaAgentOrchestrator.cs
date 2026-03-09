@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using SmartWord.Core.Abstractions;
 using SmartWord.Core.Models;
@@ -61,7 +62,7 @@ namespace SmartWord.Services.Orchestration
                     PromptVersion = promptVersion
                 };
 
-                string rawCode = await _modelService.GenerateVbaCodeAsync(request);
+                string rawCode = await _modelService.GenerateVbaCodeAsync(request, CancellationToken.None);
                 // 执行前统一净化并校验入口，避免将无效脚本注入 Word。
                 string sanitizedCode = _sanitizer.SanitizeAndValidate(rawCode, request.EntryPoint);
                 _vbaExecutor.Execute(sanitizedCode, request.EntryPoint);

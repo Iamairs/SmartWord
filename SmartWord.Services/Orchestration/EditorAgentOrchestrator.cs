@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using SmartWord.Core.Abstractions;
 using SmartWord.Core.Models;
@@ -59,7 +60,7 @@ namespace SmartWord.Services.Orchestration
                     PromptVersion = promptVersion
                 };
 
-                string rewrittenText = await _modelService.RewriteTextAsync(request);
+                string rewrittenText = await _modelService.RewriteTextAsync(request, CancellationToken.None);
                 if (string.IsNullOrWhiteSpace(rewrittenText))
                 {
                     // 防御模型空响应，避免执行空文本替换。
