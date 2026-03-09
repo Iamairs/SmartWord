@@ -1,4 +1,5 @@
 ﻿using SmartWord.Core.Models.Conversation;
+using System.Threading;
 using System.Threading.Tasks;
 
 // 文件说明：
@@ -15,6 +16,6 @@ namespace SmartWord.Core.Abstractions.Conversation
         /// </summary>
         /// <param name="query">检索查询对象。</param>
         /// <returns>检索到的上下文结果。</returns>
-        Task<RetrievedContext> RetrieveAsync(DocumentQuery query);
+        Task<RetrievedContext> RetrieveAsync(DocumentQuery query, CancellationToken cancellationToken = default(CancellationToken));
     }
 }

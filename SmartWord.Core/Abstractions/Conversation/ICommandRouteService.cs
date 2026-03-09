@@ -1,4 +1,5 @@
 ﻿using SmartWord.Core.Models.Conversation;
+using System.Threading;
 using System.Threading.Tasks;
 
 // 文件说明：
@@ -15,6 +16,6 @@ namespace SmartWord.Core.Abstractions.Conversation
         /// </summary>
         /// <param name="input">路由输入信息。</param>
         /// <returns>路由决策结果。</returns>
-        Task<RouteDecision> DecideRouteAsync(RouteInput input);
+        Task<RouteDecision> DecideRouteAsync(RouteInput input, CancellationToken cancellationToken = default(CancellationToken));
     }
 }
