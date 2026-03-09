@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using SmartWord.Core.Abstractions;
 using SmartWord.Core.Abstractions.Conversation;
@@ -162,6 +163,42 @@ public sealed class ConversationModeTests
         Assert.AreEqual(1, retriever.CallCount);
     }
 
+    [TestMethod]
+    public async Task RunTurnAsync_WritingRoute_Cancelled_ShouldNotPersistTurnArtifacts()
+    {
+        var store = new InMemoryConversationStore();
+        var retriever = new FixedRetriever("doc-1", "[1] 原文片段", "p1");
+        var routeService = new FixedRouteService(ConversationRouteType.Writing);
+        var modelService = new DelayedRewriteModelService();
+        var orchestrator = BuildOrchestrator(store, retriever, routeService, modelService, "原文");
+
+        using (var cts = new CancellationTokenSource())
+        {
+            Task<ChatTurnResult> task = orchestrator.RunTurnAsync(new ChatTurnRequest
+            {
+                UserMessage = "请优化这段话"
+            }, cts.Token);
+
+            cts.CancelAfter(60);
+            bool cancelled = false;
+            try
+            {
+                await task;
+            }
+            catch (OperationCanceledException)
+            {
+                cancelled = true;
+            }
+
+            Assert.IsTrue(cancelled);
+        }
+
+        IReadOnlyList<ConversationSession> sessions = await store.LoadSessionsAsync();
+        Assert.AreEqual(1, sessions.Count);
+        Assert.AreEqual(0, sessions[0].Messages.Count);
+        Assert.AreEqual(0, sessions[0].PendingActions.Count);
+    }
+
     private static ConversationOrchestrator BuildOrchestrator(
         IConversationStore store,
         IDocumentRetriever retriever,
@@ -190,7 +227,7 @@ public sealed class ConversationModeTests
             _routeType = routeType;
         }
 
-        public Task<RouteDecision> DecideRouteAsync(RouteInput input)
+        public Task<RouteDecision> DecideRouteAsync(RouteInput input, CancellationToken cancellationToken = default(CancellationToken))
         {
             return Task.FromResult(new RouteDecision
             {
@@ -215,7 +252,7 @@ public sealed class ConversationModeTests
             _chunkId = chunkId;
         }
 
-        public Task<RetrievedContext> RetrieveAsync(DocumentQuery query)
+        public Task<RetrievedContext> RetrieveAsync(DocumentQuery query, CancellationToken cancellationToken = default(CancellationToken))
         {
             var context = new RetrievedContext
             {
@@ -249,10 +286,10 @@ public sealed class ConversationModeTests
 
         public int CallCount { get; private set; }
 
-        public async Task<RetrievedContext> RetrieveAsync(DocumentQuery query)
+        public async Task<RetrievedContext> RetrieveAsync(DocumentQuery query, CancellationToken cancellationToken = default(CancellationToken))
         {
             CallCount++;
-            return await _inner.RetrieveAsync(query);
+            return await _inner.RetrieveAsync(query, cancellationToken);
         }
     }
 
@@ -307,24 +344,48 @@ public sealed class ConversationModeTests
 
         public string QaAnswer { get; set; }
 
-        public Task<string> RewriteTextAsync(EditorRewriteRequest request)
+        public Task<string> RewriteTextAsync(EditorRewriteRequest request, CancellationToken cancellationToken = default(CancellationToken))
         {
             return Task.FromResult(RewriteText ?? string.Empty);
         }
 
-        public Task<string> GenerateVbaCodeAsync(VbaGenerationRequest request)
+        public Task<string> GenerateVbaCodeAsync(VbaGenerationRequest request, CancellationToken cancellationToken = default(CancellationToken))
         {
             return Task.FromResult("Public Sub SmartWord_Run()\r\nEnd Sub");
         }
 
-        public Task<string> ChatWithPromptsAsync(string systemPrompt, string userPrompt, string modelOverride, double temperature)
+        public Task<string> ChatWithPromptsAsync(string systemPrompt, string userPrompt, string modelOverride, double temperature, CancellationToken cancellationToken = default(CancellationToken))
         {
             return Task.FromResult("{}");
         }
 
-        public Task<string> AnswerQuestionAsync(DocumentQaRequest request)
+        public Task<string> AnswerQuestionAsync(DocumentQaRequest request, CancellationToken cancellationToken = default(CancellationToken))
         {
             return Task.FromResult(QaAnswer ?? string.Empty);
+        }
+    }
+
+    private sealed class DelayedRewriteModelService : IModelService
+    {
+        public async Task<string> RewriteTextAsync(EditorRewriteRequest request, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            await Task.Delay(500, cancellationToken);
+            return "延迟改写结果";
+        }
+
+        public Task<string> GenerateVbaCodeAsync(VbaGenerationRequest request, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            return Task.FromResult(string.Empty);
+        }
+
+        public Task<string> ChatWithPromptsAsync(string systemPrompt, string userPrompt, string modelOverride, double temperature, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            return Task.FromResult("{}");
+        }
+
+        public Task<string> AnswerQuestionAsync(DocumentQaRequest request, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            return Task.FromResult(string.Empty);
         }
     }
 
