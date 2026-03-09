@@ -3,8 +3,11 @@ using SmartWord.Core.Orchestration.Conversation;
 using SmartWord.Core.Abstractions;
 using SmartWord.Services.Logging;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 
@@ -21,6 +24,7 @@ namespace SmartWord.AddIn.UI.Web
         private readonly string _defaultPromptVersion;
         private readonly IAppLogger _logger;
         private readonly JavaScriptSerializer _serializer;
+        private readonly ConcurrentDictionary<string, InflightTurnState> _inflightTurns;
 
         /// <summary>
         /// 初始化 RPC 桥接器。
@@ -38,6 +42,7 @@ namespace SmartWord.AddIn.UI.Web
             _defaultPromptVersion = defaultPromptVersion ?? string.Empty;
             _logger = logger ?? NullAppLogger.Instance;
             _serializer = new JavaScriptSerializer();
+            _inflightTurns = new ConcurrentDictionary<string, InflightTurnState>(StringComparer.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -123,6 +128,11 @@ namespace SmartWord.AddIn.UI.Web
                 return await HandleSubmitTurnAsync(payload).ConfigureAwait(false);
             }
 
+            if (normalized == "turn.cancel")
+            {
+                return await HandleCancelTurnAsync(payload).ConfigureAwait(false);
+            }
+
             if (normalized == "action.apply")
             {
                 return await HandleApplyActionAsync(payload).ConfigureAwait(false);
@@ -158,20 +168,117 @@ namespace SmartWord.AddIn.UI.Web
                 throw new InvalidOperationException("消息内容不能为空。");
             }
 
+            string sessionId = ReadString(payload, "sessionId");
+            string turnId = ReadString(payload, "turnId");
+            if (string.IsNullOrWhiteSpace(turnId))
+            {
+                turnId = Guid.NewGuid().ToString("N");
+            }
+
             var request = new ChatTurnRequest
             {
-                SessionId = ReadString(payload, "sessionId"),
+                SessionId = sessionId,
                 UserMessage = userMessage,
                 ModelOverride = ReadString(payload, "modelOverride"),
                 PromptVersion = ReadString(payload, "promptVersion"),
                 ModeLock = ParseModeLock(ReadString(payload, "modeLock"))
             };
 
-            ChatTurnResult result = await _conversationOrchestrator.RunTurnAsync(request).ConfigureAwait(false);
-            Dictionary<string, object> sessionsPayload = await BuildSessionsPayloadAsync(result == null ? string.Empty : result.SessionId).ConfigureAwait(false);
+            var inflight = new InflightTurnState(sessionId, new CancellationTokenSource());
+            if (!_inflightTurns.TryAdd(turnId, inflight))
+            {
+                throw new InvalidOperationException("turnId 冲突，请重试。" + turnId);
+            }
 
-            sessionsPayload["result"] = BuildTurnResult(result);
-            return sessionsPayload;
+            try
+            {
+                inflight.TurnTask = _conversationOrchestrator.RunTurnAsync(request, inflight.CancellationTokenSource.Token);
+                ChatTurnResult result = await inflight.TurnTask.ConfigureAwait(false);
+                if (result != null)
+                {
+                    result.TurnId = turnId;
+                }
+
+                Dictionary<string, object> sessionsPayload = await BuildSessionsPayloadAsync(result == null ? string.Empty : result.SessionId).ConfigureAwait(false);
+                Dictionary<string, object> pendingActionMeta = ReadDictionary(sessionsPayload, "pendingActionMeta");
+                Dictionary<string, object> uiHints = ReadDictionary(sessionsPayload, "uiHints");
+                sessionsPayload["result"] = BuildTurnResult(result, pendingActionMeta, uiHints);
+                return sessionsPayload;
+            }
+            catch (OperationCanceledException)
+            {
+                Dictionary<string, object> sessionsPayload = await BuildSessionsPayloadAsync(sessionId).ConfigureAwait(false);
+                sessionsPayload["result"] = BuildCancelledTurnResult(sessionId, turnId, "已取消本轮生成。");
+                return sessionsPayload;
+            }
+            finally
+            {
+                InflightTurnState removed;
+                _inflightTurns.TryRemove(turnId, out removed);
+                if (removed != null)
+                {
+                    removed.CancellationTokenSource.Dispose();
+                }
+            }
+        }
+
+        /// <summary>
+        /// 取消进行中的发送轮次。
+        /// </summary>
+        private async Task<object> HandleCancelTurnAsync(Dictionary<string, object> payload)
+        {
+            string turnId = ReadString(payload, "turnId");
+            string sessionId = ReadString(payload, "sessionId");
+
+            InflightTurnState inflight = null;
+            if (!string.IsNullOrWhiteSpace(turnId))
+            {
+                _inflightTurns.TryGetValue(turnId, out inflight);
+            }
+
+            if (inflight == null && !string.IsNullOrWhiteSpace(sessionId))
+            {
+                foreach (KeyValuePair<string, InflightTurnState> pair in _inflightTurns)
+                {
+                    InflightTurnState candidate = pair.Value;
+                    if (candidate != null && string.Equals(candidate.SessionId, sessionId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        turnId = pair.Key;
+                        inflight = candidate;
+                        break;
+                    }
+                }
+            }
+
+            if (inflight == null)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "cancelled", false },
+                    { "turnId", turnId ?? string.Empty },
+                    { "message", "未找到进行中的生成任务。" }
+                };
+            }
+
+            inflight.CancellationTokenSource.Cancel();
+            Task<ChatTurnResult> runningTask = inflight.TurnTask;
+            if (runningTask != null)
+            {
+                try
+                {
+                    await runningTask.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "cancelled", true },
+                { "turnId", turnId ?? string.Empty },
+                { "message", "已取消本轮生成。" }
+            };
         }
 
         /// <summary>
@@ -188,7 +295,9 @@ namespace SmartWord.AddIn.UI.Web
 
             ApplyActionResult result = await _conversationOrchestrator.ApplyPendingActionAsync(sessionId, actionId).ConfigureAwait(false);
             Dictionary<string, object> sessionsPayload = await BuildSessionsPayloadAsync(sessionId).ConfigureAwait(false);
-            sessionsPayload["result"] = BuildApplyResult(result);
+            Dictionary<string, object> pendingActionMeta = ReadDictionary(sessionsPayload, "pendingActionMeta");
+            Dictionary<string, object> uiHints = ReadDictionary(sessionsPayload, "uiHints");
+            sessionsPayload["result"] = BuildApplyResult(result, pendingActionMeta, uiHints);
             return sessionsPayload;
         }
 
@@ -199,10 +308,20 @@ namespace SmartWord.AddIn.UI.Web
         {
             IReadOnlyList<ConversationSession> sessions = await _conversationOrchestrator.LoadSessionsAsync().ConfigureAwait(false);
             string activeSessionId = ResolveActiveSessionId(sessions, preferredSessionId);
+            ConversationSession activeSession = FindSessionById(sessions, activeSessionId);
+            PendingAction pendingAction = FindLatestPendingAction(activeSession);
+            Dictionary<string, object> pendingActionMeta = BuildPendingActionMeta(pendingAction);
+            Dictionary<string, object> uiHints = BuildUiHints(
+                pendingAction == null ? string.Empty : pendingAction.ActionId,
+                pendingActionMeta,
+                pendingAction != null);
+
             return new Dictionary<string, object>
             {
                 { "sessions", BuildSessionDtos(sessions) },
-                { "activeSessionId", activeSessionId }
+                { "activeSessionId", activeSessionId },
+                { "pendingActionMeta", pendingActionMeta },
+                { "uiHints", uiHints }
             };
         }
 
@@ -248,7 +367,8 @@ namespace SmartWord.AddIn.UI.Web
                     { "title", session == null ? string.Empty : (session.Title ?? string.Empty) },
                     { "isActive", session != null && session.IsActive },
                     { "updatedAtUtc", session == null ? string.Empty : session.UpdatedAtUtc.ToString("o", CultureInfo.InvariantCulture) },
-                    { "messages", BuildMessageDtos(session == null ? null : session.Messages) }
+                    { "messages", BuildMessageDtos(session == null ? null : session.Messages) },
+                    { "latestPendingAction", BuildPendingActionMeta(FindLatestPendingAction(session)) }
                 });
             }
 
@@ -283,7 +403,10 @@ namespace SmartWord.AddIn.UI.Web
         /// <summary>
         /// 构建轮次结果 DTO。
         /// </summary>
-        private static object BuildTurnResult(ChatTurnResult result)
+        private static object BuildTurnResult(
+            ChatTurnResult result,
+            Dictionary<string, object> pendingActionMeta,
+            Dictionary<string, object> uiHints)
         {
             if (result == null)
             {
@@ -293,17 +416,41 @@ namespace SmartWord.AddIn.UI.Web
             return new Dictionary<string, object>
             {
                 { "sessionId", result.SessionId ?? string.Empty },
+                { "turnId", result.TurnId ?? string.Empty },
                 { "assistantReply", result.AssistantReply ?? string.Empty },
                 { "pendingActionId", result.PendingActionId ?? string.Empty },
                 { "requiresUserConfirmation", result.RequiresUserConfirmation },
-                { "resolvedMode", RouteToModeKey(result.ResolvedMode) }
+                { "resolvedMode", RouteToModeKey(result.ResolvedMode) },
+                { "pendingActionMeta", pendingActionMeta },
+                { "uiHints", uiHints }
+            };
+        }
+
+        /// <summary>
+        /// 构建取消轮次结果 DTO。
+        /// </summary>
+        private static object BuildCancelledTurnResult(string sessionId, string turnId, string message)
+        {
+            return new Dictionary<string, object>
+            {
+                { "sessionId", sessionId ?? string.Empty },
+                { "turnId", turnId ?? string.Empty },
+                { "cancelled", true },
+                { "message", message ?? "已取消本轮生成。" },
+                { "assistantReply", string.Empty },
+                { "pendingActionId", string.Empty },
+                { "requiresUserConfirmation", false },
+                { "resolvedMode", "writing" }
             };
         }
 
         /// <summary>
         /// 构建动作应用结果 DTO。
         /// </summary>
-        private static object BuildApplyResult(ApplyActionResult result)
+        private static object BuildApplyResult(
+            ApplyActionResult result,
+            Dictionary<string, object> pendingActionMeta,
+            Dictionary<string, object> uiHints)
         {
             if (result == null)
             {
@@ -315,8 +462,234 @@ namespace SmartWord.AddIn.UI.Web
                 { "sessionId", result.SessionId ?? string.Empty },
                 { "actionId", result.ActionId ?? string.Empty },
                 { "success", result.Success },
-                { "message", result.Message ?? string.Empty }
+                { "message", result.Message ?? string.Empty },
+                { "pendingActionMeta", pendingActionMeta },
+                { "uiHints", uiHints }
             };
+        }
+
+        /// <summary>
+        /// 查找会话对象。
+        /// </summary>
+        private static ConversationSession FindSessionById(IReadOnlyList<ConversationSession> sessions, string sessionId)
+        {
+            if (sessions == null || sessions.Count == 0)
+            {
+                return null;
+            }
+
+            if (!string.IsNullOrWhiteSpace(sessionId))
+            {
+                for (int i = 0; i < sessions.Count; i++)
+                {
+                    if (sessions[i] != null && string.Equals(sessions[i].SessionId, sessionId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return sessions[i];
+                    }
+                }
+            }
+
+            for (int i = 0; i < sessions.Count; i++)
+            {
+                if (sessions[i] != null && sessions[i].IsActive)
+                {
+                    return sessions[i];
+                }
+            }
+
+            return sessions[0];
+        }
+
+        /// <summary>
+        /// 获取最近未应用的待执行动作。
+        /// </summary>
+        private static PendingAction FindLatestPendingAction(ConversationSession session)
+        {
+            if (session == null || session.PendingActions == null || session.PendingActions.Count == 0)
+            {
+                return null;
+            }
+
+            PendingAction latest = null;
+            for (int i = 0; i < session.PendingActions.Count; i++)
+            {
+                PendingAction action = session.PendingActions[i];
+                if (action == null || action.IsApplied)
+                {
+                    continue;
+                }
+
+                if (latest == null || action.CreatedAtUtc > latest.CreatedAtUtc)
+                {
+                    latest = action;
+                }
+            }
+
+            return latest;
+        }
+
+        /// <summary>
+        /// 构建待执行动作元数据。
+        /// </summary>
+        private static Dictionary<string, object> BuildPendingActionMeta(PendingAction action)
+        {
+            if (action == null)
+            {
+                return new Dictionary<string, object>();
+            }
+
+            string actionType = ActionTypeToKey(action.ActionType);
+            string route = RouteToModeKey(action.RouteType);
+            string targetScope = (action.ActionType == ConversationActionType.Vba || action.ActionType == ConversationActionType.Hybrid)
+                ? "document"
+                : "selection";
+
+            string summary = BuildActionSummary(action);
+            string riskLevel = EstimateRiskLevel(action);
+
+            return new Dictionary<string, object>
+            {
+                { "actionId", action.ActionId ?? string.Empty },
+                { "actionType", actionType },
+                { "routeType", route },
+                { "targetScope", targetScope },
+                { "summary", summary },
+                { "riskLevel", riskLevel },
+                { "entryPoint", action.EntryPoint ?? string.Empty }
+            };
+        }
+
+        /// <summary>
+        /// 构建界面提示信息。
+        /// </summary>
+        private static Dictionary<string, object> BuildUiHints(
+            string pendingActionId,
+            Dictionary<string, object> pendingActionMeta,
+            bool requiresUserConfirmation)
+        {
+            bool hasPending = !string.IsNullOrWhiteSpace(pendingActionId);
+            string riskLevel = ReadString(pendingActionMeta, "riskLevel");
+            string warningText = string.Empty;
+
+            if (!hasPending)
+            {
+                warningText = "当前无待执行动作，可继续提问或下达新指令。";
+            }
+            else if (string.Equals(riskLevel, "high", StringComparison.OrdinalIgnoreCase))
+            {
+                warningText = "本次操作影响范围较大，请先核对建议内容后再执行。";
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "canApply", hasPending && requiresUserConfirmation },
+                { "canCancel", hasPending },
+                { "warningText", warningText },
+                { "checks", new object[]
+                    {
+                        new Dictionary<string, object>
+                        {
+                            { "key", "pending" },
+                            { "label", "存在待执行动作" },
+                            { "passed", hasPending }
+                        },
+                        new Dictionary<string, object>
+                        {
+                            { "key", "confirm" },
+                            { "label", "当前轮次需要确认" },
+                            { "passed", hasPending && requiresUserConfirmation }
+                        },
+                        new Dictionary<string, object>
+                        {
+                            { "key", "risk" },
+                            { "label", "已评估执行风险" },
+                            { "passed", hasPending ? !string.IsNullOrWhiteSpace(riskLevel) : true }
+                        }
+                    }
+                }
+            };
+        }
+
+        /// <summary>
+        /// 动作摘要文本。
+        /// </summary>
+        private static string BuildActionSummary(PendingAction action)
+        {
+            if (action == null)
+            {
+                return string.Empty;
+            }
+
+            if (!string.IsNullOrWhiteSpace(action.RewriteText))
+            {
+                string text = action.RewriteText.Trim();
+                if (text.Length > 96)
+                {
+                    text = text.Substring(0, 96) + "...";
+                }
+
+                return "建议改写预览：" + text;
+            }
+
+            if (!string.IsNullOrWhiteSpace(action.VbaCode))
+            {
+                var summary = new StringBuilder();
+                summary.Append("将执行 VBA 脚本");
+                if (!string.IsNullOrWhiteSpace(action.EntryPoint))
+                {
+                    summary.Append("（入口：").Append(action.EntryPoint).Append("）");
+                }
+
+                return summary.ToString();
+            }
+
+            return "已生成可执行建议。";
+        }
+
+        /// <summary>
+        /// 估算风险级别。
+        /// </summary>
+        private static string EstimateRiskLevel(PendingAction action)
+        {
+            if (action == null)
+            {
+                return "none";
+            }
+
+            if (action.ActionType == ConversationActionType.Vba || action.ActionType == ConversationActionType.Hybrid)
+            {
+                return "high";
+            }
+
+            if (!string.IsNullOrWhiteSpace(action.RewriteText) && action.RewriteText.Length > 1200)
+            {
+                return "medium";
+            }
+
+            return "low";
+        }
+
+        /// <summary>
+        /// 动作类型映射。
+        /// </summary>
+        private static string ActionTypeToKey(ConversationActionType actionType)
+        {
+            if (actionType == ConversationActionType.Vba)
+            {
+                return "vba";
+            }
+
+            if (actionType == ConversationActionType.Hybrid)
+            {
+                return "hybrid";
+            }
+
+            if (actionType == ConversationActionType.Rewrite)
+            {
+                return "rewrite";
+            }
+
+            return "none";
         }
 
         /// <summary>
@@ -371,6 +744,24 @@ namespace SmartWord.AddIn.UI.Web
             }
 
             return "writing";
+        }
+
+        /// <summary>
+        /// 进行中轮次状态。
+        /// </summary>
+        private sealed class InflightTurnState
+        {
+            public InflightTurnState(string sessionId, CancellationTokenSource cancellationTokenSource)
+            {
+                SessionId = sessionId ?? string.Empty;
+                CancellationTokenSource = cancellationTokenSource ?? throw new ArgumentNullException("cancellationTokenSource");
+            }
+
+            public string SessionId { get; private set; }
+
+            public CancellationTokenSource CancellationTokenSource { get; private set; }
+
+            public Task<ChatTurnResult> TurnTask { get; set; }
         }
 
         /// <summary>
