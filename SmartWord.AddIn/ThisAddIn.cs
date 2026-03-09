@@ -20,6 +20,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Forms;
 using WinFormsApplication = System.Windows.Forms.Application;
 
 namespace SmartWord.AddIn
@@ -68,7 +69,10 @@ namespace SmartWord.AddIn
                 RegisterGlobalExceptionLogging();
                 _logger.Info("app.start", "SmartWord startup. BaseDirectory={BaseDirectory}", AppDomain.CurrentDomain.BaseDirectory);
                 // 在启动线程捕获同步上下文，用于后续将 COM 访问统一封送回 Word 主线程。
-                IWordThreadInvoker wordThreadInvoker = new WordThreadInvoker(SynchronizationContext.Current, Thread.CurrentThread.ManagedThreadId);
+                // 某些宿主环境下 Startup 阶段可能尚未安装同步上下文，此处提供 WinForms 兜底，
+                // 避免自动模式异步切换线程后无法回到 Word 主线程执行 COM 调用。
+                SynchronizationContext wordSyncContext = EnsureWordSynchronizationContext();
+                IWordThreadInvoker wordThreadInvoker = new WordThreadInvoker(wordSyncContext, Thread.CurrentThread.ManagedThreadId);
 
                 // Step 1. 初始化基础能力：通知、撤销域与 VBA 执行器。
                 _undoScopeFactory = new WordUndoScopeFactory(Application, _notificationService, wordThreadInvoker);
@@ -297,6 +301,26 @@ namespace SmartWord.AddIn
 
             _logger.Warn("embedding.init.local", "Remote embedding is not configured. Using local embedding service.");
             return new LocalEmbeddingService();
+        }
+
+        /// <summary>
+        /// 获取可用于回调 Word 主线程的同步上下文。
+        /// </summary>
+        /// <returns>可用同步上下文。</returns>
+        private SynchronizationContext EnsureWordSynchronizationContext()
+        {
+            SynchronizationContext context = SynchronizationContext.Current;
+            if (context != null)
+            {
+                return context;
+            }
+
+            // Startup 阶段若上下文缺失，主动安装 WinForms 同步上下文。
+            // 这样后续异步流程（如自动模式路由后进入检索）可稳定封送回 Word 主线程。
+            context = new WindowsFormsSynchronizationContext();
+            SynchronizationContext.SetSynchronizationContext(context);
+            _logger.Warn("threading.sync-context.fallback", "SynchronizationContext was null during startup. Installed WindowsFormsSynchronizationContext fallback.");
+            return context;
         }
 
         /// <summary>
