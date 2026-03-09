@@ -10,6 +10,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 // 文件说明：
@@ -97,7 +98,7 @@ namespace SmartWord.Services.Conversation
         /// </summary>
         /// <param name="request">对话轮次请求。</param>
         /// <returns>轮次结果。</returns>
-        public async Task<ChatTurnResult> RunTurnAsync(ChatTurnRequest request)
+        public async Task<ChatTurnResult> RunTurnAsync(ChatTurnRequest request, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (request == null || string.IsNullOrWhiteSpace(request.UserMessage))
             {
@@ -110,6 +111,8 @@ namespace SmartWord.Services.Conversation
                     ResolvedMode = ConversationRouteType.Writing
                 };
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             string correlationId = Guid.NewGuid().ToString("N");
             var stopwatch = Stopwatch.StartNew();
@@ -144,7 +147,7 @@ namespace SmartWord.Services.Conversation
                             RetrievedContext = string.Empty,
                             ModelOverride = request.ModelOverride,
                             ModeLock = request.ModeLock
-                        }).ConfigureAwait(false);
+                        }, cancellationToken).ConfigureAwait(false);
 
                         ConversationRouteType resolvedMode = NormalizeRouteType(route == null ? ConversationRouteType.Writing : route.RouteType);
                         _logger.Info(
@@ -166,7 +169,7 @@ namespace SmartWord.Services.Conversation
                                 SelectedText = selectedText,
                                 MaxChunks = 5,
                                 ModelOverride = request.ModelOverride
-                            }).ConfigureAwait(false);
+                            }, cancellationToken).ConfigureAwait(false);
                             _logger.Info(
                                 "chat.retrieval.end",
                                 "Retrieval completed for QA mode. SessionId={SessionId} ChunkCount={ChunkCount}",
@@ -179,14 +182,17 @@ namespace SmartWord.Services.Conversation
 
                         if (resolvedMode == ConversationRouteType.Qa)
                         {
-                            assistantReply = await BuildQuestionAnswerReplyAsync(route, request, selectedText, retrieved).ConfigureAwait(false);
+                            assistantReply = await BuildQuestionAnswerReplyAsync(route, request, selectedText, retrieved, cancellationToken).ConfigureAwait(false);
                         }
                         else
                         {
                             // 非问答模式统一走“先建议后执行”流程。
-                            pendingAction = await BuildPendingActionAsync(resolvedMode, route, request, selectedText, retrieved).ConfigureAwait(false);
+                            pendingAction = await BuildPendingActionAsync(resolvedMode, route, request, selectedText, retrieved, cancellationToken).ConfigureAwait(false);
                             assistantReply = BuildAssistantReply(resolvedMode, route, pendingAction, selectedText);
                         }
+
+                        // 取消请求到达后不写入本轮消息与待执行动作，避免污染会话历史。
+                        cancellationToken.ThrowIfCancellationRequested();
 
                         session.Messages.Add(new ConversationMessage
                         {
@@ -235,6 +241,17 @@ namespace SmartWord.Services.Conversation
 
                         return result;
                     }
+                }
+                catch (OperationCanceledException)
+                {
+                    stopwatch.Stop();
+                    _logger.Warn(
+                        "chat.turn.cancelled",
+                        "RunTurn cancelled. SessionId={SessionId} UserMessage={UserMessage} DurationMs={DurationMs}",
+                        request.SessionId,
+                        request.UserMessage,
+                        stopwatch.ElapsedMilliseconds);
+                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -395,12 +412,15 @@ namespace SmartWord.Services.Conversation
             RouteDecision route,
             ChatTurnRequest request,
             string selectedText,
-            RetrievedContext retrieved)
+            RetrievedContext retrieved,
+            CancellationToken cancellationToken)
         {
             if (resolvedMode == ConversationRouteType.Qa)
             {
                 return null;
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             string mergedInstruction = BuildMergedInstruction(request.UserMessage, retrieved);
             string rewriteSource = string.IsNullOrWhiteSpace(selectedText)
@@ -439,7 +459,7 @@ namespace SmartWord.Services.Conversation
                     SelectedText = rewriteSource,
                     ModelOverride = request.ModelOverride,
                     PromptVersion = request.PromptVersion
-                }).ConfigureAwait(false);
+                }, cancellationToken).ConfigureAwait(false);
             }
 
             if (shouldGenerateVba)
@@ -451,7 +471,7 @@ namespace SmartWord.Services.Conversation
                     ModelOverride = request.ModelOverride,
                     PromptVersion = request.PromptVersion,
                     EntryPoint = "SmartWord_Run"
-                }).ConfigureAwait(false);
+                }, cancellationToken).ConfigureAwait(false);
             }
 
             bool hasRewrite = !string.IsNullOrWhiteSpace(action.RewriteText);
@@ -493,7 +513,8 @@ namespace SmartWord.Services.Conversation
             RouteDecision route,
             ChatTurnRequest request,
             string selectedText,
-            RetrievedContext retrieved)
+            RetrievedContext retrieved,
+            CancellationToken cancellationToken)
         {
             string retrievedContext = retrieved == null ? string.Empty : retrieved.CombinedText;
             if (string.IsNullOrWhiteSpace(retrievedContext))
@@ -509,7 +530,7 @@ namespace SmartWord.Services.Conversation
                 RetrievedContext = retrievedContext,
                 ModelOverride = request.ModelOverride,
                 PromptVersion = request.PromptVersion
-            }).ConfigureAwait(false);
+            }, cancellationToken).ConfigureAwait(false);
             _logger.Info("qa.request.end", "QA request completed. AnswerLength={AnswerLength}", string.IsNullOrWhiteSpace(answer) ? 0 : answer.Length);
 
             if (string.IsNullOrWhiteSpace(answer))
@@ -597,7 +618,9 @@ namespace SmartWord.Services.Conversation
             if (!string.IsNullOrWhiteSpace(action.VbaCode))
             {
                 builder.AppendLine("已生成执行脚本（预览）：");
-                builder.AppendLine(TrimForPreview(action.VbaCode, 300));
+                builder.AppendLine("```vba");
+                builder.AppendLine(TrimForPreview(action.VbaCode, 3000));
+                builder.AppendLine("```");
             }
 
             builder.Append("点击“确认执行”后才会修改文档。\n");
