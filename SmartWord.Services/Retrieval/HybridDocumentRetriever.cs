@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 // 文件说明：
@@ -43,8 +44,10 @@ namespace SmartWord.Services.Retrieval
         /// </summary>
         /// <param name="query">检索查询。</param>
         /// <returns>检索上下文。</returns>
-        public async Task<RetrievedContext> RetrieveAsync(DocumentQuery query)
+        public async Task<RetrievedContext> RetrieveAsync(DocumentQuery query, CancellationToken cancellationToken = default(CancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             var snapshot = _chunkProvider.CaptureSnapshot();
             var context = new RetrievedContext
             {
@@ -67,6 +70,8 @@ namespace SmartWord.Services.Retrieval
                 snapshot.Chunks,
                 _embeddingService,
                 query == null ? null : query.ModelOverride);
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             float[] queryVector = _embeddingService == null
                 ? new float[0]
@@ -92,7 +97,7 @@ namespace SmartWord.Services.Retrieval
                 .ToList();
 
             // 第三阶段：可选 LLM 重排，提升候选精度。
-            List<ScoredChunk> reranked = await TryRerankAsync(topCandidates, queryText, query == null ? null : query.ModelOverride);
+            List<ScoredChunk> reranked = await TryRerankAsync(topCandidates, queryText, query == null ? null : query.ModelOverride, cancellationToken);
             List<ScoredChunk> finalChunks = reranked
                 .OrderByDescending(item => item.TotalScore)
                 .Take(maxChunks)
@@ -125,7 +130,7 @@ namespace SmartWord.Services.Retrieval
         /// <summary>
         /// 尝试使用模型对候选分片进行重排。
         /// </summary>
-        private async Task<List<ScoredChunk>> TryRerankAsync(List<ScoredChunk> candidates, string queryText, string modelOverride)
+        private async Task<List<ScoredChunk>> TryRerankAsync(List<ScoredChunk> candidates, string queryText, string modelOverride, CancellationToken cancellationToken)
         {
             if (candidates == null || candidates.Count <= 1 || _modelService == null)
             {
@@ -134,12 +139,15 @@ namespace SmartWord.Services.Retrieval
 
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
+
                 string prompt = BuildRerankPrompt(queryText, candidates);
                 string response = await _modelService.ChatWithPromptsAsync(
                     "You are a retrieval reranker. Return only ordered chunk ids separated by commas.",
                     prompt,
                     modelOverride,
-                    0.0d);
+                    0.0d,
+                    cancellationToken);
 
                 if (string.IsNullOrWhiteSpace(response))
                 {
