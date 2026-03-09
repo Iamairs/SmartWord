@@ -5,6 +5,7 @@ using System.Net.Http.Headers;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Diagnostics;
 using SmartWord.Core.Abstractions;
@@ -52,7 +53,7 @@ namespace SmartWord.Services.Model
         /// </summary>
         /// <param name="request">改写请求。</param>
         /// <returns>改写结果文本。</returns>
-        public Task<string> RewriteTextAsync(EditorRewriteRequest request)
+        public Task<string> RewriteTextAsync(EditorRewriteRequest request, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (request == null || string.IsNullOrWhiteSpace(request.SelectedText))
             {
@@ -68,7 +69,8 @@ namespace SmartWord.Services.Model
                 _options.ResolveModel(request.ModelOverride),
                 promptPair.SystemPrompt,
                 promptPair.UserPrompt,
-                0.3d);
+                0.3d,
+                cancellationToken);
         }
 
         /// <summary>
@@ -76,7 +78,7 @@ namespace SmartWord.Services.Model
         /// </summary>
         /// <param name="request">VBA 生成请求。</param>
         /// <returns>VBA 代码文本。</returns>
-        public Task<string> GenerateVbaCodeAsync(VbaGenerationRequest request)
+        public Task<string> GenerateVbaCodeAsync(VbaGenerationRequest request, CancellationToken cancellationToken = default(CancellationToken))
         {
             string entryPoint = request != null && !string.IsNullOrWhiteSpace(request.EntryPoint)
                 ? request.EntryPoint
@@ -95,7 +97,8 @@ namespace SmartWord.Services.Model
                 _options.ResolveModel(request == null ? null : request.ModelOverride),
                 promptPair.SystemPrompt,
                 promptPair.UserPrompt,
-                0.1d);
+                0.1d,
+                cancellationToken);
         }
 
         /// <summary>
@@ -103,7 +106,7 @@ namespace SmartWord.Services.Model
         /// </summary>
         /// <param name="request">问答请求。</param>
         /// <returns>问答结果文本。</returns>
-        public Task<string> AnswerQuestionAsync(DocumentQaRequest request)
+        public Task<string> AnswerQuestionAsync(DocumentQaRequest request, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (request == null || string.IsNullOrWhiteSpace(request.Question))
             {
@@ -120,7 +123,8 @@ namespace SmartWord.Services.Model
                 _options.ResolveModel(request.ModelOverride),
                 promptPair.SystemPrompt,
                 promptPair.UserPrompt,
-                0.2d);
+                0.2d,
+                cancellationToken);
         }
 
         /// <summary>
@@ -131,21 +135,24 @@ namespace SmartWord.Services.Model
         /// <param name="modelOverride">模型覆盖项。</param>
         /// <param name="temperature">采样温度。</param>
         /// <returns>模型响应文本。</returns>
-        public Task<string> ChatWithPromptsAsync(string systemPrompt, string userPrompt, string modelOverride, double temperature)
+        public Task<string> ChatWithPromptsAsync(string systemPrompt, string userPrompt, string modelOverride, double temperature, CancellationToken cancellationToken = default(CancellationToken))
         {
             return ExecuteChatAsync(
                 _options.ResolveModel(modelOverride),
                 systemPrompt ?? string.Empty,
                 userPrompt ?? string.Empty,
-                temperature);
+                temperature,
+                cancellationToken);
         }
 
         /// <summary>
         /// 发起聊天完成请求并返回首条响应内容。
         /// </summary>
-        private async Task<string> ExecuteChatAsync(string model, string systemPrompt, string userPrompt, double temperature)
+        private async Task<string> ExecuteChatAsync(string model, string systemPrompt, string userPrompt, double temperature, CancellationToken cancellationToken)
         {
             var stopwatch = Stopwatch.StartNew();
+            cancellationToken.ThrowIfCancellationRequested();
+
             var request = new ChatCompletionRequest
             {
                 model = model,
@@ -175,7 +182,7 @@ namespace SmartWord.Services.Model
                 httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
                 httpRequest.Content = new StringContent(requestJson, Encoding.UTF8, "application/json");
 
-                using (HttpResponseMessage response = await SharedHttpClient.SendAsync(httpRequest).ConfigureAwait(false))
+                using (HttpResponseMessage response = await SharedHttpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false))
                 {
                     string responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                     stopwatch.Stop();
@@ -199,6 +206,8 @@ namespace SmartWord.Services.Model
                         throw new InvalidOperationException(
                             "LLM API request failed (" + (int)response.StatusCode + "): " + TrimForError(responseBody));
                     }
+
+                    cancellationToken.ThrowIfCancellationRequested();
 
                     var chatResponse = Deserialize<ChatCompletionResponse>(responseBody);
                     if (chatResponse == null ||

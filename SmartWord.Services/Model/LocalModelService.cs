@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using SmartWord.Core.Abstractions;
 using SmartWord.Core.Models;
@@ -18,8 +19,10 @@ namespace SmartWord.Services.Model
         /// </summary>
         /// <param name="request">改写请求。</param>
         /// <returns>改写结果。</returns>
-        public Task<string> RewriteTextAsync(EditorRewriteRequest request)
+        public Task<string> RewriteTextAsync(EditorRewriteRequest request, CancellationToken cancellationToken = default(CancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (request == null || string.IsNullOrWhiteSpace(request.SelectedText))
             {
                 return Task.FromResult(string.Empty);
@@ -52,8 +55,10 @@ namespace SmartWord.Services.Model
         /// </summary>
         /// <param name="request">VBA 生成请求。</param>
         /// <returns>VBA 代码文本。</returns>
-        public Task<string> GenerateVbaCodeAsync(VbaGenerationRequest request)
+        public Task<string> GenerateVbaCodeAsync(VbaGenerationRequest request, CancellationToken cancellationToken = default(CancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             int fontSize = 16;
             if (request != null && !string.IsNullOrWhiteSpace(request.Instruction))
             {
@@ -82,8 +87,10 @@ namespace SmartWord.Services.Model
         /// <param name="modelOverride">模型覆盖项（本地实现中不使用）。</param>
         /// <param name="temperature">温度参数（本地实现中不使用）。</param>
         /// <returns>路由 JSON 文本。</returns>
-        public Task<string> ChatWithPromptsAsync(string systemPrompt, string userPrompt, string modelOverride, double temperature)
+        public Task<string> ChatWithPromptsAsync(string systemPrompt, string userPrompt, string modelOverride, double temperature, CancellationToken cancellationToken = default(CancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             string system = (systemPrompt ?? string.Empty).ToLowerInvariant();
             string prompt = (userPrompt ?? string.Empty).ToLowerInvariant();
 
@@ -154,8 +161,10 @@ namespace SmartWord.Services.Model
         /// </summary>
         /// <param name="request">问答请求。</param>
         /// <returns>问答文本。</returns>
-        public Task<string> AnswerQuestionAsync(DocumentQaRequest request)
+        public Task<string> AnswerQuestionAsync(DocumentQaRequest request, CancellationToken cancellationToken = default(CancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (request == null || string.IsNullOrWhiteSpace(request.Question))
             {
                 return Task.FromResult(string.Empty);
