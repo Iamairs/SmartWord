@@ -1,0 +1,33 @@
+﻿:root {
+  --sw-font: "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei UI", sans-serif;
+
+  --sw-bg-0: #e7f2ff;
+  --sw-bg-1: #f3f7fc;
+  --sw-bg-2: #ffffff;
+  --sw-bg-3: #edf3fb;
+
+  --sw-ink-1: #102037;
+  --sw-ink-2: #314766;
+  --sw-ink-3: #5d7395;
+
+  --sw-primary: #0b6dff;
+  --sw-primary-strong: #0058d6;
+  --sw-accent: #0d9488;
+  --sw-warn: #d97706;
+  --sw-danger: #dc2626;
+
+  --sw-line: #d2deef;
+  --sw-line-strong: #b6c8e3;
+
+  --sw-radius-sm: 10px;
+  --sw-radius-md: 14px;
+  --sw-radius-lg: 18px;
+
+  --sw-shadow-1: 0 8px 28px rgba(15, 61, 126, 0.08);
+  --sw-shadow-2: 0 12px 34px rgba(9, 48, 104, 0.12);
+
+  --sw-gap-1: 8px;
+  --sw-gap-2: 12px;
+  --sw-gap-3: 16px;
+  --sw-gap-4: 20px;
+}
