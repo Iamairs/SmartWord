@@ -233,6 +233,9 @@
     <None Include="WebClient\src\App.vue" />
     <None Include="WebClient\src\main.js" />
     <None Include="WebClient\src\style.css" />
+    <None Include="WebClient\src\styles\app.css" />
+    <None Include="WebClient\src\styles\theme.css" />
+    <None Include="WebClient\src\styles\tokens.css" />
     <Compile Include="Properties\Settings.Designer.cs">
       <AutoGen>True</AutoGen>
       <DependentUpon>Settings.settings</DependentUpon>
