@@ -1,5 +1,6 @@
 ﻿using SmartWord.Core.Models.Conversation;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 
 // 文件说明：
@@ -34,8 +35,9 @@ namespace SmartWord.Core.Orchestration.Conversation
         /// 执行一次完整对话轮次。
         /// </summary>
         /// <param name="request">轮次请求。</param>
+        /// <param name="cancellationToken">取消令牌。</param>
         /// <returns>轮次执行结果。</returns>
-        Task<ChatTurnResult> RunTurnAsync(ChatTurnRequest request);
+        Task<ChatTurnResult> RunTurnAsync(ChatTurnRequest request, CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>
         /// 应用已确认的待执行动作。

@@ -1,5 +1,6 @@
 ﻿using SmartWord.Core.Models;
 using SmartWord.Core.Models.Conversation;
+using System.Threading;
 using System.Threading.Tasks;
 
 // 文件说明：
@@ -16,14 +17,14 @@ namespace SmartWord.Core.Abstractions
         /// </summary>
         /// <param name="request">重写请求参数。</param>
         /// <returns>模型返回的改写结果文本。</returns>
-        Task<string> RewriteTextAsync(EditorRewriteRequest request);
+        Task<string> RewriteTextAsync(EditorRewriteRequest request, CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>
         /// 根据用户指令生成可执行的 VBA 代码。
         /// </summary>
         /// <param name="request">VBA 生成请求参数。</param>
         /// <returns>模型返回的 VBA 源码字符串。</returns>
-        Task<string> GenerateVbaCodeAsync(VbaGenerationRequest request);
+        Task<string> GenerateVbaCodeAsync(VbaGenerationRequest request, CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>
         /// 通用对话接口，供路由、重排与其他提示词驱动场景复用。
@@ -33,13 +34,13 @@ namespace SmartWord.Core.Abstractions
         /// <param name="modelOverride">模型覆盖项；为空时由实现层决定默认模型。</param>
         /// <param name="temperature">采样温度。</param>
         /// <returns>模型对话响应文本。</returns>
-        Task<string> ChatWithPromptsAsync(string systemPrompt, string userPrompt, string modelOverride, double temperature);
+        Task<string> ChatWithPromptsAsync(string systemPrompt, string userPrompt, string modelOverride, double temperature, CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>
         /// 根据文档上下文回答用户问题。
         /// </summary>
         /// <param name="request">问答请求参数。</param>
         /// <returns>问答结果文本。</returns>
-        Task<string> AnswerQuestionAsync(DocumentQaRequest request);
+        Task<string> AnswerQuestionAsync(DocumentQaRequest request, CancellationToken cancellationToken = default(CancellationToken));
     }
 }
