@@ -3,6 +3,7 @@ using SmartWord.Core.Abstractions.Conversation;
 using SmartWord.Core.Models.Conversation;
 using System;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 // 文件说明：
@@ -30,7 +31,7 @@ namespace SmartWord.Services.Routing
         /// </summary>
         /// <param name="input">路由输入。</param>
         /// <returns>路由决策结果。</returns>
-        public async Task<RouteDecision> DecideRouteAsync(RouteInput input)
+        public async Task<RouteDecision> DecideRouteAsync(RouteInput input, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (input != null && input.ModeLock.HasValue)
             {
@@ -55,6 +56,8 @@ namespace SmartWord.Services.Routing
                 };
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             try
             {
                 // 优先使用模型路由，提升复杂场景识别准确性。
@@ -62,7 +65,8 @@ namespace SmartWord.Services.Routing
                     BuildSystemPrompt(),
                     BuildUserPrompt(input),
                     input.ModelOverride,
-                    0.0d).ConfigureAwait(false);
+                    0.0d,
+                    cancellationToken).ConfigureAwait(false);
 
                 RouteDecision parsed = ParseModelRoute(modelReply);
                 if (parsed != null)
