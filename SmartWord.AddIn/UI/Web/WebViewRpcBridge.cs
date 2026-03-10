@@ -1,4 +1,4 @@
-using SmartWord.Core.Models.Conversation;
+﻿using SmartWord.Core.Models.Conversation;
 using SmartWord.Core.Orchestration.Conversation;
 using SmartWord.Core.Abstractions;
 using SmartWord.Services.Logging;
@@ -19,9 +19,15 @@ namespace SmartWord.AddIn.UI.Web
     {
         private const string ProtocolVersion = "1.0";
         private readonly IConversationOrchestrator _conversationOrchestrator;
+        private readonly ISelectionService _selectionService;
         private readonly string[] _availableModels;
         private readonly string _defaultModel;
         private readonly string _defaultPromptVersion;
+        private readonly int _defaultBm25CandidateCount;
+        private readonly int _defaultDenseCandidateCount;
+        private readonly int _defaultRerankCandidateCount;
+        private readonly int _defaultMaxContextCharacters;
+        private readonly int _defaultNeighborWindow;
         private readonly IAppLogger _logger;
         private readonly JavaScriptSerializer _serializer;
         private readonly ConcurrentDictionary<string, InflightTurnState> _inflightTurns;
@@ -31,15 +37,27 @@ namespace SmartWord.AddIn.UI.Web
         /// </summary>
         public WebViewRpcBridge(
             IConversationOrchestrator conversationOrchestrator,
+            ISelectionService selectionService,
             string[] availableModels,
             string defaultModel,
             string defaultPromptVersion,
+            int defaultBm25CandidateCount,
+            int defaultDenseCandidateCount,
+            int defaultRerankCandidateCount,
+            int defaultMaxContextCharacters,
+            int defaultNeighborWindow,
             IAppLogger logger)
         {
             _conversationOrchestrator = conversationOrchestrator;
+            _selectionService = selectionService;
             _availableModels = availableModels ?? new string[0];
             _defaultModel = defaultModel ?? string.Empty;
             _defaultPromptVersion = defaultPromptVersion ?? string.Empty;
+            _defaultBm25CandidateCount = defaultBm25CandidateCount;
+            _defaultDenseCandidateCount = defaultDenseCandidateCount;
+            _defaultRerankCandidateCount = defaultRerankCandidateCount;
+            _defaultMaxContextCharacters = defaultMaxContextCharacters;
+            _defaultNeighborWindow = defaultNeighborWindow;
             _logger = logger ?? NullAppLogger.Instance;
             _serializer = new JavaScriptSerializer();
             _inflightTurns = new ConcurrentDictionary<string, InflightTurnState>(StringComparer.OrdinalIgnoreCase);
@@ -138,6 +156,11 @@ namespace SmartWord.AddIn.UI.Web
                 return await HandleApplyActionAsync(payload).ConfigureAwait(false);
             }
 
+            if (normalized == "citation.navigate")
+            {
+                return HandleNavigateCitation(payload);
+            }
+
             if (normalized == "action.cancellocal")
             {
                 return new Dictionary<string, object>
@@ -181,7 +204,12 @@ namespace SmartWord.AddIn.UI.Web
                 UserMessage = userMessage,
                 ModelOverride = ReadString(payload, "modelOverride"),
                 PromptVersion = ReadString(payload, "promptVersion"),
-                ModeLock = ParseModeLock(ReadString(payload, "modeLock"))
+                ModeLock = ParseModeLock(ReadString(payload, "modeLock")),
+                Bm25CandidateCount = ReadInt(payload, "bm25CandidateCount"),
+                DenseCandidateCount = ReadInt(payload, "denseCandidateCount"),
+                RerankCandidateCount = ReadInt(payload, "rerankCandidateCount"),
+                MaxContextCharacters = ReadInt(payload, "maxContextCharacters"),
+                NeighborWindow = ReadInt(payload, "neighborWindow")
             };
 
             var inflight = new InflightTurnState(sessionId, new CancellationTokenSource());
@@ -302,6 +330,63 @@ namespace SmartWord.AddIn.UI.Web
         }
 
         /// <summary>
+        /// 处理引用片段定位请求。
+        /// </summary>
+        /// <param name="payload">请求参数。</param>
+        /// <returns>定位结果。</returns>
+        private object HandleNavigateCitation(Dictionary<string, object> payload)
+        {
+            int start = ReadInt(payload, "position");
+            int end = ReadInt(payload, "endPosition");
+            string chunkId = ReadString(payload, "chunkId");
+
+            if (_selectionService == null)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "ok", false },
+                    { "message", "当前环境不支持定位引用片段。" }
+                };
+            }
+
+            if (start <= 0)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "ok", false },
+                    { "message", "引用片段缺少可定位的段落信息。" }
+                };
+            }
+
+            if (end <= 0 || end < start)
+            {
+                end = start;
+            }
+
+            try
+            {
+                _selectionService.SelectParagraphRange(start, end);
+            }
+            catch (Exception ex)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "ok", false },
+                    { "message", "定位引用片段失败：" + ex.Message }
+                };
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "ok", true },
+                { "position", start },
+                { "endPosition", end },
+                { "chunkId", chunkId ?? string.Empty },
+                { "message", "已定位到文档中的参考片段。" }
+            };
+        }
+
+        /// <summary>
         /// 构建会话数据响应。
         /// </summary>
         private async Task<Dictionary<string, object>> BuildSessionsPayloadAsync(string preferredSessionId)
@@ -335,6 +420,15 @@ namespace SmartWord.AddIn.UI.Web
                 { "availableModels", _availableModels },
                 { "defaultModel", _defaultModel },
                 { "defaultPromptVersion", _defaultPromptVersion },
+                { "retrievalDefaults", new Dictionary<string, object>
+                    {
+                        { "bm25CandidateCount", _defaultBm25CandidateCount },
+                        { "denseCandidateCount", _defaultDenseCandidateCount },
+                        { "rerankCandidateCount", _defaultRerankCandidateCount },
+                        { "maxContextCharacters", _defaultMaxContextCharacters },
+                        { "neighborWindow", _defaultNeighborWindow }
+                    }
+                },
                 { "modeOptions", new object[]
                     {
                         new Dictionary<string, object> { { "key", string.Empty }, { "label", "自动" } },
@@ -393,6 +487,7 @@ namespace SmartWord.AddIn.UI.Web
                 {
                     { "role", message == null ? string.Empty : (message.Role ?? string.Empty) },
                     { "content", message == null ? string.Empty : (message.Content ?? string.Empty) },
+                    { "metadata", message == null ? string.Empty : (message.Metadata ?? string.Empty) },
                     { "timestampUtc", message == null ? string.Empty : message.TimestampUtc.ToString("o", CultureInfo.InvariantCulture) }
                 });
             }
@@ -885,5 +980,46 @@ namespace SmartWord.AddIn.UI.Web
             var result = value as Dictionary<string, object>;
             return result ?? new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
         }
+
+        /// <summary>
+        /// 从字典读取整数字段。
+        /// </summary>
+        private static int ReadInt(Dictionary<string, object> dictionary, string key)
+        {
+            if (dictionary == null || string.IsNullOrWhiteSpace(key))
+            {
+                return 0;
+            }
+
+            object value;
+            if (!dictionary.TryGetValue(key, out value) || value == null)
+            {
+                return 0;
+            }
+
+            int intValue;
+            if (value is int)
+            {
+                return (int)value;
+            }
+
+            if (value is long)
+            {
+                return (int)(long)value;
+            }
+
+            if (value is double)
+            {
+                return (int)(double)value;
+            }
+
+            if (int.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture), NumberStyles.Integer, CultureInfo.InvariantCulture, out intValue))
+            {
+                return intValue;
+            }
+
+            return 0;
+        }
     }
 }
+
