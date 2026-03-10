@@ -75,6 +75,35 @@ public sealed class ConversationModeTests
     }
 
     [TestMethod]
+    public async Task RunTurnAsync_QaRoute_WritesCitationMetadataAndReadableReferences()
+    {
+        var store = new InMemoryConversationStore();
+        var retriever = new FixedRetriever("doc-qa", "[8] 这是问答上下文", "c1_abc", 8, 10);
+        var routeService = new FixedRouteService(ConversationRouteType.Qa);
+        var modelService = new FakeModelService
+        {
+            QaAnswer = "这是基于引用片段生成的答案。"
+        };
+        var orchestrator = BuildOrchestrator(store, retriever, routeService, modelService, string.Empty);
+
+        ChatTurnResult result = await orchestrator.RunTurnAsync(new ChatTurnRequest
+        {
+            UserMessage = "请总结研究目标。"
+        });
+
+        ConversationSession session = await store.GetSessionAsync(result.SessionId);
+        Assert.IsNotNull(session);
+        Assert.IsTrue(session.Messages.Count >= 2);
+
+        ConversationMessage assistantMessage = session.Messages[session.Messages.Count - 1];
+        StringAssert.Contains(assistantMessage.Content ?? string.Empty, "第8-10段");
+        Assert.IsFalse((assistantMessage.Content ?? string.Empty).Contains("c1_abc"));
+        StringAssert.Contains(assistantMessage.Metadata ?? string.Empty, "\"citations\"");
+        StringAssert.Contains(assistantMessage.Metadata ?? string.Empty, "\"position\":8");
+        StringAssert.Contains(assistantMessage.Metadata ?? string.Empty, "\"endPosition\":10");
+    }
+
+    [TestMethod]
     public async Task RunTurnAsync_QaRouteNoContext_ReturnsGuidanceMessage()
     {
         var store = new InMemoryConversationStore();
@@ -244,12 +273,16 @@ public sealed class ConversationModeTests
         private readonly string _documentId;
         private readonly string _combinedText;
         private readonly string _chunkId;
+        private readonly int _position;
+        private readonly int _endPosition;
 
-        public FixedRetriever(string documentId, string combinedText, string chunkId)
+        public FixedRetriever(string documentId, string combinedText, string chunkId, int position = 1, int endPosition = 1)
         {
             _documentId = documentId;
             _combinedText = combinedText;
             _chunkId = chunkId;
+            _position = position;
+            _endPosition = endPosition <= 0 ? position : endPosition;
         }
 
         public Task<RetrievedContext> RetrieveAsync(DocumentQuery query, CancellationToken cancellationToken = default(CancellationToken))
@@ -266,7 +299,8 @@ public sealed class ConversationModeTests
                 {
                     ChunkId = _chunkId,
                     Text = _combinedText,
-                    Position = 1,
+                    Position = _position,
+                    EndPosition = _endPosition,
                     Score = 0.8d
                 });
             }
@@ -308,6 +342,10 @@ public sealed class ConversationModeTests
         }
 
         public void ReplaceSelection(string newText)
+        {
+        }
+
+        public void SelectParagraphRange(int startParagraphIndex, int endParagraphIndex)
         {
         }
     }
