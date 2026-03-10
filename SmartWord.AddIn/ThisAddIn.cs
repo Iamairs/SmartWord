@@ -91,8 +91,8 @@ namespace SmartWord.AddIn
                 // Step 3. 组装会话编排链路（会话存储 + 检索 + 路由 + 执行）。
                 var conversationStore = new FileConversationStore(_apiOptions.ChatStorePath, _logger);
                 var chunkProvider = new WordDocumentChunkProvider(Application, wordThreadInvoker);
-                var vectorIndexStore = new VectorIndexStore(_apiOptions.VectorIndexDirectory);
-                var documentRetriever = new HybridDocumentRetriever(chunkProvider, embeddingService, vectorIndexStore, modelService);
+                var documentIndexStore = new DocumentIndexStore(_apiOptions.VectorIndexDirectory);
+                var documentRetriever = new HybridDocumentRetriever(chunkProvider, embeddingService, documentIndexStore, modelService);
                 var routeService = new CommandRouteService(modelService);
                 _conversationOrchestrator = new ConversationOrchestrator(
                     conversationStore,
@@ -113,10 +113,16 @@ namespace SmartWord.AddIn
                 _taskPaneManager = new TaskPaneManager(
                     this,
                     _conversationOrchestrator,
+                    selectionService,
                     _notificationService,
                     _availableModels,
                     _defaultModel,
                     _defaultPromptVersion,
+                    _apiOptions.RetrievalBm25CandidateCount,
+                    _apiOptions.RetrievalDenseCandidateCount,
+                    _apiOptions.RetrievalRerankCandidateCount,
+                    _apiOptions.RetrievalMaxContextCharacters,
+                    _apiOptions.RetrievalNeighborWindow,
                     _logger);
 
                 try
