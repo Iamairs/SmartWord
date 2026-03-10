@@ -87,6 +87,85 @@ namespace SmartWord.Services.Selection
         }
 
         /// <summary>
+        /// 选中指定段落范围并定位到该位置。
+        /// </summary>
+        /// <param name="startParagraphIndex">起始段落索引（1 基）。</param>
+        /// <param name="endParagraphIndex">结束段落索引（1 基）。</param>
+        public void SelectParagraphRange(int startParagraphIndex, int endParagraphIndex)
+        {
+            InvokeOnWordThread(() =>
+            {
+                if (_wordApplication == null)
+                {
+                    return;
+                }
+
+                if (startParagraphIndex <= 0 || endParagraphIndex <= 0)
+                {
+                    return;
+                }
+
+                if (endParagraphIndex < startParagraphIndex)
+                {
+                    endParagraphIndex = startParagraphIndex;
+                }
+
+                dynamic document = _wordApplication.ActiveDocument;
+                if (document == null)
+                {
+                    return;
+                }
+
+                dynamic paragraphs = document.Paragraphs;
+                if (paragraphs == null)
+                {
+                    return;
+                }
+
+                int paragraphCount = 0;
+                try
+                {
+                    paragraphCount = Convert.ToInt32(paragraphs.Count);
+                }
+                catch
+                {
+                    paragraphCount = 0;
+                }
+
+                if (paragraphCount <= 0)
+                {
+                    return;
+                }
+
+                int safeStart = Math.Max(1, Math.Min(startParagraphIndex, paragraphCount));
+                int safeEnd = Math.Max(safeStart, Math.Min(endParagraphIndex, paragraphCount));
+
+                dynamic startParagraph = paragraphs[safeStart];
+                dynamic endParagraph = paragraphs[safeEnd];
+                if (startParagraph == null || endParagraph == null)
+                {
+                    return;
+                }
+
+                int rangeStart = Convert.ToInt32(startParagraph.Range.Start);
+                int rangeEnd = Convert.ToInt32(endParagraph.Range.End);
+                if (rangeEnd < rangeStart)
+                {
+                    rangeEnd = rangeStart;
+                }
+
+                dynamic selection = _wordApplication.Selection;
+                if (selection == null)
+                {
+                    return;
+                }
+
+                selection.SetRange(rangeStart, rangeEnd);
+                selection.Range.Select();
+            });
+        }
+
+        /// <summary>
         /// 在 Word 主线程执行无返回值逻辑。
         /// </summary>
         /// <param name="action">待执行逻辑。</param>
