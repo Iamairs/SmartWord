@@ -6,6 +6,7 @@ using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 // 文件说明：
@@ -76,7 +77,7 @@ namespace SmartWord.Services.Storage
                         // 文本变更或缓存缺失时才重新计算向量，降低重复调用成本。
                         float[] vector = embeddingService == null
                             ? new float[0]
-                            : embeddingService.CreateEmbeddingAsync(chunk.Text ?? string.Empty, modelOverride).GetAwaiter().GetResult();
+                            : embeddingService.CreateEmbeddingAsync(chunk.Text ?? string.Empty, modelOverride, CancellationToken.None).GetAwaiter().GetResult();
 
                         if (item == null)
                         {
@@ -303,6 +304,11 @@ namespace SmartWord.Services.Storage
         public string ChunkId { get; set; }
 
         /// <summary>
+        /// 分片文本哈希。
+        /// </summary>
+        public string TextHash { get; set; }
+
+        /// <summary>
         /// 分片文本。
         /// </summary>
         public string Text { get; set; }
@@ -311,5 +317,35 @@ namespace SmartWord.Services.Storage
         /// 分片在文档中的位置。
         /// </summary>
         public int Position { get; set; }
+
+        /// <summary>
+        /// 分片在文档中的结束位置。
+        /// </summary>
+        public int EndPosition { get; set; }
+
+        /// <summary>
+        /// 分片词项数量。
+        /// </summary>
+        public int TokenCount { get; set; }
+
+        /// <summary>
+        /// 分片类型（如 Paragraph/Heading/TableCell）。
+        /// </summary>
+        public string ChunkType { get; set; }
+
+        /// <summary>
+        /// 分片所属章节路径。
+        /// </summary>
+        public string HeadingPath { get; set; }
+
+        /// <summary>
+        /// 分片首段样式名。
+        /// </summary>
+        public string StyleName { get; set; }
+
+        /// <summary>
+        /// 结构权威度分值（标题、定义、表格等会更高）。
+        /// </summary>
+        public double AuthorityScore { get; set; }
     }
 }
