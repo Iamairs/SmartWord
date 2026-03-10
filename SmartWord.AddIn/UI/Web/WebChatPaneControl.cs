@@ -30,10 +30,16 @@ namespace SmartWord.AddIn.UI.Web
         /// </summary>
         public WebChatPaneControl(
             IConversationOrchestrator conversationOrchestrator,
+            ISelectionService selectionService,
             INotificationService notificationService,
             string[] availableModels,
             string defaultModel,
             string defaultPromptVersion,
+            int defaultBm25CandidateCount,
+            int defaultDenseCandidateCount,
+            int defaultRerankCandidateCount,
+            int defaultMaxContextCharacters,
+            int defaultNeighborWindow,
             IAppLogger logger)
         {
             _notificationService = notificationService;
@@ -41,9 +47,15 @@ namespace SmartWord.AddIn.UI.Web
             _uiThreadId = Environment.CurrentManagedThreadId;
             _rpcBridge = new WebViewRpcBridge(
                 conversationOrchestrator,
+                selectionService,
                 availableModels,
                 defaultModel,
                 defaultPromptVersion,
+                defaultBm25CandidateCount,
+                defaultDenseCandidateCount,
+                defaultRerankCandidateCount,
+                defaultMaxContextCharacters,
+                defaultNeighborWindow,
                 _logger);
 
             _webView = new WebView2
