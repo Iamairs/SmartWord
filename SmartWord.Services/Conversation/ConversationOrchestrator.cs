@@ -8,6 +8,9 @@ using SmartWord.Services.Vba;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
+using System.Runtime.Serialization;
+using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -168,7 +171,12 @@ namespace SmartWord.Services.Conversation
                                 QueryText = request.UserMessage,
                                 SelectedText = selectedText,
                                 MaxChunks = 5,
-                                ModelOverride = request.ModelOverride
+                                ModelOverride = request.ModelOverride,
+                                Bm25CandidateCount = request.Bm25CandidateCount,
+                                DenseCandidateCount = request.DenseCandidateCount,
+                                RerankCandidateCount = request.RerankCandidateCount,
+                                MaxContextCharacters = request.MaxContextCharacters,
+                                NeighborWindow = request.NeighborWindow
                             }, cancellationToken).ConfigureAwait(false);
                             _logger.Info(
                                 "chat.retrieval.end",
@@ -179,10 +187,12 @@ namespace SmartWord.Services.Conversation
 
                         PendingAction pendingAction = null;
                         string assistantReply;
+                        string assistantMetadata = "{}";
 
                         if (resolvedMode == ConversationRouteType.Qa)
                         {
                             assistantReply = await BuildQuestionAnswerReplyAsync(route, request, selectedText, retrieved, cancellationToken).ConfigureAwait(false);
+                            assistantMetadata = BuildQuestionAnswerMetadata(retrieved);
                         }
                         else
                         {
@@ -207,7 +217,7 @@ namespace SmartWord.Services.Conversation
                             Role = "assistant",
                             Content = assistantReply,
                             TimestampUtc = DateTime.UtcNow,
-                            Metadata = "{}"
+                            Metadata = assistantMetadata
                         });
 
                         if (pendingAction != null)
@@ -557,10 +567,96 @@ namespace SmartWord.Services.Conversation
             if (!string.IsNullOrWhiteSpace(refs))
             {
                 builder.AppendLine();
-                builder.Append("参考片段：").Append(refs);
+                builder.Append("参考片段：").Append(refs).Append("（可在下方引用卡片悬浮预览，点击定位原文）");
             }
 
             return builder.ToString();
+        }
+
+        /// <summary>
+        /// 构建问答回复的结构化元数据，供前端引用卡片与跳转交互使用。
+        /// </summary>
+        /// <param name="retrieved">检索上下文。</param>
+        /// <returns>元数据 JSON。</returns>
+        private static string BuildQuestionAnswerMetadata(RetrievedContext retrieved)
+        {
+            var metadata = new AssistantMessageMetadata
+            {
+                Type = "qa",
+                Citations = BuildCitationMetadatas(retrieved)
+            };
+
+            return SerializeMetadata(metadata);
+        }
+
+        /// <summary>
+        /// 从检索结果提取引用元数据列表。
+        /// </summary>
+        /// <param name="retrieved">检索上下文。</param>
+        /// <returns>引用元数据集合。</returns>
+        private static CitationMetadata[] BuildCitationMetadatas(RetrievedContext retrieved)
+        {
+            if (retrieved == null || retrieved.Chunks == null || retrieved.Chunks.Count == 0)
+            {
+                return new CitationMetadata[0];
+            }
+
+            int maxCount = Math.Min(5, retrieved.Chunks.Count);
+            var items = new List<CitationMetadata>(maxCount);
+            for (int i = 0; i < maxCount; i++)
+            {
+                RetrievedChunk chunk = retrieved.Chunks[i];
+                if (chunk == null)
+                {
+                    continue;
+                }
+
+                int start = chunk.Position <= 0 ? 0 : chunk.Position;
+                int end = chunk.EndPosition <= 0 ? start : Math.Max(start, chunk.EndPosition);
+                items.Add(new CitationMetadata
+                {
+                    ChunkId = chunk.ChunkId ?? string.Empty,
+                    Position = start,
+                    EndPosition = end,
+                    Score = chunk.Score,
+                    Label = BuildChunkReferenceLabel(chunk),
+                    Preview = NormalizeCitationPreview(chunk.Text),
+                    ChunkType = chunk.ChunkType ?? string.Empty,
+                    HeadingPath = chunk.HeadingPath ?? string.Empty,
+                    StyleName = chunk.StyleName ?? string.Empty,
+                    CitationType = chunk.CitationType ?? string.Empty,
+                    AuthorityScore = chunk.AuthorityScore
+                });
+            }
+
+            return items.ToArray();
+        }
+
+        /// <summary>
+        /// 将元数据对象序列化为 JSON。
+        /// </summary>
+        /// <param name="metadata">元数据对象。</param>
+        /// <returns>JSON 字符串。</returns>
+        private static string SerializeMetadata(AssistantMessageMetadata metadata)
+        {
+            if (metadata == null)
+            {
+                return "{}";
+            }
+
+            try
+            {
+                var serializer = new DataContractJsonSerializer(typeof(AssistantMessageMetadata));
+                using (var stream = new MemoryStream())
+                {
+                    serializer.WriteObject(stream, metadata);
+                    return Encoding.UTF8.GetString(stream.ToArray());
+                }
+            }
+            catch
+            {
+                return "{}";
+            }
         }
 
         /// <summary>
@@ -719,10 +815,10 @@ namespace SmartWord.Services.Conversation
         }
 
         /// <summary>
-        /// 根据检索结果生成参考片段标识串。
+        /// 根据检索结果生成可读的参考片段标签串。
         /// </summary>
         /// <param name="retrieved">检索上下文。</param>
-        /// <returns>参考片段标识。</returns>
+        /// <returns>参考片段标签。</returns>
         private static string BuildChunkReferences(RetrievedContext retrieved)
         {
             if (retrieved == null || retrieved.Chunks == null || retrieved.Chunks.Count == 0)
@@ -735,15 +831,94 @@ namespace SmartWord.Services.Conversation
             for (int i = 0; i < maxCount; i++)
             {
                 RetrievedChunk chunk = retrieved.Chunks[i];
-                if (chunk == null || string.IsNullOrWhiteSpace(chunk.ChunkId))
+                if (chunk == null)
                 {
                     continue;
                 }
 
-                refs.Add(chunk.ChunkId);
+                refs.Add(BuildChunkReferenceLabel(chunk));
             }
 
-            return refs.Count == 0 ? string.Empty : string.Join(",", refs.ToArray());
+            return refs.Count == 0 ? string.Empty : string.Join("、", refs.ToArray());
+        }
+
+        /// <summary>
+        /// 生成单个分片的可读标签。
+        /// </summary>
+        /// <param name="chunk">检索分片。</param>
+        /// <returns>标签文案。</returns>
+        private static string BuildChunkReferenceLabel(RetrievedChunk chunk)
+        {
+            if (chunk == null)
+            {
+                return string.Empty;
+            }
+
+            int start = chunk.Position <= 0 ? 0 : chunk.Position;
+            int end = chunk.EndPosition <= 0 ? start : Math.Max(start, chunk.EndPosition);
+            string headingPath = (chunk.HeadingPath ?? string.Empty).Trim();
+            string chunkType = (chunk.ChunkType ?? string.Empty).Trim();
+            string prefix = string.Empty;
+            if (string.Equals(chunkType, "TableCell", StringComparison.OrdinalIgnoreCase))
+            {
+                prefix = "表格片段";
+            }
+            else if (string.Equals(chunkType, "Heading", StringComparison.OrdinalIgnoreCase))
+            {
+                prefix = "标题片段";
+            }
+            else
+            {
+                prefix = "参考片段";
+            }
+
+            if (!string.IsNullOrWhiteSpace(headingPath))
+            {
+                if (start > 0 && end > start)
+                {
+                    return headingPath + "（第" + start + "-" + end + "段）";
+                }
+
+                if (start > 0)
+                {
+                    return headingPath + "（第" + start + "段）";
+                }
+
+                return headingPath;
+            }
+
+            if (start > 0 && end > start)
+            {
+                return prefix + "（第" + start + "-" + end + "段）";
+            }
+
+            if (start > 0)
+            {
+                return prefix + "（第" + start + "段）";
+            }
+
+            return string.IsNullOrWhiteSpace(chunk.ChunkId) ? prefix : chunk.ChunkId;
+        }
+
+        /// <summary>
+        /// 清洗并截断引用预览文本。
+        /// </summary>
+        /// <param name="text">原始文本。</param>
+        /// <returns>用于 UI 展示的预览文本。</returns>
+        private static string NormalizeCitationPreview(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return string.Empty;
+            }
+
+            string normalized = text.Replace("\r", " ").Replace("\n", " ").Trim();
+            while (normalized.Contains("  "))
+            {
+                normalized = normalized.Replace("  ", " ");
+            }
+
+            return TrimForPreview(normalized, 160);
         }
 
         /// <summary>
@@ -786,6 +961,59 @@ namespace SmartWord.Services.Conversation
             }
 
             return value.Substring(0, maxLength) + "...";
+        }
+
+        /// <summary>
+        /// 助手消息元数据。
+        /// </summary>
+        [DataContract]
+        private sealed class AssistantMessageMetadata
+        {
+            [DataMember(Name = "type")]
+            public string Type { get; set; }
+
+            [DataMember(Name = "citations")]
+            public CitationMetadata[] Citations { get; set; }
+        }
+
+        /// <summary>
+        /// 引用片段元数据。
+        /// </summary>
+        [DataContract]
+        private sealed class CitationMetadata
+        {
+            [DataMember(Name = "chunkId")]
+            public string ChunkId { get; set; }
+
+            [DataMember(Name = "position")]
+            public int Position { get; set; }
+
+            [DataMember(Name = "endPosition")]
+            public int EndPosition { get; set; }
+
+            [DataMember(Name = "score")]
+            public double Score { get; set; }
+
+            [DataMember(Name = "label")]
+            public string Label { get; set; }
+
+            [DataMember(Name = "preview")]
+            public string Preview { get; set; }
+
+            [DataMember(Name = "chunkType")]
+            public string ChunkType { get; set; }
+
+            [DataMember(Name = "headingPath")]
+            public string HeadingPath { get; set; }
+
+            [DataMember(Name = "styleName")]
+            public string StyleName { get; set; }
+
+            [DataMember(Name = "citationType")]
+            public string CitationType { get; set; }
+
+            [DataMember(Name = "authorityScore")]
+            public double AuthorityScore { get; set; }
         }
     }
 }
