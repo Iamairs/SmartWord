@@ -18,5 +18,12 @@ namespace SmartWord.Core.Abstractions
         /// </summary>
         /// <param name="newText">替换后的文本。</param>
         void ReplaceSelection(string newText);
+
+        /// <summary>
+        /// 选中指定段落范围并定位到该位置。
+        /// </summary>
+        /// <param name="startParagraphIndex">起始段落索引（1 基）。</param>
+        /// <param name="endParagraphIndex">结束段落索引（1 基，且不小于起始索引）。</param>
+        void SelectParagraphRange(int startParagraphIndex, int endParagraphIndex);
     }
 }
