@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="sw-shell" :class="{ compact: state.layout.compact, generating: state.generating }">
     <header class="sw-brandbar">
       <div class="brand-left">
@@ -116,8 +116,39 @@
               </template>
             </div>
 
+            <section v-if="citationItems(message).length > 0" class="citation-panel">
+              <header class="citation-head">参考片段</header>
+              <div class="citation-list">
+                <button
+                  v-for="(citation, citationIndex) in citationItems(message)"
+                  :key="`${messageKey(message, idx)}_citation_${citation.chunkId || citationIndex}`"
+                  class="citation-chip"
+                  type="button"
+                  :disabled="state.generating || citation.position <= 0"
+                  @click="navigateToCitation(citation)"
+                >
+                  <span class="citation-index">{{ citationIndex + 1 }}</span>
+                  <span class="citation-main">
+                    <span class="citation-label">{{ citation.label || `参考片段 ${citationIndex + 1}` }}</span>
+                    <span class="citation-meta-line">
+                      <span class="citation-type">{{ citation.typeLabel }}</span>
+                      <span v-if="citation.headingPath" class="citation-heading">{{ citation.headingPath }}</span>
+                    </span>
+                    <span class="citation-snippet">{{ citation.preview || citation.chunkId || "暂无预览文本" }}</span>
+                  </span>
+                  <span class="citation-score" v-if="isFiniteScore(citation.score)">
+                    R{{ formatCitationScore(citation.score) }}
+                  </span>
+                  <span class="citation-popover">
+                    <span class="citation-popover-head">{{ citation.typeLabel }}</span>
+                    <span v-if="citation.headingPath" class="citation-popover-heading">{{ citation.headingPath }}</span>
+                    <span>{{ citation.preview || citation.chunkId || "暂无预览文本" }}</span>
+                  </span>
+                </button>
+              </div>
+            </section>
             <div v-if="showApplyButtonForMessage(message, idx)" class="msg-actions">
-              <span class="action-hint">点击“确认执行”后才会修改文档</span>
+              <span class="action-hint">点击“确认执行”后才会修改文档。</span>
               <button class="accent action-mini" :disabled="isUiLocked || !canApply" @click="applyAction">确认执行</button>
             </div>
           </article>
@@ -188,6 +219,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 
 const inputRef = ref(null);
 const stageTimerRef = ref(null);
+const MAX_RENDER_MESSAGES = 120;
 
 const state = reactive({
   busy: false,
@@ -216,8 +248,13 @@ const state = reactive({
   modeLock: "",
   modelOverride: "",
   promptVersion: "",
+  bm25CandidateCount: 40,
+  denseCandidateCount: 40,
+  rerankCandidateCount: 24,
+  maxContextCharacters: 3200,
+  neighborWindow: 1,
   input: "",
-  status: "初始化中，请稍候...",
+  status: "初始化中，请稍候…",
   pendingTurnId: "",
   thinkingMessage: null,
   thinkingStages: [],
@@ -230,7 +267,6 @@ const state = reactive({
 });
 
 const rpc = createHostRpc();
-const APPLY_HINT_PATTERN = /确认执行[\s\S]*修改文档/;
 const MODE_LINE_PATTERN = /^模式：([^\r\n（(]+?)(?:[（(]([\s\S]*?)[）)])?\s*$/;
 const PREVIEW_HEADER_PATTERNS = ["建议内容预览", "建议改写如下"];
 
@@ -238,7 +274,10 @@ const isUiLocked = computed(() => state.busy || state.generating || state.cancel
 const isInputDisabled = computed(() => state.busy || state.generating);
 const canApply = computed(() => !!state.uiHints.canApply && state.requireConfirm && !!state.pendingActionId);
 const displayMessages = computed(() => {
-  const list = Array.isArray(state.messages) ? [...state.messages] : [];
+  const source = Array.isArray(state.messages) ? state.messages : [];
+  const list = source.length > MAX_RENDER_MESSAGES
+    ? source.slice(source.length - MAX_RENDER_MESSAGES)
+    : [...source];
   if (state.thinkingMessage) {
     list.push(state.thinkingMessage);
   }
@@ -326,6 +365,12 @@ function applyConfig(payload) {
   state.availableModels = models;
   state.modelOverride = payload?.defaultModel || models[0] || state.modelOverride || "";
   state.promptVersion = payload?.defaultPromptVersion || "";
+  const retrievalDefaults = payload?.retrievalDefaults || {};
+  state.bm25CandidateCount = normalizeIntegerInput(retrievalDefaults.bm25CandidateCount, 40, 1, 200);
+  state.denseCandidateCount = normalizeIntegerInput(retrievalDefaults.denseCandidateCount, 40, 1, 200);
+  state.rerankCandidateCount = normalizeIntegerInput(retrievalDefaults.rerankCandidateCount, 24, 1, 200);
+  state.maxContextCharacters = normalizeIntegerInput(retrievalDefaults.maxContextCharacters, 3200, 200, 20000);
+  state.neighborWindow = normalizeIntegerInput(retrievalDefaults.neighborWindow, 1, 0, 6);
 
   if (!state.modelOverride && state.availableModels.length > 0) {
     state.modelOverride = state.availableModels[0];
@@ -344,7 +389,9 @@ function applySessionsPayload(payload) {
   state.activeSessionId = targetSessionId || "";
 
   const active = sessions.find((item) => item.sessionId === state.activeSessionId) || null;
-  state.messages = active && Array.isArray(active.messages) ? active.messages : [];
+  state.messages = active && Array.isArray(active.messages)
+    ? active.messages.map((item) => normalizeMessage(item))
+    : [];
 
   const fromPayload = hasActionMeta(payload?.pendingActionMeta) ? payload.pendingActionMeta : null;
   const fromSession = hasActionMeta(active?.latestPendingAction) ? active.latestPendingAction : null;
@@ -353,6 +400,25 @@ function applySessionsPayload(payload) {
   state.requireConfirm = !!state.pendingActionId;
 
   applyUiHints(payload?.uiHints);
+}
+
+function normalizeMessage(input) {
+  if (!input || typeof input !== "object") {
+    return {
+      role: "assistant",
+      content: "",
+      metadata: "",
+      timestampUtc: new Date().toISOString()
+    };
+  }
+
+  return {
+    ...input,
+    role: String(input.role || ""),
+    content: String(input.content || ""),
+    metadata: typeof input.metadata === "string" ? input.metadata : "",
+    timestampUtc: String(input.timestampUtc || "")
+  };
 }
 
 function applyUiHints(hints) {
@@ -442,7 +508,12 @@ async function submitTurnAsync() {
       userMessage: message,
       modelOverride: state.modelOverride,
       promptVersion: state.promptVersion,
-      modeLock: state.modeLock 
+      modeLock: state.modeLock,
+      bm25CandidateCount: normalizeIntegerInput(state.bm25CandidateCount, 40, 1, 200),
+      denseCandidateCount: normalizeIntegerInput(state.denseCandidateCount, 40, 1, 200),
+      rerankCandidateCount: normalizeIntegerInput(state.rerankCandidateCount, 24, 1, 200),
+      maxContextCharacters: normalizeIntegerInput(state.maxContextCharacters, 3200, 200, 20000),
+      neighborWindow: normalizeIntegerInput(state.neighborWindow, 1, 0, 6)
     });
 
     applySessionsPayload(payload);
@@ -619,17 +690,149 @@ function toggleModeReason(message, idx) {
 }
 
 function messageSegments(message, idx) {
-  const segments = parseMessageSegments(message?.content || "");
-  const shouldHideApplyHint = showApplyButtonForMessage(message, idx);
+  try {
+    const segments = parseMessageSegments(message?.content || "");
+    const shouldHideApplyHint = showApplyButtonForMessage(message, idx);
 
-  return segments.flatMap((segment) => {
-    if (segment.type !== "text") {
-      return [segment];
+    return segments.flatMap((segment) => {
+      if (segment.type !== "text") {
+        return [segment];
+      }
+
+      const cleaned = shouldHideApplyHint ? removeApplyHintLines(segment.text || "") : String(segment.text || "");
+      return parseTextMessageSegments(cleaned);
+    });
+  } catch (_) {
+    return [{ type: "text", text: String(message?.content || "") }];
+  }
+}
+
+function citationItems(message) {
+  try {
+    const metadata = parseMessageMetadata(message?.metadata);
+    const citations = Array.isArray(metadata?.citations) ? metadata.citations : [];
+    return citations
+      .map((item) => normalizeCitation(item))
+      .filter((item) => item !== null);
+  } catch (_) {
+    return [];
+  }
+}
+
+function parseMessageMetadata(rawMetadata) {
+  if (!rawMetadata || typeof rawMetadata !== "string") {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(rawMetadata);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function normalizeCitation(item) {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+
+  const position = normalizeIntegerInput(item.position, 0, 0, 1000000);
+  const endPosition = normalizeIntegerInput(item.endPosition, position, position, 1000000);
+  const score = Number(item.score);
+  const authorityScore = Number(item.authorityScore);
+  const preview = String(item.preview || "").trim();
+  const chunkId = String(item.chunkId || "").trim();
+  const chunkType = String(item.chunkType || "").trim();
+  const citationType = String(item.citationType || "").trim();
+  const headingPath = String(item.headingPath || "").trim();
+  const styleName = String(item.styleName || "").trim();
+  const label = String(item.label || "").trim() || buildCitationLabel(position, endPosition, chunkId);
+
+  return {
+    chunkId,
+    position,
+    endPosition,
+    score: Number.isFinite(score) ? score : Number.NaN,
+    authorityScore: Number.isFinite(authorityScore) ? authorityScore : Number.NaN,
+    preview,
+    label,
+    chunkType,
+    citationType,
+    headingPath,
+    styleName,
+    typeLabel: buildCitationTypeLabel(chunkType, citationType)
+  };
+}
+
+function buildCitationLabel(position, endPosition, chunkId) {
+  if (position > 0 && endPosition > position) {
+    return `第 ${position}-${endPosition} 段`;
+  }
+
+  if (position > 0) {
+    return `第 ${position} 段`;
+  }
+
+  return chunkId || "参考片段";
+}
+
+function buildCitationTypeLabel(chunkType, citationType) {
+  const normalizedType = String(chunkType || "").trim().toLowerCase();
+  const normalizedRole = String(citationType || "").trim().toLowerCase();
+  const roleLabel = normalizedRole === "direct" ? "主证据" : normalizedRole === "supporting" ? "补证据" : "引用";
+
+  if (normalizedType === "heading") {
+    return `${roleLabel} · 标题`;
+  }
+
+  if (normalizedType === "tablecell") {
+    return `${roleLabel} · 表格`;
+  }
+
+  return `${roleLabel} · 正文`;
+}
+
+function isFiniteScore(score) {
+  return Number.isFinite(Number(score));
+}
+
+function formatCitationScore(score) {
+  const numeric = Number(score);
+  if (!Number.isFinite(numeric)) {
+    return "0.000";
+  }
+
+  return numeric.toFixed(3);
+}
+
+async function navigateToCitation(citation) {
+  if (!citation || citation.position <= 0) {
+    state.status = "该引用暂不支持定位。";
+    return;
+  }
+
+  if (!rpc.isAvailable()) {
+    state.status = "当前环境不支持引用定位。";
+    return;
+  }
+
+  try {
+    const payload = await rpc.request("citation.navigate", {
+      chunkId: citation.chunkId,
+      position: citation.position,
+      endPosition: citation.endPosition
+    });
+
+    if (payload?.ok) {
+      state.status = payload?.message || `已定位到 ${citation.label || "参考片段"}。`;
+      return;
     }
 
-    const cleaned = shouldHideApplyHint ? removeApplyHintLines(segment.text || "") : String(segment.text || "");
-    return parseTextMessageSegments(cleaned);
-  });
+    state.status = payload?.message || "引用定位失败，请稍后重试。";
+  } catch (error) {
+    state.status = `引用定位失败：${normalizeErrorMessage(error)}`;
+  }
 }
 
 function removeApplyHintLines(rawText) {
@@ -745,38 +948,41 @@ function sanitizeMalformedCodeBlocks(rawText) {
 }
 
 function parseMessageSegments(content) {
-  
-  const text = sanitizeMalformedCodeBlocks(content);
-  if (!text) {
-    return [{ type: "text", text: "" }];
-  }
-
-  const segments = [];
-  const fenceRegex = /```([a-zA-Z0-9_-]*)[ \t]*\r?\n?([\s\S]*?)```/g;
-  let cursor = 0;
-  let match;
-
-  while ((match = fenceRegex.exec(text)) !== null) {
-    const blockStart = match.index;
-    if (blockStart > cursor) {
-      pushTextSegment(segments, text.slice(cursor, blockStart));
+  try {
+    const text = sanitizeMalformedCodeBlocks(content);
+    if (!text) {
+      return [{ type: "text", text: "" }];
     }
 
-    const language = String(match[1] || "").trim().toLowerCase();
-    const code = String(match[2] || "").replace(/^\r?\n/, "").replace(/\s+$/, "");
-    segments.push({ type: "code", lang: language || "code", text: code });
-    cursor = fenceRegex.lastIndex;
-  }
+    const segments = [];
+    const fenceRegex = /```([a-zA-Z0-9_-]*)[ \t]*\r?\n?([\s\S]*?)```/g;
+    let cursor = 0;
+    let match;
 
-  if (cursor < text.length) {
-    pushTailSegment(segments, text.slice(cursor));
-  }
+    while ((match = fenceRegex.exec(text)) !== null) {
+      const blockStart = match.index;
+      if (blockStart > cursor) {
+        pushTextSegment(segments, text.slice(cursor, blockStart));
+      }
 
-  if (segments.length === 0) {
-    return [{ type: "text", text }];
-  }
+      const language = String(match[1] || "").trim().toLowerCase();
+      const code = String(match[2] || "").replace(/^\r?\n/, "").replace(/\s+$/, "");
+      segments.push({ type: "code", lang: language || "code", text: code });
+      cursor = fenceRegex.lastIndex;
+    }
 
-  return segments;
+    if (cursor < text.length) {
+      pushTailSegment(segments, text.slice(cursor));
+    }
+
+    if (segments.length === 0) {
+      return [{ type: "text", text }];
+    }
+
+    return segments;
+  } catch (_) {
+    return [{ type: "text", text: String(content || "") }];
+  }
 }
 
 function pushTextSegment(segments, rawText) {
@@ -893,6 +1099,24 @@ function normalizeErrorMessage(error) {
   return error.message || "未知错误";
 }
 
+function normalizeIntegerInput(value, fallback, min, max) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  const rounded = Math.trunc(numeric);
+  if (rounded < min) {
+    return min;
+  }
+
+  if (rounded > max) {
+    return max;
+  }
+
+  return rounded;
+}
+
 function createHostRpc() {
   const pending = new Map();
   let sequence = 1;
@@ -952,3 +1176,6 @@ function createHostRpc() {
   };
 }
 </script>
+
+
+
