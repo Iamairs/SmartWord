@@ -13,6 +13,13 @@
   "embeddingApiKey": "",
   "chatStorePath": "Config/chat.sessions.local.json",
   "vectorIndexDirectory": "Config/vector-index",
+  "retrieval": {
+    "bm25CandidateCount": 40,
+    "denseCandidateCount": 40,
+    "rerankCandidateCount": 24,
+    "maxContextCharacters": 3200,
+    "neighborWindow": 1
+  },
   "logging": {
     "logLevel": "Information",
     "logDirectory": "",
