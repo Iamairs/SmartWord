@@ -31,5 +31,30 @@ namespace SmartWord.Core.Models.Conversation
         /// 模式锁定项；为空表示自动识别模式。
         /// </summary>
         public ConversationRouteType? ModeLock { get; set; }
+
+        /// <summary>
+        /// BM25 召回候选数量；小于等于 0 时使用服务默认值。
+        /// </summary>
+        public int Bm25CandidateCount { get; set; }
+
+        /// <summary>
+        /// 向量召回候选数量；小于等于 0 时使用服务默认值。
+        /// </summary>
+        public int DenseCandidateCount { get; set; }
+
+        /// <summary>
+        /// 重排候选数量；小于等于 0 时使用服务默认值。
+        /// </summary>
+        public int RerankCandidateCount { get; set; }
+
+        /// <summary>
+        /// 合并上下文最大字符预算；小于等于 0 时使用服务默认值。
+        /// </summary>
+        public int MaxContextCharacters { get; set; }
+
+        /// <summary>
+        /// 最终片段邻近扩展窗口；小于 0 时使用服务默认值。
+        /// </summary>
+        public int NeighborWindow { get; set; }
     }
 }
