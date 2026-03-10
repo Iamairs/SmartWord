@@ -153,6 +153,11 @@ dotnet test SmartWord.Services.Tests\SmartWord.Services.Tests.csproj
 | `SMARTWORD_EMBEDDING_API_KEY` | Embedding API Key | 继承 Chat API Key |
 | `SMARTWORD_CHAT_STORE_FILE` | 会话存储文件路径 | `Config/chat.sessions.local.json` |
 | `SMARTWORD_VECTOR_INDEX_DIR` | 向量索引目录 | `Config/vector-index` |
+| `SMARTWORD_RETRIEVAL_BM25_CANDIDATE_COUNT` | BM25 召回候选数 | `40` |
+| `SMARTWORD_RETRIEVAL_DENSE_CANDIDATE_COUNT` | Dense 召回候选数 | `40` |
+| `SMARTWORD_RETRIEVAL_RERANK_CANDIDATE_COUNT` | 重排候选数 | `24` |
+| `SMARTWORD_RETRIEVAL_MAX_CONTEXT_CHARACTERS` | 上下文字符预算 | `3200` |
+| `SMARTWORD_RETRIEVAL_NEIGHBOR_WINDOW` | 邻近扩展窗口 | `1` |
 | `SMARTWORD_SETTINGS_FILE` | 本地配置文件路径 | `Config/runtime-settings.local.json` |
 | `SMARTWORD_LOG_LEVEL` | 日志级别 | `Information` |
 | `SMARTWORD_LOG_DIR` | 日志目录 | `%LOCALAPPDATA%/SmartWord/Logs` |
@@ -191,6 +196,13 @@ dotnet test SmartWord.Services.Tests\SmartWord.Services.Tests.csproj
   "embeddingApiKey": "",
   "chatStorePath": "Config/chat.sessions.local.json",
   "vectorIndexDirectory": "Config/vector-index",
+  "retrieval": {
+    "bm25CandidateCount": 40,
+    "denseCandidateCount": 40,
+    "rerankCandidateCount": 24,
+    "maxContextCharacters": 3200,
+    "neighborWindow": 1
+  },
   "logging": {
     "logLevel": "Information",
     "logDirectory": "",
@@ -200,6 +212,14 @@ dotnet test SmartWord.Services.Tests\SmartWord.Services.Tests.csproj
   }
 }
 ```
+
+检索默认参数说明（`retrieval`）：
+
+1. `bm25CandidateCount`：BM25 召回候选数，建议范围 `1-200`。
+2. `denseCandidateCount`：向量召回候选数，建议范围 `1-200`。
+3. `rerankCandidateCount`：送入重排的候选数，建议范围 `1-200`。
+4. `maxContextCharacters`：拼接上下文字符预算，建议范围 `200-20000`。
+5. `neighborWindow`：最终片段邻近扩展窗口，建议范围 `0-6`。
 
 ### Prompt 目录
 
