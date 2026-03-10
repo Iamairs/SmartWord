@@ -17,10 +17,16 @@ namespace SmartWord.AddIn.Infrastructure
     {
         private readonly ThisAddIn _addIn;
         private readonly IConversationOrchestrator _conversationOrchestrator;
+        private readonly ISelectionService _selectionService;
         private readonly INotificationService _notificationService;
         private readonly string[] _availableModels;
         private readonly string _defaultModel;
         private readonly string _defaultPromptVersion;
+        private readonly int _defaultBm25CandidateCount;
+        private readonly int _defaultDenseCandidateCount;
+        private readonly int _defaultRerankCandidateCount;
+        private readonly int _defaultMaxContextCharacters;
+        private readonly int _defaultNeighborWindow;
         private readonly IAppLogger _logger;
 
         private WebChatPaneControl _chatPaneControl;
@@ -39,18 +45,30 @@ namespace SmartWord.AddIn.Infrastructure
         public TaskPaneManager(
             ThisAddIn addIn,
             IConversationOrchestrator conversationOrchestrator,
+            ISelectionService selectionService,
             INotificationService notificationService,
             string[] availableModels,
             string defaultModel,
             string defaultPromptVersion,
+            int defaultBm25CandidateCount,
+            int defaultDenseCandidateCount,
+            int defaultRerankCandidateCount,
+            int defaultMaxContextCharacters,
+            int defaultNeighborWindow,
             IAppLogger logger)
         {
             _addIn = addIn;
             _conversationOrchestrator = conversationOrchestrator;
+            _selectionService = selectionService;
             _notificationService = notificationService;
             _availableModels = availableModels ?? new string[0];
             _defaultModel = defaultModel ?? string.Empty;
             _defaultPromptVersion = defaultPromptVersion ?? string.Empty;
+            _defaultBm25CandidateCount = defaultBm25CandidateCount;
+            _defaultDenseCandidateCount = defaultDenseCandidateCount;
+            _defaultRerankCandidateCount = defaultRerankCandidateCount;
+            _defaultMaxContextCharacters = defaultMaxContextCharacters;
+            _defaultNeighborWindow = defaultNeighborWindow;
             _logger = logger ?? NullAppLogger.Instance;
         }
 
@@ -145,10 +163,16 @@ namespace SmartWord.AddIn.Infrastructure
 
             _chatPaneControl = new WebChatPaneControl(
                 _conversationOrchestrator,
+                _selectionService,
                 _notificationService,
                 _availableModels,
                 _defaultModel,
                 _defaultPromptVersion,
+                _defaultBm25CandidateCount,
+                _defaultDenseCandidateCount,
+                _defaultRerankCandidateCount,
+                _defaultMaxContextCharacters,
+                _defaultNeighborWindow,
                 _logger);
 
             _chatPane = _addIn.CustomTaskPanes.Add(_chatPaneControl, "SmartWord 对话");
