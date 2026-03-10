@@ -72,6 +72,7 @@
     <Compile Include="Retrieval\WordDocumentChunkProvider.cs" />
     <Compile Include="Routing\CommandRouteService.cs" />
     <Compile Include="Selection\WordSelectionService.cs" />
+    <Compile Include="Storage\DocumentIndexStore.cs" />
     <Compile Include="Storage\FileConversationStore.cs" />
     <Compile Include="Storage\VectorIndexStore.cs" />
     <Compile Include="Threading\WordThreadInvoker.cs" />
