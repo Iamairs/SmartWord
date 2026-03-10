@@ -14,6 +14,12 @@ namespace SmartWord.Services.Model
     /// </summary>
     public sealed class OpenAiApiOptions
     {
+        private const int DefaultBm25CandidateCount = 40;
+        private const int DefaultDenseCandidateCount = 40;
+        private const int DefaultRerankCandidateCount = 24;
+        private const int DefaultMaxContextCharacters = 3200;
+        private const int DefaultNeighborWindow = 1;
+
         /// <summary>
         /// API 基础地址。
         /// </summary>
@@ -62,6 +68,31 @@ namespace SmartWord.Services.Model
         /// 向量索引目录。
         /// </summary>
         public string VectorIndexDirectory { get; private set; }
+
+        /// <summary>
+        /// BM25 召回候选数量默认值。
+        /// </summary>
+        public int RetrievalBm25CandidateCount { get; private set; }
+
+        /// <summary>
+        /// 向量召回候选数量默认值。
+        /// </summary>
+        public int RetrievalDenseCandidateCount { get; private set; }
+
+        /// <summary>
+        /// 重排候选数量默认值。
+        /// </summary>
+        public int RetrievalRerankCandidateCount { get; private set; }
+
+        /// <summary>
+        /// 合并上下文最大字符预算默认值。
+        /// </summary>
+        public int RetrievalMaxContextCharacters { get; private set; }
+
+        /// <summary>
+        /// 邻近扩展窗口默认值。
+        /// </summary>
+        public int RetrievalNeighborWindow { get; private set; }
 
         /// <summary>
         /// 日志配置。
@@ -181,6 +212,42 @@ namespace SmartWord.Services.Model
                 settingsFile == null ? null : settingsFile.vectorIndexDirectory,
                 Path.Combine(root, "Config", "vector-index"));
 
+            string retrievalBm25CandidateCountRaw = GetFirstNonEmpty(
+                Environment.GetEnvironmentVariable("SMARTWORD_RETRIEVAL_BM25_CANDIDATE_COUNT"),
+                settingsFile == null || settingsFile.retrieval == null || !settingsFile.retrieval.bm25CandidateCount.HasValue
+                    ? null
+                    : settingsFile.retrieval.bm25CandidateCount.Value.ToString());
+
+            string retrievalDenseCandidateCountRaw = GetFirstNonEmpty(
+                Environment.GetEnvironmentVariable("SMARTWORD_RETRIEVAL_DENSE_CANDIDATE_COUNT"),
+                settingsFile == null || settingsFile.retrieval == null || !settingsFile.retrieval.denseCandidateCount.HasValue
+                    ? null
+                    : settingsFile.retrieval.denseCandidateCount.Value.ToString());
+
+            string retrievalRerankCandidateCountRaw = GetFirstNonEmpty(
+                Environment.GetEnvironmentVariable("SMARTWORD_RETRIEVAL_RERANK_CANDIDATE_COUNT"),
+                settingsFile == null || settingsFile.retrieval == null || !settingsFile.retrieval.rerankCandidateCount.HasValue
+                    ? null
+                    : settingsFile.retrieval.rerankCandidateCount.Value.ToString());
+
+            string retrievalMaxContextCharactersRaw = GetFirstNonEmpty(
+                Environment.GetEnvironmentVariable("SMARTWORD_RETRIEVAL_MAX_CONTEXT_CHARACTERS"),
+                settingsFile == null || settingsFile.retrieval == null || !settingsFile.retrieval.maxContextCharacters.HasValue
+                    ? null
+                    : settingsFile.retrieval.maxContextCharacters.Value.ToString());
+
+            string retrievalNeighborWindowRaw = GetFirstNonEmpty(
+                Environment.GetEnvironmentVariable("SMARTWORD_RETRIEVAL_NEIGHBOR_WINDOW"),
+                settingsFile == null || settingsFile.retrieval == null || !settingsFile.retrieval.neighborWindow.HasValue
+                    ? null
+                    : settingsFile.retrieval.neighborWindow.Value.ToString());
+
+            int retrievalBm25CandidateCount = ParseIntWithBounds(retrievalBm25CandidateCountRaw, DefaultBm25CandidateCount, 1, 200);
+            int retrievalDenseCandidateCount = ParseIntWithBounds(retrievalDenseCandidateCountRaw, DefaultDenseCandidateCount, 1, 200);
+            int retrievalRerankCandidateCount = ParseIntWithBounds(retrievalRerankCandidateCountRaw, DefaultRerankCandidateCount, 1, 200);
+            int retrievalMaxContextCharacters = ParseIntWithBounds(retrievalMaxContextCharactersRaw, DefaultMaxContextCharacters, 200, 20000);
+            int retrievalNeighborWindow = ParseIntWithBounds(retrievalNeighborWindowRaw, DefaultNeighborWindow, 0, 6);
+
             LoggingOptions defaultLogging = LoggingOptions.CreateDefault(root);
             string loggingLevel = GetFirstNonEmpty(
                 Environment.GetEnvironmentVariable("SMARTWORD_LOG_LEVEL"),
@@ -240,6 +307,11 @@ namespace SmartWord.Services.Model
                 EmbeddingApiKey = embeddingApiKey,
                 ChatStorePath = NormalizePath(root, chatStorePath),
                 VectorIndexDirectory = NormalizePath(root, vectorIndexDirectory),
+                RetrievalBm25CandidateCount = retrievalBm25CandidateCount,
+                RetrievalDenseCandidateCount = retrievalDenseCandidateCount,
+                RetrievalRerankCandidateCount = retrievalRerankCandidateCount,
+                RetrievalMaxContextCharacters = retrievalMaxContextCharacters,
+                RetrievalNeighborWindow = retrievalNeighborWindow,
                 Logging = loggingOptions
             };
         }
@@ -439,6 +511,30 @@ namespace SmartWord.Services.Model
         }
 
         /// <summary>
+        /// 将字符串解析为边界内整数，失败时返回默认值。
+        /// </summary>
+        private static int ParseIntWithBounds(string rawValue, int fallback, int minInclusive, int maxInclusive)
+        {
+            int parsed;
+            if (!int.TryParse(rawValue, out parsed))
+            {
+                return fallback;
+            }
+
+            if (parsed < minInclusive)
+            {
+                return minInclusive;
+            }
+
+            if (parsed > maxInclusive)
+            {
+                return maxInclusive;
+            }
+
+            return parsed;
+        }
+
+        /// <summary>
         /// 标准化基础地址并移除尾部斜杠。
         /// </summary>
         private static string NormalizeBaseUrl(string baseUrl)
@@ -559,6 +655,12 @@ namespace SmartWord.Services.Model
 
             [DataMember(Name = "logging")]
             public RuntimeLoggingSettings logging { get; set; }
+
+            /// <summary>
+            /// 检索默认参数。
+            /// </summary>
+            [DataMember(Name = "retrieval")]
+            public RuntimeRetrievalSettings retrieval { get; set; }
         }
 
         [DataContract]
@@ -581,6 +683,25 @@ namespace SmartWord.Services.Model
 
             [DataMember(Name = "outputTemplate")]
             public string outputTemplate { get; set; }
+        }
+
+        [DataContract]
+        private sealed class RuntimeRetrievalSettings
+        {
+            [DataMember(Name = "bm25CandidateCount")]
+            public int? bm25CandidateCount { get; set; }
+
+            [DataMember(Name = "denseCandidateCount")]
+            public int? denseCandidateCount { get; set; }
+
+            [DataMember(Name = "rerankCandidateCount")]
+            public int? rerankCandidateCount { get; set; }
+
+            [DataMember(Name = "maxContextCharacters")]
+            public int? maxContextCharacters { get; set; }
+
+            [DataMember(Name = "neighborWindow")]
+            public int? neighborWindow { get; set; }
         }
     }
 }
