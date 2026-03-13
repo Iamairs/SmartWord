@@ -1,16 +1,34 @@
 # 仓库指南
 ## 项目介绍
-一个在Visual Studio中使用C#开发的word插件，功能是借助大语言模型和VBA程序，实现通过自然语言进行word操作。
+SmartWord 是一个基于 VSTO（`.NET Framework 4.7.2`）的 Word 插件。  
+目标是把自然语言指令转成可控的文档操作，并通过“先建议、后确认执行”的方式降低误改风险。
+
+当前主交互是右侧 WebView2 对话侧栏（Vue 3），支持如下模式：
+
+- `Qa`：文档问答（只读，不改文档）
+- `Writing`：写作改写
+- `Processing`：结构化整理
+- `Execute`：执行型任务（通常包含 VBA）
 
 ## 项目结构与模块组织
 
-`SmartWord.sln` 包含三个基于 .NET Framework 4.7.2 的项目：
+```text
+SmartWord.sln
+├─ SmartWord.Core/           # 领域契约与模型（接口、请求/响应、路由枚举）
+├─ SmartWord.Services/       # 业务实现（编排、模型、检索、存储、VBA、日志）
+├─ SmartWord.AddIn/          # VSTO 宿主入口与基础设施
+├─ SmartWord.AddIn/WebClient # Vue 3 + Vite 前端（WebView2 承载）
+└─ SmartWord.Services.Tests/ # MSTest 测试项目
+```
 
-* **`SmartWord.Core/`**：领域契约与请求模型。包含 `Abstractions/`（接口）、`Models/`（数据模型）及 `Orchestration/`（编排逻辑）。
-* **`SmartWord.Services/`**：具体功能实现。负责模型调用、Prompt 加载、选区处理、撤销范围管理以及 VBA 脚本执行。
-* **`SmartWord.AddIn/`**：VSTO Word 插件入口点与 UI。包含 `ThisAddIn.cs`、`UI/`（窗体/控件）、`Infrastructure/`（基础设施）及 `Config/`（配置）。
+关键入口：
 
-**协作要求**：新文件必须放置在对应的层级中（契约归入 Core，Word/IO 集成归入 Services，宿主注入与 UI 归入 AddIn）。
+- `SmartWord.AddIn/ThisAddIn.cs`：插件启动、依赖装配、热键注册、全局异常日志。
+- `SmartWord.AddIn/Infrastructure/TaskPaneManager.cs`：TaskPane 生命周期管理。
+- `SmartWord.AddIn/UI/Web/WebChatPaneControl.cs`：WebView2 容器与前端加载。
+- `SmartWord.AddIn/UI/Web/WebViewRpcBridge.cs`：前后端 RPC 路由层。
+- `SmartWord.Services/Conversation/ConversationOrchestrator.cs`：核心对话编排。
+
 
 ## 构建、测试与开发命令
 
