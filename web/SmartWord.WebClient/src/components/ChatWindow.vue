@@ -1,0 +1,703 @@
+<template>
+  <div class="chat-window">
+    <header class="chat-header">
+      <div>
+        <p class="eyebrow">SmartWord</p>
+        <h1>文档副驾</h1>
+        <p class="settings-summary">{{ settingsSummary }}</p>
+      </div>
+      <div class="header-actions">
+        <button class="ghost-button" type="button" @click="settingsStore.togglePanel()">
+          {{ settingsStore.isPanelOpen ? '收起设置' : '设置' }}
+        </button>
+        <span class="mode-pill">{{ modeLabel }}</span>
+      </div>
+    </header>
+
+    <section v-if="settingsStore.isPanelOpen" class="settings-panel">
+      <div class="settings-panel__header">
+        <div>
+          <h2>连接设置</h2>
+          <p>保存后，新请求会直接使用最新配置。</p>
+        </div>
+        <button class="ghost-button ghost-button--small" type="button" @click="settingsStore.closePanel()">
+          关闭
+        </button>
+      </div>
+
+      <div class="settings-grid">
+        <label class="settings-field">
+          <span>默认 Base URL</span>
+          <input v-model.trim="settingsStore.form.baseUrl" type="text" />
+        </label>
+
+        <label class="settings-field">
+          <span>默认 API Key</span>
+          <input v-model.trim="settingsStore.form.apiKey" type="password" autocomplete="off" />
+        </label>
+
+        <label class="settings-field">
+          <span>轻量 Base URL</span>
+          <input v-model.trim="settingsStore.form.baseUrlLight" type="text" />
+        </label>
+
+        <label class="settings-field">
+          <span>轻量 API Key</span>
+          <input v-model.trim="settingsStore.form.apiKeyLight" type="password" autocomplete="off" />
+        </label>
+
+        <label class="settings-field">
+          <span>轻量模型</span>
+          <input v-model.trim="settingsStore.form.lightModel" type="text" />
+        </label>
+
+        <label class="settings-field">
+          <span>重量 Base URL</span>
+          <input v-model.trim="settingsStore.form.baseUrlHeavy" type="text" />
+        </label>
+
+        <label class="settings-field">
+          <span>重量 API Key</span>
+          <input v-model.trim="settingsStore.form.apiKeyHeavy" type="password" autocomplete="off" />
+        </label>
+
+        <label class="settings-field">
+          <span>重量模型</span>
+          <input v-model.trim="settingsStore.form.heavyModel" type="text" />
+        </label>
+
+        <label class="settings-field settings-field--checkbox">
+          <input v-model="settingsStore.form.requireConfirmationForScripts" type="checkbox" />
+          <span>写操作前需要确认</span>
+        </label>
+
+        <label class="settings-field settings-field--textarea">
+          <span>自定义系统指令</span>
+          <textarea
+            v-model.trim="settingsStore.form.customInstructions"
+            rows="4"
+            maxlength="2000"
+            placeholder="例如：优先使用简洁正式的中文回答。"
+          ></textarea>
+        </label>
+      </div>
+
+      <div class="settings-panel__footer">
+        <p
+          v-if="settingsStore.saveMessage"
+          class="settings-message"
+          :class="`settings-message--${settingsStore.saveMessageType}`"
+        >
+          {{ settingsStore.saveMessage }}
+        </p>
+        <button
+          class="send-button send-button--full"
+          type="button"
+          :disabled="settingsStore.isSaving"
+          @click="saveSettings"
+        >
+          {{ settingsStore.isSaving ? '保存中...' : '保存设置' }}
+        </button>
+      </div>
+    </section>
+
+    <section class="message-list" ref="messageListRef" @click="handleMessageListClick">
+      <ThoughtActionTrace :tool-calls="chatStore.activeToolCalls" />
+
+      <article
+        v-for="message in chatStore.messages"
+        :key="message.id"
+        class="message-card"
+        :class="`message-card--${message.role}`"
+      >
+        <div class="message-meta">
+          <span>{{ message.role === 'user' ? '你' : 'SmartWord' }}</span>
+          <span>{{ message.timestamp }}</span>
+        </div>
+        <div class="message-body" v-html="renderMessage(message)"></div>
+      </article>
+
+      <div v-if="chatStore.isLoading" class="message-card message-card--assistant">
+        <div class="message-meta">
+          <span>SmartWord</span>
+          <span>处理中</span>
+        </div>
+        <div class="message-body">
+          <span class="typing-dot"></span>
+          <span class="typing-dot"></span>
+          <span class="typing-dot"></span>
+        </div>
+      </div>
+    </section>
+
+    <form class="composer" @submit.prevent="submitMessage">
+      <label class="composer-label" for="chat-input">输入自然语言指令</label>
+      <textarea
+        id="chat-input"
+        v-model.trim="draft"
+        class="composer-input"
+        rows="4"
+        maxlength="3000"
+        :disabled="chatStore.isLoading"
+        placeholder="例如：总结当前文档的主要结构"
+      ></textarea>
+      <div class="composer-footer">
+        <p class="environment-hint">{{ environmentHint }}</p>
+        <button class="send-button" type="submit" :disabled="isSubmitDisabled">
+          {{ chatStore.isLoading ? '发送中...' : '发送' }}
+        </button>
+      </div>
+    </form>
+  </div>
+</template>
+
+<script setup>
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { marked } from 'marked';
+import { useChatStore } from '../stores/chat';
+import { useSettingsStore } from '../stores/settings';
+import { hostBridge } from '../bridge/hostBridge';
+import ThoughtActionTrace from './ThoughtActionTrace.vue';
+
+const chatStore = useChatStore();
+const settingsStore = useSettingsStore();
+const draft = ref('');
+const messageListRef = ref(null);
+let unsubscribeAgentEvent = null;
+
+marked.setOptions({
+  breaks: true,
+  gfm: true
+});
+
+const modeLabel = computed(() => {
+  const labels = {
+    ask: 'Ask',
+    plan: 'Plan',
+    agent: 'Agent'
+  };
+
+  return labels[chatStore.currentMode] || 'Auto';
+});
+
+const settingsSummary = computed(() => {
+  if (!settingsStore.isLoaded) {
+    return '正在加载连接设置...';
+  }
+
+  return `轻量模型：${settingsStore.form.lightModel} / 重量模型：${settingsStore.form.heavyModel}`;
+});
+
+const environmentHint = computed(() => {
+  return hostBridge.isAvailable
+    ? '当前运行在 WebView2 环境，设置会保存到本地应用目录。'
+    : '当前为浏览器预览模式，设置会暂存到本地 localStorage。';
+});
+
+const isSubmitDisabled = computed(() => {
+  return chatStore.isLoading || draft.value.length === 0 || settingsStore.isLoading;
+});
+
+function renderMessage(message) {
+  const html = marked.parse(message?.content || '');
+  if (!message || message.role !== 'assistant') {
+    return html;
+  }
+
+  return html.replace(/\[(\d+)\]/g, (fullMatch, rawRef) => {
+    const ref = Number(rawRef);
+    const citation = chatStore.findCitation(ref);
+    if (!citation) {
+      return fullMatch;
+    }
+
+    const title = `段落 ${citation.paragraphIndex}`;
+    return `<button class="citation-anchor" type="button" data-citation-ref="${ref}" title="${title}">[${ref}]</button>`;
+  });
+}
+
+async function saveSettings() {
+  try {
+    await settingsStore.saveSettings();
+  } catch {
+    // 错误信息已由 store 写入状态提示，这里不重复处理。
+  }
+}
+
+async function submitMessage() {
+  if (isSubmitDisabled.value) {
+    return;
+  }
+
+  const request = {
+    content: draft.value,
+    requireConfirmationForScripts: settingsStore.form.requireConfirmationForScripts,
+    customInstructions: settingsStore.form.customInstructions
+  };
+
+  chatStore.appendUserMessage(draft.value);
+  draft.value = '';
+  chatStore.startLoading();
+
+  try {
+    await hostBridge.sendMessage(request);
+  } catch (error) {
+    chatStore.finishLoading();
+    chatStore.appendAssistantMessage(`请求发送失败：${error.message || '未知错误'}`);
+  }
+}
+
+function handleAgentEvent(event) {
+  switch (event.type) {
+    case 'stream_chunk':
+      chatStore.appendAssistantChunk(event.content || '');
+      break;
+    case 'tool_call_started':
+      chatStore.startToolCall(event.toolCallId, event.toolName, event.toolInput);
+      break;
+    case 'tool_call_completed':
+      chatStore.completeToolCall(event.toolCallId, event.toolSuccess, event.toolOutput);
+      break;
+    case 'tool_call_denied':
+      chatStore.completeToolCall(event.toolCallId, false, event.toolOutput, 'denied');
+      break;
+    case 'mode_detected':
+      chatStore.setMode(event.detectedMode, event.isAutoRouted);
+      break;
+    case 'task_completed':
+      chatStore.setCitations(event.citations);
+      chatStore.finishLoading();
+      if (event.message) {
+        chatStore.appendAssistantMessage(event.message);
+      }
+      break;
+    case 'error':
+    case 'cancelled':
+      chatStore.finishLoading();
+      if (event.message) {
+        chatStore.appendAssistantMessage(event.message);
+      }
+      break;
+    default:
+      break;
+  }
+}
+
+async function handleMessageListClick(event) {
+  const target = event.target.closest('[data-citation-ref]');
+  if (!target) {
+    return;
+  }
+
+  const ref = Number(target.dataset.citationRef);
+  const citation = chatStore.findCitation(ref);
+  if (!citation) {
+    return;
+  }
+
+  await hostBridge.navigateToParagraph(citation.paragraphIndex);
+}
+
+async function scrollToBottom() {
+  await nextTick();
+  const element = messageListRef.value;
+  if (!element) {
+    return;
+  }
+
+  element.scrollTop = element.scrollHeight;
+}
+
+onMounted(async () => {
+  unsubscribeAgentEvent = hostBridge.onAgentEvent(handleAgentEvent);
+  await settingsStore.loadSettings();
+
+  if (!chatStore.messages.length) {
+    chatStore.appendAssistantMessage(
+      '已完成前端初始化。你现在可以直接聊天，也可以先在“设置”里保存长期使用的模型与接口配置。'
+    );
+  }
+});
+
+onUnmounted(() => {
+  if (typeof unsubscribeAgentEvent === 'function') {
+    unsubscribeAgentEvent();
+  }
+});
+
+watch(
+  () => [chatStore.messages.length, chatStore.activeToolCalls.length],
+  () => {
+    scrollToBottom();
+  }
+);
+</script>
+
+<style scoped>
+:global(*) {
+  box-sizing: border-box;
+}
+
+:global(html, body, #app) {
+  margin: 0;
+  min-height: 100%;
+  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  background:
+    radial-gradient(circle at top, rgba(140, 184, 255, 0.24), transparent 42%),
+    linear-gradient(180deg, #f7f9fc 0%, #eef3f8 100%);
+  color: #18314f;
+}
+
+:global(body) {
+  min-width: 280px;
+}
+
+.chat-window {
+  width: 280px;
+  min-height: 100vh;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid rgba(89, 118, 161, 0.18);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 14px 36px rgba(24, 49, 79, 0.08);
+}
+
+.eyebrow {
+  margin: 0 0 4px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #6f86a3;
+}
+
+.chat-header h1 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.1;
+}
+
+.settings-summary {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #60758f;
+}
+
+.header-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.mode-pill {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #18314f;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ghost-button {
+  border: 1px solid rgba(89, 118, 161, 0.22);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.82);
+  color: #244464;
+  font: inherit;
+  font-size: 12px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.ghost-button--small {
+  padding: 6px 8px;
+}
+
+.settings-panel {
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(89, 118, 161, 0.16);
+  box-shadow: 0 18px 40px rgba(24, 49, 79, 0.08);
+}
+
+.settings-panel__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.settings-panel__header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.settings-panel__header p {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #60758f;
+}
+
+.settings-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: #395372;
+}
+
+.settings-field input,
+.settings-field textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(89, 118, 161, 0.26);
+  border-radius: 14px;
+  font: inherit;
+  color: inherit;
+  background: #f7f9fc;
+}
+
+.settings-field textarea {
+  resize: vertical;
+  min-height: 88px;
+}
+
+.settings-field input:focus,
+.settings-field textarea:focus {
+  outline: 2px solid rgba(40, 81, 125, 0.25);
+  border-color: rgba(40, 81, 125, 0.42);
+}
+
+.settings-field--checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px;
+}
+
+.settings-field--checkbox input {
+  width: auto;
+  margin: 0;
+}
+
+.settings-panel__footer {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-message {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.settings-message--success {
+  color: #2d6a4f;
+}
+
+.settings-message--error {
+  color: #b42318;
+}
+
+.send-button--full {
+  width: 100%;
+}
+
+.message-list {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.message-card {
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(89, 118, 161, 0.16);
+  box-shadow: 0 12px 24px rgba(24, 49, 79, 0.06);
+  word-break: break-word;
+}
+
+.message-card--assistant {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.message-card--user {
+  background: linear-gradient(135deg, #18314f 0%, #28517d 100%);
+  color: #ffffff;
+}
+
+.message-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  opacity: 0.78;
+}
+
+.message-body {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.message-body :deep(p) {
+  margin: 0 0 8px;
+}
+
+.message-body :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.message-body :deep(code) {
+  padding: 1px 4px;
+  border-radius: 6px;
+  background: rgba(24, 49, 79, 0.08);
+  font-size: 12px;
+}
+
+.message-card--user .message-body :deep(code) {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.message-body :deep(.citation-anchor) {
+  border: none;
+  padding: 0 2px;
+  background: transparent;
+  color: #d96f32;
+  font: inherit;
+  cursor: pointer;
+}
+
+.composer {
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(89, 118, 161, 0.16);
+  box-shadow: 0 18px 40px rgba(24, 49, 79, 0.08);
+}
+
+.composer-label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #395372;
+}
+
+.composer-input {
+  width: 100%;
+  resize: none;
+  padding: 10px 12px;
+  border: 1px solid rgba(89, 118, 161, 0.26);
+  border-radius: 14px;
+  font: inherit;
+  color: inherit;
+  background: #f7f9fc;
+}
+
+.composer-input:focus {
+  outline: 2px solid rgba(40, 81, 125, 0.25);
+  border-color: rgba(40, 81, 125, 0.42);
+}
+
+.composer-footer {
+  margin-top: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.environment-hint {
+  margin: 0;
+  max-width: 130px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #60758f;
+}
+
+.send-button {
+  min-width: 76px;
+  padding: 10px 14px;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #d96f32 0%, #ee8d32 100%);
+  color: #ffffff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.16s ease, box-shadow 0.16s ease;
+  box-shadow: 0 10px 18px rgba(217, 111, 50, 0.24);
+}
+
+.send-button:hover:enabled,
+.ghost-button:hover:enabled {
+  transform: translateY(-1px);
+}
+
+.send-button:disabled,
+.ghost-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.typing-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #28517d;
+  animation: pulse 1s infinite ease-in-out;
+}
+
+.typing-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing-dot:nth-child(3) {
+  animation-delay: 0.4s;
+  margin-right: 0;
+}
+
+@keyframes pulse {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+
+  40% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+</style>
