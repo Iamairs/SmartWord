@@ -73,3 +73,5 @@ dist/
 plan_cur.md
 project_cur.md
 explain.md
+.claude/
+docs/instructions/
