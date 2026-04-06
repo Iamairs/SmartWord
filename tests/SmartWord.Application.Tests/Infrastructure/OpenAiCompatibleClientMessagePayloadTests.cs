@@ -1,0 +1,108 @@
+using System.Collections.Generic;
+using System.Reflection;
+using Newtonsoft.Json.Linq;
+using SmartWord.Core.Models;
+using SmartWord.Infrastructure.LlmClients;
+using Xunit;
+
+namespace SmartWord.Application.Tests.Infrastructure
+{
+    public class OpenAiCompatibleClientMessagePayloadTests
+    {
+        [Fact]
+        public void BuildMessagesPayload_ToolMessage_DoesNotSerializeNameField()
+        {
+            var messages = new List<AgentMessage>
+            {
+                new AgentMessage
+                {
+                    Role = "tool",
+                    ToolCallId = "call_123",
+                    Name = "probe_document",
+                    Content = "{\"ok\":true}"
+                }
+            };
+
+            var payload = InvokeBuildMessagesPayload(messages);
+            var toolMessage = Assert.IsType<JObject>(payload[0]);
+
+            Assert.Equal("tool", toolMessage["role"]?.Value<string>());
+            Assert.Equal("call_123", toolMessage["tool_call_id"]?.Value<string>());
+            Assert.Null(toolMessage["name"]);
+        }
+
+        [Fact]
+        public void BuildMessagesPayload_AssistantToolCall_PreservesReasoningContent()
+        {
+            var messages = new List<AgentMessage>
+            {
+                new AgentMessage
+                {
+                    Role = "assistant",
+                    Content = "\n\n",
+                    ReasoningContent = "先确认文档名，再回答。",
+                    ToolCalls = new List<ToolCall>
+                    {
+                        new ToolCall
+                        {
+                            Id = "call_456",
+                            Name = "probe_document",
+                            Input = "{\"include_stats\":true}"
+                        }
+                    }
+                }
+            };
+
+            var payload = InvokeBuildMessagesPayload(messages);
+            var assistantMessage = Assert.IsType<JObject>(payload[0]);
+
+            Assert.Equal("assistant", assistantMessage["role"]?.Value<string>());
+            Assert.Equal("\n\n", assistantMessage["content"]?.Value<string>());
+            Assert.Equal("先确认文档名，再回答。", assistantMessage["reasoning_content"]?.Value<string>());
+            Assert.Equal("function", assistantMessage["tool_calls"]?[0]?["type"]?.Value<string>());
+            Assert.Equal("probe_document", assistantMessage["tool_calls"]?[0]?["function"]?["name"]?.Value<string>());
+        }
+
+        [Fact]
+        public void BuildMessagesPayload_InvalidToolMessage_IsSkipped()
+        {
+            var messages = new List<AgentMessage>
+            {
+                new AgentMessage
+                {
+                    Role = "user",
+                    Content = "文件名是什么"
+                },
+                new AgentMessage
+                {
+                    Role = "tool",
+                    Content = "{\"ok\":true}"
+                }
+            };
+
+            var payload = InvokeBuildMessagesPayload(messages);
+
+            Assert.Single(payload);
+            Assert.Equal("user", payload[0]?["role"]?.Value<string>());
+        }
+
+        private static JArray InvokeBuildMessagesPayload(IReadOnlyList<AgentMessage> messages)
+        {
+            var method = typeof(OpenAiCompatibleClient).GetMethod(
+                "BuildMessagesPayload",
+                BindingFlags.Static | BindingFlags.NonPublic);
+
+            Assert.NotNull(method);
+
+            var capability = new ModelCapability
+            {
+                Model = "deepseek-ai/DeepSeek-V3.2",
+                SupportsToolCalling = true,
+                RequiresReasoningContentReplay = true
+            };
+
+            var result = method.Invoke(null, new object[] { messages, capability });
+            return Assert.IsType<JArray>(result);
+        }
+    }
+}
