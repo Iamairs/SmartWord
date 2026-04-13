@@ -733,11 +733,12 @@ namespace SmartWord.OfficeIntegration.WordWrappers
             });
         }
 
-        public Task<TableSnapshot> ReadTableAsync(int tableIndex, int maxRows, int maxColumns)
+        public Task<TableReadResult> ReadTableAsync(int tableIndex, int maxRows, int maxColumns)
         {
-            return InvokeAsync(() =>
+            return InvokeAsync<TableReadResult>(() =>
             {
                 var stopwatch = Stopwatch.StartNew();
+                var diagnostics = new ReadDiagnostics();
                 dynamic document = null;
                 dynamic tables = null;
                 dynamic table = null;
@@ -746,110 +747,62 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                     document = _wordApplication.ActiveDocument;
                     if (document == null)
                     {
-                        return null;
+                        return CreateTableReadFailure("当前没有活动文档，无法读取表格。", diagnostics);
                     }
 
                     tables = document.Tables;
                     var tableCount = tables == null ? 0 : Convert.ToInt32(tables.Count);
                     if (tableIndex < 0 || tableIndex >= tableCount)
                     {
-                        return null;
+                        return CreateTableReadFailure(
+                            "指定的表格索引超出范围。当前文档共有 " + tableCount + " 个表格。",
+                            diagnostics);
                     }
 
-                    table = tables[tableIndex + 1];
-                    var rowCount = SafeConvertToInt(() => table.Rows.Count);
-                    var columnCount = SafeConvertToInt(() => table.Columns.Count);
-                    var snapshot = new TableSnapshot
+                    table = tables.Item(tableIndex + 1);
+                    if (table == null)
                     {
-                        TableIndex = tableIndex,
-                        AnchorParagraphIndex = GetParagraphIndexFromRangeStartInternal(document, SafeConvertToInt(() => table.Range.Start)),
-                        RowCount = rowCount,
-                        ColumnCount = columnCount,
-                        RowsTruncated = rowCount > maxRows,
-                        ColumnsTruncated = columnCount > maxColumns
-                    };
-
-                    var safeMaxRows = Math.Max(1, maxRows);
-                    var safeMaxColumns = Math.Max(1, maxColumns);
-                    for (var rowIndex = 1; rowIndex <= Math.Min(rowCount, safeMaxRows); rowIndex++)
-                    {
-                        dynamic row = null;
-                        dynamic rowCells = null;
-                        var rowSnapshot = new TableRowSnapshot
-                        {
-                            RowIndex = rowIndex - 1
-                        };
-                        try
-                        {
-                            row = table.Rows[rowIndex];
-                            rowCells = row == null ? null : row.Cells;
-                            var rowCellCount = rowCells == null ? 0 : SafeConvertToInt(() => rowCells.Count);
-                            if (rowCellCount <= 0)
-                            {
-                                snapshot.Rows.Add(rowSnapshot);
-                                continue;
-                            }
-
-                            for (var cellIndex = 1; cellIndex <= Math.Min(rowCellCount, safeMaxColumns); cellIndex++)
-                            {
-                                dynamic cell = null;
-                                dynamic cellRange = null;
-                                try
-                                {
-                                    cell = rowCells[cellIndex];
-                                    cellRange = cell == null ? null : cell.Range;
-                                    rowSnapshot.Cells.Add(new TableCellSnapshot
-                                    {
-                                        ColumnIndex = cellIndex - 1,
-                                        Text = NormalizeParagraphText(cellRange == null ? string.Empty : Convert.ToString(cellRange.Text))
-                                    });
-                                }
-                                catch (Exception ex)
-                                {
-                                    WriteDiagnosticWarning(
-                                        "读取表格单元格失败。TableIndex="
-                                        + tableIndex
-                                        + ", RowIndex="
-                                        + (rowIndex - 1)
-                                        + ", CellIndex="
-                                        + (cellIndex - 1)
-                                        + ", Exception="
-                                        + ex);
-                                    rowSnapshot.Cells.Add(new TableCellSnapshot
-                                    {
-                                        ColumnIndex = cellIndex - 1,
-                                        Text = string.Empty
-                                    });
-                                }
-                                finally
-                                {
-                                    TryReleaseComObject(cellRange);
-                                    TryReleaseComObject(cell);
-                                }
-                            }
-                        }
-                        finally
-                        {
-                            TryReleaseComObject(rowCells);
-                            TryReleaseComObject(row);
-                        }
-
-                        snapshot.Rows.Add(rowSnapshot);
+                        return CreateTableReadFailure("无法访问指定的表格对象。", diagnostics);
                     }
 
-                    var documentPath = SafeGetDocumentPath(document);
-                    WriteDiagnosticInfo(
-                        "读取表格成功。DocumentPath="
-                        + documentPath
+                    TableSnapshot flattenedSnapshot;
+                    if (TryBuildTableSnapshotFromFlattenedCells(
+                        document,
+                        table,
+                        tableIndex,
+                        maxRows,
+                        maxColumns,
+                        diagnostics,
+                        out flattenedSnapshot))
+                    {
+                        return CreateTableReadSuccess(flattenedSnapshot, diagnostics, document, stopwatch);
+                    }
+
+                    diagnostics.AddWarning("已回退到逐行读取表格路径。");
+                    TableSnapshot rowSnapshot;
+                    if (TryBuildTableSnapshotFromRows(
+                        document,
+                        table,
+                        tableIndex,
+                        maxRows,
+                        maxColumns,
+                        diagnostics,
+                        out rowSnapshot))
+                    {
+                        return CreateTableReadSuccess(rowSnapshot, diagnostics, document, stopwatch);
+                    }
+
+                    var failureReason = diagnostics.HasWarnings
+                        ? "读取表格失败：" + string.Join("；", diagnostics.Warnings)
+                        : "读取表格失败，未能解析表格结构。";
+                    WriteDiagnosticWarning(
+                        "读取表格失败。DocumentPath="
+                        + SafeGetDocumentPath(document)
                         + ", TableIndex="
                         + tableIndex
-                        + ", RowCount="
-                        + snapshot.RowCount
-                        + ", ColumnCount="
-                        + snapshot.ColumnCount
-                        + ", DurationMs="
-                        + stopwatch.ElapsedMilliseconds);
-                    return snapshot;
+                        + ", Reason="
+                        + failureReason);
+                    return CreateTableReadFailure(failureReason, diagnostics);
                 }
                 catch (Exception ex)
                 {
@@ -861,7 +814,8 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                         + tableIndex
                         + ", Exception="
                         + ex);
-                    return null;
+                    diagnostics.AddWarning("读取表格时发生异常：" + ex.Message);
+                    return CreateTableReadFailure("读取表格时发生异常：" + ex.Message, diagnostics);
                 }
                 finally
                 {
@@ -1033,6 +987,23 @@ namespace SmartWord.OfficeIntegration.WordWrappers
             }
         }
 
+        private static bool TryConvertToInt(Func<object> accessor, out int value, out string errorMessage)
+        {
+            try
+            {
+                var rawValue = accessor();
+                value = rawValue == null ? 0 : Convert.ToInt32(rawValue);
+                errorMessage = string.Empty;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                value = 0;
+                errorMessage = ex.Message;
+                return false;
+            }
+        }
+
         private static bool SafeConvertToBool(Func<object> accessor)
         {
             try
@@ -1179,6 +1150,367 @@ namespace SmartWord.OfficeIntegration.WordWrappers
         private static void WriteDiagnosticWarning(string message)
         {
             Trace.WriteLine("[WARN] " + (message ?? string.Empty));
+        }
+
+        private static bool TryBuildTableSnapshotFromFlattenedCells(
+            dynamic document,
+            dynamic table,
+            int tableIndex,
+            int maxRows,
+            int maxColumns,
+            ReadDiagnostics diagnostics,
+            out TableSnapshot snapshot)
+        {
+            snapshot = null;
+            dynamic tableRange = null;
+            dynamic cells = null;
+            try
+            {
+                tableRange = table.Range;
+                if (tableRange == null)
+                {
+                    diagnostics.AddWarning("无法访问表格范围。");
+                    return false;
+                }
+
+                cells = tableRange.Cells;
+                if (cells == null)
+                {
+                    diagnostics.AddWarning("无法访问表格单元格集合。");
+                    return false;
+                }
+
+                if (!TryConvertToInt(() => cells.Count, out var cellCount, out var countError))
+                {
+                    diagnostics.AddWarning("无法读取表格单元格数量：" + countError);
+                    return false;
+                }
+
+                if (cellCount <= 0)
+                {
+                    diagnostics.AddWarning("表格单元格数量为 0。");
+                    return false;
+                }
+
+                var matrix = new SortedDictionary<int, SortedDictionary<int, string>>();
+                var skippedCellCount = 0;
+                for (var cellIndex = 1; cellIndex <= cellCount; cellIndex++)
+                {
+                    dynamic cell = null;
+                    dynamic cellRange = null;
+                    try
+                    {
+                        cell = cells.Item(cellIndex);
+                        cellRange = cell == null ? null : cell.Range;
+                        if (!TryConvertToInt(() => cell.RowIndex, out var rowIndex, out var rowError))
+                        {
+                            skippedCellCount++;
+                            diagnostics.AddWarning("无法读取单元格行索引：" + rowError);
+                            continue;
+                        }
+
+                        if (!TryConvertToInt(() => cell.ColumnIndex, out var columnIndex, out var columnError))
+                        {
+                            skippedCellCount++;
+                            diagnostics.AddWarning("无法读取单元格列索引：" + columnError);
+                            continue;
+                        }
+
+                        var zeroBasedRowIndex = Math.Max(0, rowIndex - 1);
+                        var zeroBasedColumnIndex = Math.Max(0, columnIndex - 1);
+                        if (!matrix.TryGetValue(zeroBasedRowIndex, out var rowMap))
+                        {
+                            rowMap = new SortedDictionary<int, string>();
+                            matrix[zeroBasedRowIndex] = rowMap;
+                        }
+
+                        rowMap[zeroBasedColumnIndex] = NormalizeParagraphText(
+                            cellRange == null ? string.Empty : Convert.ToString(cellRange.Text));
+                    }
+                    catch (Exception ex)
+                    {
+                        skippedCellCount++;
+                        WriteDiagnosticWarning(
+                            "按扁平单元格读取表格失败。TableIndex="
+                            + tableIndex
+                            + ", CellSequence="
+                            + (cellIndex - 1)
+                            + ", Exception="
+                            + ex);
+                    }
+                    finally
+                    {
+                        TryReleaseComObject(cellRange);
+                        TryReleaseComObject(cell);
+                    }
+                }
+
+                if (matrix.Count <= 0)
+                {
+                    diagnostics.AddWarning("扁平单元格路径未解析出任何有效单元格。");
+                    return false;
+                }
+
+                if (skippedCellCount > 0)
+                {
+                    diagnostics.IsPartial = true;
+                    diagnostics.AddWarning("扁平单元格路径跳过了 " + skippedCellCount + " 个异常单元格。");
+                }
+
+                var anchorParagraphIndex = GetParagraphIndexFromRangeStartInternal(
+                    document,
+                    SafeConvertToInt(() => tableRange.Start));
+                snapshot = BuildTableSnapshotFromMatrix(
+                    tableIndex,
+                    anchorParagraphIndex,
+                    maxRows,
+                    maxColumns,
+                    matrix);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                diagnostics.AddWarning("扁平单元格路径读取失败：" + ex.Message);
+                return false;
+            }
+            finally
+            {
+                TryReleaseComObject(cells);
+                TryReleaseComObject(tableRange);
+            }
+        }
+
+        private static bool TryBuildTableSnapshotFromRows(
+            dynamic document,
+            dynamic table,
+            int tableIndex,
+            int maxRows,
+            int maxColumns,
+            ReadDiagnostics diagnostics,
+            out TableSnapshot snapshot)
+        {
+            snapshot = null;
+            dynamic rows = null;
+            dynamic tableRange = null;
+            try
+            {
+                rows = table.Rows;
+                if (rows == null)
+                {
+                    diagnostics.AddWarning("无法访问表格行集合。");
+                    return false;
+                }
+
+                if (!TryConvertToInt(() => rows.Count, out var rowCount, out var rowCountError))
+                {
+                    diagnostics.AddWarning("无法读取表格行数：" + rowCountError);
+                    return false;
+                }
+
+                if (rowCount <= 0)
+                {
+                    diagnostics.AddWarning("表格行数为 0。");
+                    return false;
+                }
+
+                var matrix = new SortedDictionary<int, SortedDictionary<int, string>>();
+                var skippedCellCount = 0;
+                for (var rowIndex = 1; rowIndex <= rowCount; rowIndex++)
+                {
+                    dynamic row = null;
+                    dynamic rowCells = null;
+                    try
+                    {
+                        row = rows[rowIndex];
+                        rowCells = row == null ? null : row.Cells;
+                        if (rowCells == null)
+                        {
+                            continue;
+                        }
+
+                        if (!TryConvertToInt(() => rowCells.Count, out var rowCellCount, out var rowCellCountError))
+                        {
+                            diagnostics.AddWarning(
+                                "无法读取第 " + (rowIndex - 1) + " 行的单元格数量：" + rowCellCountError);
+                            continue;
+                        }
+
+                        var zeroBasedRowIndex = rowIndex - 1;
+                        if (!matrix.TryGetValue(zeroBasedRowIndex, out var rowMap))
+                        {
+                            rowMap = new SortedDictionary<int, string>();
+                            matrix[zeroBasedRowIndex] = rowMap;
+                        }
+
+                        for (var cellIndex = 1; cellIndex <= rowCellCount; cellIndex++)
+                        {
+                            dynamic cell = null;
+                            dynamic cellRange = null;
+                            try
+                            {
+                                cell = rowCells[cellIndex];
+                                cellRange = cell == null ? null : cell.Range;
+                                rowMap[cellIndex - 1] = NormalizeParagraphText(
+                                    cellRange == null ? string.Empty : Convert.ToString(cellRange.Text));
+                            }
+                            catch (Exception ex)
+                            {
+                                skippedCellCount++;
+                                WriteDiagnosticWarning(
+                                    "按行读取表格失败。TableIndex="
+                                    + tableIndex
+                                    + ", RowIndex="
+                                    + (rowIndex - 1)
+                                    + ", CellIndex="
+                                    + (cellIndex - 1)
+                                    + ", Exception="
+                                    + ex);
+                            }
+                            finally
+                            {
+                                TryReleaseComObject(cellRange);
+                                TryReleaseComObject(cell);
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        TryReleaseComObject(rowCells);
+                        TryReleaseComObject(row);
+                    }
+                }
+
+                if (matrix.Count <= 0)
+                {
+                    diagnostics.AddWarning("逐行路径未解析出任何有效单元格。");
+                    return false;
+                }
+
+                if (skippedCellCount > 0)
+                {
+                    diagnostics.IsPartial = true;
+                    diagnostics.AddWarning("逐行路径跳过了 " + skippedCellCount + " 个异常单元格。");
+                }
+
+                tableRange = table.Range;
+                var anchorParagraphIndex = tableRange == null
+                    ? -1
+                    : GetParagraphIndexFromRangeStartInternal(document, SafeConvertToInt(() => tableRange.Start));
+                snapshot = BuildTableSnapshotFromMatrix(
+                    tableIndex,
+                    anchorParagraphIndex,
+                    maxRows,
+                    maxColumns,
+                    matrix);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                diagnostics.AddWarning("逐行路径读取失败：" + ex.Message);
+                return false;
+            }
+            finally
+            {
+                TryReleaseComObject(tableRange);
+                TryReleaseComObject(rows);
+            }
+        }
+
+        private static TableSnapshot BuildTableSnapshotFromMatrix(
+            int tableIndex,
+            int anchorParagraphIndex,
+            int maxRows,
+            int maxColumns,
+            SortedDictionary<int, SortedDictionary<int, string>> matrix)
+        {
+            var detectedMaxRowIndex = matrix.Count <= 0 ? -1 : matrix.Keys.Max();
+            var detectedMaxColumnIndex = matrix.Count <= 0
+                ? -1
+                : matrix.Values
+                    .Where(row => row != null && row.Count > 0)
+                    .Select(row => row.Keys.Max())
+                    .DefaultIfEmpty(-1)
+                    .Max();
+            var rowCount = detectedMaxRowIndex + 1;
+            var columnCount = detectedMaxColumnIndex + 1;
+            var snapshot = new TableSnapshot
+            {
+                TableIndex = tableIndex,
+                AnchorParagraphIndex = anchorParagraphIndex,
+                RowCount = Math.Max(0, rowCount),
+                ColumnCount = Math.Max(0, columnCount),
+                RowsTruncated = rowCount > maxRows,
+                ColumnsTruncated = columnCount > maxColumns
+            };
+
+            var safeMaxRows = Math.Max(1, maxRows);
+            var safeMaxColumns = Math.Max(1, maxColumns);
+            foreach (var rowEntry in matrix)
+            {
+                if (rowEntry.Key >= safeMaxRows)
+                {
+                    break;
+                }
+
+                var rowSnapshot = new TableRowSnapshot
+                {
+                    RowIndex = rowEntry.Key
+                };
+
+                foreach (var columnEntry in rowEntry.Value)
+                {
+                    if (columnEntry.Key >= safeMaxColumns)
+                    {
+                        break;
+                    }
+
+                    rowSnapshot.Cells.Add(new TableCellSnapshot
+                    {
+                        ColumnIndex = columnEntry.Key,
+                        Text = columnEntry.Value
+                    });
+                }
+
+                snapshot.Rows.Add(rowSnapshot);
+            }
+
+            return snapshot;
+        }
+
+        private static TableReadResult CreateTableReadFailure(string reason, ReadDiagnostics diagnostics)
+        {
+            return new TableReadResult
+            {
+                Success = false,
+                FailureReason = string.IsNullOrWhiteSpace(reason) ? "读取表格失败。" : reason,
+                Diagnostics = diagnostics ?? new ReadDiagnostics()
+            };
+        }
+
+        private static TableReadResult CreateTableReadSuccess(
+            TableSnapshot snapshot,
+            ReadDiagnostics diagnostics,
+            dynamic document,
+            Stopwatch stopwatch)
+        {
+            var documentPath = SafeGetDocumentPath(document);
+            WriteDiagnosticInfo(
+                "读取表格成功。DocumentPath="
+                + documentPath
+                + ", TableIndex="
+                + snapshot.TableIndex
+                + ", RowCount="
+                + snapshot.RowCount
+                + ", ColumnCount="
+                + snapshot.ColumnCount
+                + ", DurationMs="
+                + stopwatch.ElapsedMilliseconds);
+            return new TableReadResult
+            {
+                Success = true,
+                Snapshot = snapshot,
+                Diagnostics = diagnostics ?? new ReadDiagnostics()
+            };
         }
 
         private static void TryReleaseComObject(object comObject)

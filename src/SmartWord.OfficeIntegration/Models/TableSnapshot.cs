@@ -3,6 +3,20 @@ using System.Collections.Generic;
 namespace SmartWord.OfficeIntegration.Models
 {
     /// <summary>
+    /// 表示读取表格后的包装结果，既包含表格快照，也包含失败原因与诊断信息。
+    /// </summary>
+    public sealed class TableReadResult
+    {
+        public bool Success { get; set; }
+
+        public string FailureReason { get; set; } = string.Empty;
+
+        public TableSnapshot Snapshot { get; set; }
+
+        public ReadDiagnostics Diagnostics { get; set; } = new ReadDiagnostics();
+    }
+
+    /// <summary>
     /// 表示单个表格的只读结果。
     /// </summary>
     public sealed class TableSnapshot

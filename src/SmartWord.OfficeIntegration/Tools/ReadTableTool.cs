@@ -54,15 +54,20 @@ namespace SmartWord.OfficeIntegration.Tools
 
             var maxRows = ReadNullableInt(input, "max_rows") ?? 20;
             var maxColumns = ReadNullableInt(input, "max_columns") ?? 10;
-            var table = await _wordApplicationWrapper
+            var tableResult = await _wordApplicationWrapper
                 .ReadTableAsync(tableIndex.Value, maxRows, maxColumns)
                 .ConfigureAwait(false);
-            if (table == null)
+            if (tableResult == null || !tableResult.Success || tableResult.Snapshot == null)
             {
-                return ToolCallResult.Error(Name, "指定的表格不存在，或当前文档不可读取。");
+                return ToolCallResult.Error(
+                    Name,
+                    string.IsNullOrWhiteSpace(tableResult == null ? null : tableResult.FailureReason)
+                        ? "指定的表格不存在，或当前文档不可读取。"
+                        : tableResult.FailureReason);
             }
 
-            var diagnostics = new ReadDiagnostics();
+            var table = tableResult.Snapshot;
+            var diagnostics = tableResult.Diagnostics ?? new ReadDiagnostics();
             if (table.RowsTruncated)
             {
                 diagnostics.IsPartial = true;
