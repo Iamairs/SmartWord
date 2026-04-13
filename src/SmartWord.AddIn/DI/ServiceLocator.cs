@@ -49,6 +49,8 @@ namespace SmartWord.AddIn.DI
                 registry.Register(new ReadSectionTool(wordWrapper));
                 registry.Register(new GrepDocumentTool(wordWrapper));
                 registry.Register(new GetSelectionContextTool(wordWrapper));
+                registry.Register(new ReadTableTool(wordWrapper));
+                registry.Register(new ReadAnnotationsTool(wordWrapper));
                 return registry;
             });
             services.AddSingleton<PermissionGuard>();

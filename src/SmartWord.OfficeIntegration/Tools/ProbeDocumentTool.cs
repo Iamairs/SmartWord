@@ -2,11 +2,14 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using SmartWord.Core.Enums;
 using SmartWord.Core.Interfaces;
 using SmartWord.Core.Models;
+using SmartWord.OfficeIntegration.Models;
+using SmartWord.OfficeIntegration.Reading;
 using SmartWord.OfficeIntegration.WordWrappers;
 
 namespace SmartWord.OfficeIntegration.Tools
@@ -18,7 +21,8 @@ namespace SmartWord.OfficeIntegration.Tools
     {
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
         {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         };
 
         private readonly WordApplicationWrapper _wordApplicationWrapper;
@@ -28,14 +32,14 @@ namespace SmartWord.OfficeIntegration.Tools
         {
             _wordApplicationWrapper = wordApplicationWrapper;
             _inputSchema = JsonDocument.Parse(
-                "{\"type\":\"object\",\"properties\":{\"include_styles\":{\"type\":\"boolean\"},\"include_stats\":{\"type\":\"boolean\"},\"include_headings\":{\"type\":\"boolean\"}}}")
+                "{\"type\":\"object\",\"properties\":{\"include_stats\":{\"type\":\"boolean\"},\"include_headings\":{\"type\":\"boolean\"}}}")
                 .RootElement
                 .Clone();
         }
 
         public string Name => "probe_document";
 
-        public string Description => "获取文档全局结构、统计信息、光标位置和选区信息。";
+        public string Description => "获取文档全局结构、统计信息、光标位置、最近标题与选区信息。";
 
         public ToolPermission RequiredPermission => ToolPermission.ReadOnly;
 
@@ -49,39 +53,36 @@ namespace SmartWord.OfficeIntegration.Tools
             var includeStats = ReadBool(input, "include_stats", true);
             var includeHeadings = ReadBool(input, "include_headings", true);
 
-            var documentPath = await _wordApplicationWrapper.GetActiveDocumentPath().ConfigureAwait(false);
-            var paragraphCount = await _wordApplicationWrapper.GetParagraphCountAsync().ConfigureAwait(false);
-            var wordCount = await _wordApplicationWrapper.GetWordCountAsync().ConfigureAwait(false);
-            var pageInfo = await _wordApplicationWrapper.GetPageInfoAsync().ConfigureAwait(false);
-            var cursorParagraphIndex = await _wordApplicationWrapper.GetCursorParagraphIndexAsync().ConfigureAwait(false);
-            var selectionInfo = await _wordApplicationWrapper.GetSelectionInfoAsync().ConfigureAwait(false);
-            var status = await _wordApplicationWrapper.GetDocumentStatusAsync().ConfigureAwait(false);
+            var snapshotBuilder = new ReadOnlyDocumentSnapshotBuilder(_wordApplicationWrapper);
+            var snapshot = await snapshotBuilder.BuildAsync(cancellationToken).ConfigureAwait(false);
             var headings = includeHeadings
-                ? await _wordApplicationWrapper.GetHeadingsAsync().ConfigureAwait(false)
-                : new System.Collections.Generic.List<DocumentHeading>();
+                ? snapshot.Headings
+                : Array.Empty<DocumentHeading>();
             var stats = includeStats
-                ? await _wordApplicationWrapper.GetDocumentStatsAsync().ConfigureAwait(false)
-                : (0, 0);
+                ? snapshot.Stats
+                : new DocumentStructureStats();
+            var nearestHeading = DocumentSectionPathResolver.ResolveNearestHeading(headings, snapshot.CursorParagraphIndex);
 
             var payload = new
             {
                 document = new
                 {
-                    name = string.IsNullOrWhiteSpace(documentPath) ? string.Empty : Path.GetFileName(documentPath),
-                    path = documentPath,
-                    word_count = wordCount,
-                    paragraph_count = paragraphCount,
-                    table_count = stats.Item1,
-                    image_count = stats.Item2,
-                    complexity = ResolveComplexity(wordCount)
+                    name = string.IsNullOrWhiteSpace(snapshot.DocumentPath) ? string.Empty : Path.GetFileName(snapshot.DocumentPath),
+                    path = snapshot.DocumentPath,
+                    word_count = snapshot.WordCount,
+                    paragraph_count = snapshot.ParagraphCount,
+                    table_count = stats.TableCount,
+                    image_count = stats.ImageCount,
+                    annotation_count = stats.AnnotationCount,
+                    complexity = snapshot.Complexity
                 },
                 status = new
                 {
-                    is_writable = status.IsWritable,
-                    is_read_only = status.IsReadOnly,
-                    is_password_protected = status.IsPasswordProtected,
-                    is_track_changes_enforced = status.IsTrackChangesEnforced,
-                    message = status.GetUserFriendlyMessage()
+                    is_writable = snapshot.Status.IsWritable,
+                    is_read_only = snapshot.Status.IsReadOnly,
+                    is_password_protected = snapshot.Status.IsPasswordProtected,
+                    is_track_changes_enforced = snapshot.Status.IsTrackChangesEnforced,
+                    message = snapshot.Status.GetUserFriendlyMessage()
                 },
                 outline = headings.Select(item => new
                 {
@@ -92,17 +93,27 @@ namespace SmartWord.OfficeIntegration.Tools
                 }),
                 cursor = new
                 {
-                    para_index = cursorParagraphIndex,
-                    current_page = pageInfo.CurrentPage,
-                    total_pages = pageInfo.TotalPages
+                    para_index = snapshot.CursorParagraphIndex,
+                    current_page = snapshot.CurrentPage,
+                    total_pages = snapshot.TotalPages,
+                    nearest_heading = nearestHeading == null
+                        ? null
+                        : new
+                        {
+                            text = nearestHeading.Text,
+                            para_index = nearestHeading.ParagraphIndex
+                        }
                 },
                 selection = new
                 {
-                    has_selection = selectionInfo.HasSelection,
-                    text = selectionInfo.Text,
-                    para_index = selectionInfo.ParagraphIndex,
-                    char_start = selectionInfo.CharStart,
-                    char_end = selectionInfo.CharEnd
+                    has_selection = snapshot.Selection.HasSelection,
+                    text = snapshot.Selection.Text,
+                    para_index = snapshot.Selection.ParagraphIndex,
+                    char_start = snapshot.Selection.CharStart,
+                    char_end = snapshot.Selection.CharEnd,
+                    start_para_index = snapshot.Selection.StartParagraphIndex,
+                    end_para_index = snapshot.Selection.EndParagraphIndex,
+                    is_multi_paragraph = snapshot.Selection.IsMultiParagraph
                 }
             };
 
@@ -118,16 +129,6 @@ namespace SmartWord.OfficeIntegration.Tools
 
             return property.ValueKind == JsonValueKind.True
                 || (property.ValueKind != JsonValueKind.False && defaultValue);
-        }
-
-        private static string ResolveComplexity(int wordCount)
-        {
-            if (wordCount < 1000)
-            {
-                return "small";
-            }
-
-            return wordCount < 10000 ? "medium" : "large";
         }
     }
 }

@@ -1,11 +1,15 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using SmartWord.Core.Interfaces;
 using SmartWord.Core.Models;
+using SmartWord.OfficeIntegration.Models;
+using SmartWord.OfficeIntegration.Reading;
 
 namespace SmartWord.OfficeIntegration.WordWrappers
 {
@@ -235,8 +239,9 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                         ? -1
                         : GetParagraphIndexFromRangeStartInternal(document, SafeConvertToInt(() => range.Start));
                 }
-                catch
+                catch (Exception ex)
                 {
+                    Trace.WriteLine("[WARN] 读取光标所在段落失败：" + ex);
                     return -1;
                 }
                 finally
@@ -248,15 +253,25 @@ namespace SmartWord.OfficeIntegration.WordWrappers
             });
         }
 
-        public Task<(bool HasSelection, string Text, int ParagraphIndex, int CharStart, int CharEnd)> GetSelectionInfoAsync()
+        public async Task<(bool HasSelection, string Text, int ParagraphIndex, int CharStart, int CharEnd)> GetSelectionInfoAsync()
         {
-            return InvokeAsync<(bool HasSelection, string Text, int ParagraphIndex, int CharStart, int CharEnd)>(() =>
+            var snapshot = await GetSelectionSnapshotAsync().ConfigureAwait(false);
+            return (
+                snapshot.HasSelection,
+                snapshot.Text,
+                snapshot.ParagraphIndex,
+                snapshot.CharStart,
+                snapshot.CharEnd);
+        }
+
+        public Task<SelectionSnapshot> GetSelectionSnapshotAsync()
+        {
+            return InvokeAsync(() =>
             {
+                var stopwatch = Stopwatch.StartNew();
                 dynamic document = null;
                 dynamic selection = null;
                 dynamic range = null;
-                dynamic paragraph = null;
-                dynamic paragraphRange = null;
                 try
                 {
                     document = _wordApplication.ActiveDocument;
@@ -264,37 +279,62 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                     range = selection == null ? null : selection.Range;
                     if (document == null || range == null)
                     {
-                        return (false, string.Empty, -1, -1, -1);
+                        return new SelectionSnapshot();
                     }
 
+                    var rangeStart = SafeConvertToInt(() => range.Start);
+                    var rangeEnd = SafeConvertToInt(() => range.End);
                     var selectionText = NormalizeParagraphText(Convert.ToString(range.Text));
-                    var hasSelection = SafeConvertToInt(() => range.Start) != SafeConvertToInt(() => range.End)
+                    var hasSelection = rangeStart != rangeEnd
                         && !string.IsNullOrWhiteSpace(selectionText);
 
-                    paragraph = range.Paragraphs == null ? null : range.Paragraphs[1];
-                    paragraphRange = paragraph == null ? null : paragraph.Range;
-                    var paragraphStart = paragraphRange == null ? 0 : SafeConvertToInt(() => paragraphRange.Start);
-                    var paragraphIndex = paragraphRange == null
+                    var paragraphRanges = GetParagraphRangeBoundsInternal((object)document);
+                    var startParagraphIndex = ParagraphRangeLocator.LocateParagraphIndex(paragraphRanges, rangeStart);
+                    var endAnchorPosition = hasSelection
+                        ? Math.Max(rangeStart, rangeEnd - 1)
+                        : rangeStart;
+                    var endParagraphIndex = ParagraphRangeLocator.LocateParagraphIndex(paragraphRanges, endAnchorPosition);
+                    var paragraphIndex = startParagraphIndex >= 0 ? startParagraphIndex : endParagraphIndex;
+                    var currentParagraph = paragraphRanges.FirstOrDefault(item => item.Index == paragraphIndex);
+                    var charStart = currentParagraph == null
                         ? -1
-                        : GetParagraphIndexFromRangeStartInternal(document, paragraphStart);
+                        : Math.Max(0, rangeStart - currentParagraph.Start);
+                    var charEnd = currentParagraph == null
+                        ? -1
+                        : Math.Max(
+                            charStart,
+                            Math.Min(Math.Max(currentParagraph.Start, currentParagraph.End), endAnchorPosition) - currentParagraph.Start);
 
-                    var charStart = paragraphRange == null
-                        ? -1
-                        : Math.Max(0, SafeConvertToInt(() => range.Start) - paragraphStart);
-                    var charEnd = paragraphRange == null
-                        ? -1
-                        : Math.Max(charStart, SafeConvertToInt(() => range.End) - paragraphStart);
+                    var snapshot = new SelectionSnapshot
+                    {
+                        HasSelection = hasSelection,
+                        Text = selectionText,
+                        ParagraphIndex = paragraphIndex,
+                        StartParagraphIndex = startParagraphIndex,
+                        EndParagraphIndex = endParagraphIndex,
+                        IsMultiParagraph = hasSelection && startParagraphIndex >= 0 && endParagraphIndex > startParagraphIndex,
+                        CharStart = charStart,
+                        CharEnd = charEnd
+                    };
 
-                    return (hasSelection, selectionText, paragraphIndex, charStart, charEnd);
+                    Trace.WriteLine(
+                        "[INFO] 读取选区信息成功。ParagraphIndex="
+                        + snapshot.ParagraphIndex
+                        + ", HasSelection="
+                        + snapshot.HasSelection
+                        + ", IsMultiParagraph="
+                        + snapshot.IsMultiParagraph
+                        + ", DurationMs="
+                        + stopwatch.ElapsedMilliseconds);
+                    return snapshot;
                 }
-                catch
+                catch (Exception ex)
                 {
-                    return (false, string.Empty, -1, -1, -1);
+                    Trace.WriteLine("[WARN] 读取选区信息失败：" + ex);
+                    return new SelectionSnapshot();
                 }
                 finally
                 {
-                    TryReleaseComObject(paragraphRange);
-                    TryReleaseComObject(paragraph);
                     TryReleaseComObject(range);
                     TryReleaseComObject(selection);
                     TryReleaseComObject(document);
@@ -306,6 +346,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
         {
             return InvokeAsync<List<DocumentHeading>>(() =>
             {
+                var stopwatch = Stopwatch.StartNew();
                 var headings = new List<DocumentHeading>();
                 dynamic document = null;
                 dynamic paragraphs = null;
@@ -372,10 +413,18 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                         headings[i].ChildCount = childCount;
                     }
 
+                    Trace.WriteLine(
+                        "[INFO] 读取文档标题成功。DocumentPath="
+                        + SafeGetDocumentPath(document)
+                        + ", HeadingCount="
+                        + headings.Count
+                        + ", DurationMs="
+                        + stopwatch.ElapsedMilliseconds);
                     return headings;
                 }
-                catch
+                catch (Exception ex)
                 {
+                    Trace.WriteLine("[WARN] 读取文档标题失败。DocumentPath=" + SafeGetDocumentPath(document) + "，Exception=" + ex);
                     return headings;
                 }
                 finally
@@ -390,6 +439,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
         {
             return InvokeAsync<List<(int Index, string Style, string Text)>>(() =>
             {
+                var stopwatch = Stopwatch.StartNew();
                 var paragraphs = new List<(int Index, string Style, string Text)>();
                 dynamic document = null;
                 dynamic paragraphCollection = null;
@@ -435,10 +485,30 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                         }
                     }
 
+                    Trace.WriteLine(
+                        "[INFO] 读取段落区间成功。DocumentPath="
+                        + SafeGetDocumentPath(document)
+                        + ", FromIndex="
+                        + fromIndex
+                        + ", ToIndex="
+                        + toIndex
+                        + ", Count="
+                        + paragraphs.Count
+                        + ", DurationMs="
+                        + stopwatch.ElapsedMilliseconds);
                     return paragraphs;
                 }
-                catch
+                catch (Exception ex)
                 {
+                    Trace.WriteLine(
+                        "[WARN] 读取段落区间失败。DocumentPath="
+                        + SafeGetDocumentPath(document)
+                        + ", FromIndex="
+                        + fromIndex
+                        + ", ToIndex="
+                        + toIndex
+                        + ", Exception="
+                        + ex);
                     return paragraphs;
                 }
                 finally
@@ -456,6 +526,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
         {
             return InvokeAsync<List<(int ParagraphIndex, int CharOffset, string ParagraphText)>>(() =>
             {
+                var stopwatch = Stopwatch.StartNew();
                 var results = new List<(int ParagraphIndex, int CharOffset, string ParagraphText)>();
                 if (string.IsNullOrWhiteSpace(keyword))
                 {
@@ -521,10 +592,30 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                         }
                     }
 
+                    Trace.WriteLine(
+                        "[INFO] 搜索文本成功。DocumentPath="
+                        + SafeGetDocumentPath(document)
+                        + ", Keyword="
+                        + keyword
+                        + ", UseRegex="
+                        + useRegex
+                        + ", ResultCount="
+                        + results.Count
+                        + ", DurationMs="
+                        + stopwatch.ElapsedMilliseconds);
                     return results;
                 }
-                catch
+                catch (Exception ex)
                 {
+                    Trace.WriteLine(
+                        "[WARN] 搜索文本失败。DocumentPath="
+                        + SafeGetDocumentPath(document)
+                        + ", Keyword="
+                        + keyword
+                        + ", UseRegex="
+                        + useRegex
+                        + ", Exception="
+                        + ex);
                     return results;
                 }
                 finally
@@ -576,39 +667,258 @@ namespace SmartWord.OfficeIntegration.WordWrappers
             });
         }
 
-        public Task<(int TableCount, int ImageCount)> GetDocumentStatsAsync()
+        public Task<DocumentStructureStats> GetDocumentStatsAsync()
         {
-            return InvokeAsync<(int TableCount, int ImageCount)>(() =>
+            return InvokeAsync(() =>
             {
+                var stopwatch = Stopwatch.StartNew();
                 dynamic document = null;
                 dynamic tables = null;
                 dynamic inlineShapes = null;
                 dynamic shapes = null;
+                dynamic comments = null;
                 try
                 {
                     document = _wordApplication.ActiveDocument;
                     if (document == null)
                     {
-                        return (0, 0);
+                        return new DocumentStructureStats();
                     }
 
                     tables = document.Tables;
                     inlineShapes = document.InlineShapes;
                     shapes = document.Shapes;
-                    return (
-                        tables == null ? 0 : Convert.ToInt32(tables.Count),
-                        (inlineShapes == null ? 0 : Convert.ToInt32(inlineShapes.Count))
-                        + (shapes == null ? 0 : Convert.ToInt32(shapes.Count)));
+                    comments = document.Comments;
+                    var stats = new DocumentStructureStats
+                    {
+                        TableCount = tables == null ? 0 : Convert.ToInt32(tables.Count),
+                        ImageCount = (inlineShapes == null ? 0 : Convert.ToInt32(inlineShapes.Count))
+                            + (shapes == null ? 0 : Convert.ToInt32(shapes.Count)),
+                        AnnotationCount = comments == null ? 0 : Convert.ToInt32(comments.Count)
+                    };
+                    Trace.WriteLine(
+                        "[INFO] 读取文档统计成功。DocumentPath="
+                        + SafeGetDocumentPath(document)
+                        + ", TableCount="
+                        + stats.TableCount
+                        + ", ImageCount="
+                        + stats.ImageCount
+                        + ", AnnotationCount="
+                        + stats.AnnotationCount
+                        + ", DurationMs="
+                        + stopwatch.ElapsedMilliseconds);
+                    return stats;
                 }
-                catch
+                catch (Exception ex)
                 {
-                    return (0, 0);
+                    Trace.WriteLine("[WARN] 读取文档统计失败。DocumentPath=" + SafeGetDocumentPath(document) + "，Exception=" + ex);
+                    return new DocumentStructureStats();
                 }
                 finally
                 {
+                    TryReleaseComObject(comments);
                     TryReleaseComObject(shapes);
                     TryReleaseComObject(inlineShapes);
                     TryReleaseComObject(tables);
+                    TryReleaseComObject(document);
+                }
+            });
+        }
+
+        public Task<TableSnapshot> ReadTableAsync(int tableIndex, int maxRows, int maxColumns)
+        {
+            return InvokeAsync(() =>
+            {
+                var stopwatch = Stopwatch.StartNew();
+                dynamic document = null;
+                dynamic tables = null;
+                dynamic table = null;
+                try
+                {
+                    document = _wordApplication.ActiveDocument;
+                    if (document == null)
+                    {
+                        return null;
+                    }
+
+                    tables = document.Tables;
+                    var tableCount = tables == null ? 0 : Convert.ToInt32(tables.Count);
+                    if (tableIndex < 0 || tableIndex >= tableCount)
+                    {
+                        return null;
+                    }
+
+                    table = tables[tableIndex + 1];
+                    var rowCount = SafeConvertToInt(() => table.Rows.Count);
+                    var columnCount = SafeConvertToInt(() => table.Columns.Count);
+                    var snapshot = new TableSnapshot
+                    {
+                        TableIndex = tableIndex,
+                        AnchorParagraphIndex = GetParagraphIndexFromRangeStartInternal(document, SafeConvertToInt(() => table.Range.Start)),
+                        RowCount = rowCount,
+                        ColumnCount = columnCount,
+                        RowsTruncated = rowCount > maxRows,
+                        ColumnsTruncated = columnCount > maxColumns
+                    };
+
+                    var safeMaxRows = Math.Max(1, maxRows);
+                    var safeMaxColumns = Math.Max(1, maxColumns);
+                    for (var rowIndex = 1; rowIndex <= Math.Min(rowCount, safeMaxRows); rowIndex++)
+                    {
+                        var rowSnapshot = new TableRowSnapshot
+                        {
+                            RowIndex = rowIndex - 1
+                        };
+
+                        for (var columnIndex = 1; columnIndex <= Math.Min(columnCount, safeMaxColumns); columnIndex++)
+                        {
+                            dynamic cell = null;
+                            dynamic cellRange = null;
+                            try
+                            {
+                                cell = table.Cell(rowIndex, columnIndex);
+                                cellRange = cell == null ? null : cell.Range;
+                                rowSnapshot.Cells.Add(new TableCellSnapshot
+                                {
+                                    ColumnIndex = columnIndex - 1,
+                                    Text = NormalizeParagraphText(cellRange == null ? string.Empty : Convert.ToString(cellRange.Text))
+                                });
+                            }
+                            finally
+                            {
+                                TryReleaseComObject(cellRange);
+                                TryReleaseComObject(cell);
+                            }
+                        }
+
+                        snapshot.Rows.Add(rowSnapshot);
+                    }
+
+                    Trace.WriteLine(
+                        "[INFO] 读取表格成功。DocumentPath="
+                        + SafeGetDocumentPath(document)
+                        + ", TableIndex="
+                        + tableIndex
+                        + ", RowCount="
+                        + snapshot.RowCount
+                        + ", ColumnCount="
+                        + snapshot.ColumnCount
+                        + ", DurationMs="
+                        + stopwatch.ElapsedMilliseconds);
+                    return snapshot;
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine(
+                        "[WARN] 读取表格失败。DocumentPath="
+                        + SafeGetDocumentPath(document)
+                        + ", TableIndex="
+                        + tableIndex
+                        + ", Exception="
+                        + ex);
+                    return null;
+                }
+                finally
+                {
+                    TryReleaseComObject(table);
+                    TryReleaseComObject(tables);
+                    TryReleaseComObject(document);
+                }
+            });
+        }
+
+        public Task<IReadOnlyList<AnnotationSnapshot>> ReadAnnotationsAsync(string authorFilter, int maxResults)
+        {
+            return InvokeAsync<IReadOnlyList<AnnotationSnapshot>>(() =>
+            {
+                var stopwatch = Stopwatch.StartNew();
+                var annotations = new List<AnnotationSnapshot>();
+                dynamic document = null;
+                dynamic comments = null;
+                try
+                {
+                    document = _wordApplication.ActiveDocument;
+                    if (document == null)
+                    {
+                        return annotations;
+                    }
+
+                    comments = document.Comments;
+                    var commentCount = comments == null ? 0 : Convert.ToInt32(comments.Count);
+                    for (var index = 1; index <= commentCount; index++)
+                    {
+                        if (annotations.Count >= Math.Max(1, maxResults))
+                        {
+                            break;
+                        }
+
+                        dynamic comment = null;
+                        dynamic scope = null;
+                        dynamic scopeParagraphs = null;
+                        dynamic paragraph = null;
+                        dynamic paragraphRange = null;
+                        try
+                        {
+                            comment = comments[index];
+                            var author = Convert.ToString(comment.Author) ?? string.Empty;
+                            if (!string.IsNullOrWhiteSpace(authorFilter)
+                                && author.IndexOf(authorFilter, StringComparison.OrdinalIgnoreCase) < 0)
+                            {
+                                continue;
+                            }
+
+                            scope = comment.Scope;
+                            scopeParagraphs = scope == null ? null : scope.Paragraphs;
+                            paragraph = scopeParagraphs == null ? null : scopeParagraphs[1];
+                            paragraphRange = paragraph == null ? null : paragraph.Range;
+
+                            annotations.Add(new AnnotationSnapshot
+                            {
+                                AnnotationIndex = index - 1,
+                                Author = author,
+                                CreatedAt = SafeReadString(() => Convert.ToDateTime(comment.Date).ToString("yyyy-MM-dd HH:mm:ss")),
+                                Text = NormalizeParagraphText(Convert.ToString(comment.Range == null ? string.Empty : comment.Range.Text)),
+                                AnchorText = NormalizeParagraphText(scope == null ? string.Empty : Convert.ToString(scope.Text)),
+                                ParagraphIndex = paragraphRange == null
+                                    ? -1
+                                    : GetParagraphIndexFromRangeStartInternal(document, SafeConvertToInt(() => paragraphRange.Start))
+                            });
+                        }
+                        finally
+                        {
+                            TryReleaseComObject(paragraphRange);
+                            TryReleaseComObject(paragraph);
+                            TryReleaseComObject(scopeParagraphs);
+                            TryReleaseComObject(scope);
+                            TryReleaseComObject(comment);
+                        }
+                    }
+
+                    Trace.WriteLine(
+                        "[INFO] 读取批注成功。DocumentPath="
+                        + SafeGetDocumentPath(document)
+                        + ", AuthorFilter="
+                        + (authorFilter ?? string.Empty)
+                        + ", Count="
+                        + annotations.Count
+                        + ", DurationMs="
+                        + stopwatch.ElapsedMilliseconds);
+                    return annotations;
+                }
+                catch (Exception ex)
+                {
+                    Trace.WriteLine(
+                        "[WARN] 读取批注失败。DocumentPath="
+                        + SafeGetDocumentPath(document)
+                        + ", AuthorFilter="
+                        + (authorFilter ?? string.Empty)
+                        + ", Exception="
+                        + ex);
+                    return annotations;
+                }
+                finally
+                {
+                    TryReleaseComObject(comments);
                     TryReleaseComObject(document);
                 }
             });
@@ -721,6 +1031,22 @@ namespace SmartWord.OfficeIntegration.WordWrappers
 
         private static int GetParagraphIndexFromRangeStartInternal(dynamic document, int rangeStart)
         {
+            try
+            {
+                var paragraphRanges = GetParagraphRangeBoundsInternal((object)document);
+                return ParagraphRangeLocator.LocateParagraphIndex(paragraphRanges, rangeStart);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine("[WARN] 根据 Range.Start 定位段落失败。RangeStart=" + rangeStart + "，Exception=" + ex);
+                return -1;
+            }
+        }
+
+        private static List<ParagraphRangeBounds> GetParagraphRangeBoundsInternal(object documentObject)
+        {
+            var paragraphRanges = new List<ParagraphRangeBounds>();
+            dynamic document = documentObject;
             dynamic paragraphs = null;
             try
             {
@@ -734,10 +1060,17 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                     {
                         paragraph = paragraphs[index];
                         paragraphRange = paragraph == null ? null : paragraph.Range;
-                        if (paragraphRange != null && SafeConvertToInt(() => paragraphRange.Start) >= rangeStart)
+                        if (paragraphRange == null)
                         {
-                            return index - 1;
+                            continue;
                         }
+
+                        paragraphRanges.Add(new ParagraphRangeBounds
+                        {
+                            Index = index - 1,
+                            Start = SafeConvertToInt(() => paragraphRange.Start),
+                            End = SafeConvertToInt(() => paragraphRange.End)
+                        });
                     }
                     finally
                     {
@@ -746,11 +1079,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                     }
                 }
 
-                return Math.Max(0, paragraphCount - 1);
-            }
-            catch
-            {
-                return -1;
+                return paragraphRanges;
             }
             finally
             {
@@ -769,6 +1098,30 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                 .Replace("\r", string.Empty)
                 .Replace("\a", string.Empty)
                 .Trim();
+        }
+
+        private static string SafeGetDocumentPath(dynamic document)
+        {
+            try
+            {
+                return document == null ? string.Empty : Convert.ToString(document.FullName);
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        private static string SafeReadString(Func<string> accessor)
+        {
+            try
+            {
+                return accessor() ?? string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
         }
 
         private static void TryReleaseComObject(object comObject)

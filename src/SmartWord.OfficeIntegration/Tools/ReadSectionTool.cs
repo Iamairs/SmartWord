@@ -1,12 +1,14 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using SmartWord.Core.Enums;
 using SmartWord.Core.Interfaces;
 using SmartWord.Core.Models;
+using SmartWord.OfficeIntegration.Models;
+using SmartWord.OfficeIntegration.Reading;
 using SmartWord.OfficeIntegration.WordWrappers;
 
 namespace SmartWord.OfficeIntegration.Tools
@@ -18,24 +20,27 @@ namespace SmartWord.OfficeIntegration.Tools
     {
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
         {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         };
 
         private readonly WordApplicationWrapper _wordApplicationWrapper;
         private readonly JsonElement _inputSchema;
+        private readonly ReadScopeResolver _readScopeResolver;
 
         public ReadSectionTool(WordApplicationWrapper wordApplicationWrapper)
         {
             _wordApplicationWrapper = wordApplicationWrapper;
+            _readScopeResolver = new ReadScopeResolver();
             _inputSchema = JsonDocument.Parse(
-                "{\"type\":\"object\",\"properties\":{\"heading\":{\"type\":\"string\"},\"include_subsections\":{\"type\":\"boolean\"},\"from_para\":{\"type\":\"integer\"},\"to_para\":{\"type\":\"integer\"},\"around_cursor\":{\"type\":\"boolean\"},\"context_window\":{\"type\":\"integer\"},\"include_formatting\":{\"type\":\"boolean\"},\"max_tokens\":{\"type\":\"integer\"}}}")
+                "{\"type\":\"object\",\"properties\":{\"heading\":{\"type\":\"string\"},\"include_subsections\":{\"type\":\"boolean\"},\"from_para\":{\"type\":\"integer\"},\"to_para\":{\"type\":\"integer\"},\"around_cursor\":{\"type\":\"boolean\"},\"context_window\":{\"type\":\"integer\"},\"max_tokens\":{\"type\":\"integer\"}}}")
                 .RootElement
                 .Clone();
         }
 
         public string Name => "read_section";
 
-        public string Description => "按标题、段落范围或光标附近读取指定片段。";
+        public string Description => "按标题、段落范围或光标附近读取指定片段，返回段落样式、文本与必要诊断信息。";
 
         public ToolPermission RequiredPermission => ToolPermission.ReadOnly;
 
@@ -54,8 +59,9 @@ namespace SmartWord.OfficeIntegration.Tools
             var contextWindow = Math.Max(1, ReadNullableInt(input, "context_window") ?? 5);
             var maxTokens = Math.Max(200, ReadNullableInt(input, "max_tokens") ?? 2000);
 
-            var paragraphCount = await _wordApplicationWrapper.GetParagraphCountAsync().ConfigureAwait(false);
-            if (paragraphCount <= 0)
+            var snapshotBuilder = new ReadOnlyDocumentSnapshotBuilder(_wordApplicationWrapper);
+            var snapshot = await snapshotBuilder.BuildAsync(cancellationToken).ConfigureAwait(false);
+            if (snapshot.ParagraphCount <= 0)
             {
                 return ToolCallResult.Ok(JsonSerializer.Serialize(new
                 {
@@ -66,17 +72,25 @@ namespace SmartWord.OfficeIntegration.Tools
                 }, JsonOptions));
             }
 
-            var resolvedRange = await ResolveRangeAsync(
-                heading,
-                includeSubsections,
-                fromPara,
-                toPara,
-                aroundCursor,
-                contextWindow,
-                paragraphCount).ConfigureAwait(false);
+            var diagnostics = new ReadDiagnostics();
+            var resolvedRange = _readScopeResolver.Resolve(
+                new ReadScope
+                {
+                    Heading = heading,
+                    IncludeSubsections = includeSubsections,
+                    FromParagraph = fromPara,
+                    ToParagraph = toPara,
+                    AroundCursor = aroundCursor,
+                    ContextWindow = contextWindow
+                },
+                snapshot.ParagraphCount,
+                snapshot.Headings,
+                snapshot.CursorParagraphIndex,
+                snapshot.Selection,
+                diagnostics);
 
-            var paragraphSnapshots = await _wordApplicationWrapper
-                .ReadParagraphsAsync(resolvedRange.FromParagraph, resolvedRange.ToParagraph)
+            var paragraphSnapshots = await snapshotBuilder
+                .ReadParagraphsAsync(resolvedRange.FromParagraph, resolvedRange.ToParagraph, cancellationToken)
                 .ConfigureAwait(false);
 
             var emittedParagraphs = new List<object>();
@@ -88,6 +102,8 @@ namespace SmartWord.OfficeIntegration.Tools
                 if (tokenEstimate + paragraphTokenEstimate > maxTokens && emittedParagraphs.Count > 0)
                 {
                     truncated = true;
+                    diagnostics.IsPartial = true;
+                    diagnostics.AddWarning("结果因 max_tokens 限制被截断。");
                     break;
                 }
 
@@ -110,70 +126,11 @@ namespace SmartWord.OfficeIntegration.Tools
                 },
                 paragraphs = emittedParagraphs,
                 truncated,
-                token_estimate = tokenEstimate
+                token_estimate = tokenEstimate,
+                diagnostics = BuildDiagnosticsPayload(diagnostics)
             };
 
             return ToolCallResult.Ok(JsonSerializer.Serialize(payload, JsonOptions));
-        }
-
-        private async Task<(int FromParagraph, int ToParagraph, string HeadingText)> ResolveRangeAsync(
-            string heading,
-            bool includeSubsections,
-            int? fromPara,
-            int? toPara,
-            bool aroundCursor,
-            int contextWindow,
-            int paragraphCount)
-        {
-            if (!string.IsNullOrWhiteSpace(heading))
-            {
-                var headings = await _wordApplicationWrapper.GetHeadingsAsync().ConfigureAwait(false);
-                var matchedHeading = headings.FirstOrDefault(item =>
-                    string.Equals(item.Text, heading, StringComparison.OrdinalIgnoreCase))
-                    ?? headings.FirstOrDefault(item =>
-                        item.Text.IndexOf(heading, StringComparison.OrdinalIgnoreCase) >= 0);
-                if (!string.IsNullOrWhiteSpace(matchedHeading.Text))
-                {
-                    var endParagraph = paragraphCount - 1;
-                    foreach (var nextHeading in headings.Where(item => item.ParagraphIndex > matchedHeading.ParagraphIndex))
-                    {
-                        var shouldStop = includeSubsections
-                            ? nextHeading.Level <= matchedHeading.Level
-                            : true;
-                        if (shouldStop)
-                        {
-                            endParagraph = Math.Max(matchedHeading.ParagraphIndex, nextHeading.ParagraphIndex - 1);
-                            break;
-                        }
-                    }
-
-                    return (matchedHeading.ParagraphIndex, endParagraph, matchedHeading.Text);
-                }
-            }
-
-            if (fromPara.HasValue || toPara.HasValue)
-            {
-                var start = Math.Max(0, fromPara ?? 0);
-                var end = Math.Min(paragraphCount - 1, toPara ?? start);
-                if (end < start)
-                {
-                    end = start;
-                }
-
-                return (start, end, string.Empty);
-            }
-
-            if (aroundCursor)
-            {
-                var cursor = await _wordApplicationWrapper.GetCursorParagraphIndexAsync().ConfigureAwait(false);
-                var safeCursor = cursor < 0 ? 0 : cursor;
-                return (
-                    Math.Max(0, safeCursor - contextWindow),
-                    Math.Min(paragraphCount - 1, safeCursor + contextWindow),
-                    string.Empty);
-            }
-
-            return (0, Math.Min(paragraphCount - 1, contextWindow * 2), string.Empty);
         }
 
         private static string ReadString(JsonElement input, string propertyName)
@@ -210,6 +167,17 @@ namespace SmartWord.OfficeIntegration.Tools
 
             return property.ValueKind == JsonValueKind.True
                 || (property.ValueKind != JsonValueKind.False && defaultValue);
+        }
+
+        private static object BuildDiagnosticsPayload(ReadDiagnostics diagnostics)
+        {
+            return diagnostics == null || (!diagnostics.IsPartial && !diagnostics.HasWarnings)
+                ? null
+                : new
+                {
+                    is_partial = diagnostics.IsPartial,
+                    warnings = diagnostics.Warnings
+                };
         }
     }
 }

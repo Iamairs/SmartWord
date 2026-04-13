@@ -455,7 +455,7 @@ namespace SmartWord.Application.Orchestration
             }
 
             contextBuilder.AppendLine(
-                $"Stats: tables={documentContext.TableCount}, images={documentContext.ImageCount}");
+                $"Stats: tables={documentContext.TableCount}, images={documentContext.ImageCount}, annotations={documentContext.AnnotationCount}");
             contextBuilder.AppendLine(
                 $"Status: {(documentContext.DocumentStatus == null ? string.Empty : documentContext.DocumentStatus.GetUserFriendlyMessage())}");
             if (documentContext.Headings != null && documentContext.Headings.Count > 0)
@@ -551,6 +551,27 @@ namespace SmartWord.Application.Orchestration
                             paragraphToRef,
                             ref nextCitationRef,
                             discovered);
+                        foreach (var item in (token["results"] as JArray ?? new JArray()).OfType<JObject>())
+                        {
+                            AttachRefsOnArray(
+                                item["context_before"] as JArray,
+                                "index",
+                                "text",
+                                documentPath,
+                                citationRegistry,
+                                paragraphToRef,
+                                ref nextCitationRef,
+                                discovered);
+                            AttachRefsOnArray(
+                                item["context_after"] as JArray,
+                                "index",
+                                "text",
+                                documentPath,
+                                citationRegistry,
+                                paragraphToRef,
+                                ref nextCitationRef,
+                                discovered);
+                        }
                         break;
                     case "probe_document":
                         AttachRefsOnArray(
@@ -577,6 +598,26 @@ namespace SmartWord.Application.Orchestration
                             token["selection"] as JObject,
                             "para_index",
                             "text",
+                            documentPath,
+                            citationRegistry,
+                            paragraphToRef,
+                            ref nextCitationRef,
+                            discovered);
+                        AttachRefOnObject(
+                            token["context"] as JObject,
+                            "paragraph_index",
+                            "paragraph_full",
+                            documentPath,
+                            citationRegistry,
+                            paragraphToRef,
+                            ref nextCitationRef,
+                            discovered);
+                        break;
+                    case "read_annotations":
+                        AttachRefsOnArray(
+                            token["results"] as JArray,
+                            "para_index",
+                            "anchor_text",
                             documentPath,
                             citationRegistry,
                             paragraphToRef,

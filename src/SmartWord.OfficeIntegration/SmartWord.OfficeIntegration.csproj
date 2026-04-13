@@ -52,7 +52,22 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Models\AnnotationSnapshot.cs" />
+    <Compile Include="Models\DocumentReadSnapshot.cs" />
+    <Compile Include="Models\DocumentStructureStats.cs" />
+    <Compile Include="Models\ParagraphRangeBounds.cs" />
+    <Compile Include="Models\ParagraphSnapshot.cs" />
+    <Compile Include="Models\ReadDiagnostics.cs" />
+    <Compile Include="Models\SelectionSnapshot.cs" />
+    <Compile Include="Models\TableSnapshot.cs" />
+    <Compile Include="Models\TextMatchSnapshot.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Reading\DocumentSectionPathResolver.cs" />
+    <Compile Include="Reading\ParagraphRangeLocator.cs" />
+    <Compile Include="Reading\ParagraphSearchEngine.cs" />
+    <Compile Include="Reading\ReadOnlyDocumentSnapshotBuilder.cs" />
+    <Compile Include="Reading\ReadScope.cs" />
+    <Compile Include="Reading\ReadScopeResolver.cs" />
     <Compile Include="Scripting\CSharpScriptExecutor.cs" />
     <Compile Include="Scripting\ScriptContext.cs" />
     <Compile Include="Scripting\ScriptGlobals.cs" />
@@ -60,7 +75,9 @@
     <Compile Include="Tools\GetSelectionContextTool.cs" />
     <Compile Include="Tools\GrepDocumentTool.cs" />
     <Compile Include="Tools\ProbeDocumentTool.cs" />
+    <Compile Include="Tools\ReadAnnotationsTool.cs" />
     <Compile Include="Tools\ReadSectionTool.cs" />
+    <Compile Include="Tools\ReadTableTool.cs" />
     <Compile Include="WordWrappers\DocumentWrapper.cs" />
     <Compile Include="WordWrappers\UndoRecordWrapper.cs" />
     <Compile Include="WordWrappers\WordApplicationWrapper.cs" />

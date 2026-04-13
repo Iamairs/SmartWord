@@ -19,5 +19,6 @@
     <ProjectReference Include="..\..\src\SmartWord.Application\SmartWord.Application.csproj" />
     <ProjectReference Include="..\..\src\SmartWord.Core\SmartWord.Core.csproj" />
     <ProjectReference Include="..\..\src\SmartWord.Infrastructure\SmartWord.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\SmartWord.OfficeIntegration\SmartWord.OfficeIntegration.csproj" />
   </ItemGroup>
 </Project>

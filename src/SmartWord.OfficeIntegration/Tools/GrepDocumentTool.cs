@@ -1,12 +1,14 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using SmartWord.Core.Enums;
 using SmartWord.Core.Interfaces;
 using SmartWord.Core.Models;
+using SmartWord.OfficeIntegration.Models;
+using SmartWord.OfficeIntegration.Reading;
 using SmartWord.OfficeIntegration.WordWrappers;
 
 namespace SmartWord.OfficeIntegration.Tools
@@ -18,24 +20,29 @@ namespace SmartWord.OfficeIntegration.Tools
     {
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
         {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         };
 
         private readonly WordApplicationWrapper _wordApplicationWrapper;
         private readonly JsonElement _inputSchema;
+        private readonly ReadScopeResolver _readScopeResolver;
+        private readonly ParagraphSearchEngine _paragraphSearchEngine;
 
         public GrepDocumentTool(WordApplicationWrapper wordApplicationWrapper)
         {
             _wordApplicationWrapper = wordApplicationWrapper;
+            _readScopeResolver = new ReadScopeResolver();
+            _paragraphSearchEngine = new ParagraphSearchEngine();
             _inputSchema = JsonDocument.Parse(
-                "{\"type\":\"object\",\"properties\":{\"keyword\":{\"type\":\"string\"},\"use_regex\":{\"type\":\"boolean\"},\"context_lines\":{\"type\":\"integer\"},\"max_results\":{\"type\":\"integer\"}}}")
+                "{\"type\":\"object\",\"properties\":{\"keyword\":{\"type\":\"string\"},\"use_regex\":{\"type\":\"boolean\"},\"context_lines\":{\"type\":\"integer\"},\"max_results\":{\"type\":\"integer\"},\"scope\":{\"type\":\"object\",\"properties\":{\"heading\":{\"type\":\"string\"},\"from_para\":{\"type\":\"integer\"},\"to_para\":{\"type\":\"integer\"},\"around_cursor\":{\"type\":\"boolean\"},\"context_window\":{\"type\":\"integer\"},\"selection_only\":{\"type\":\"boolean\"}}}},\"required\":[\"keyword\"]}")
                 .RootElement
                 .Clone();
         }
 
         public string Name => "grep_document";
 
-        public string Description => "搜索关键词并返回命中段落及前后文。";
+        public string Description => "搜索关键词或 .NET 正则表达式，返回总命中次数、每段全部命中偏移、所属章节与前后文。";
 
         public ToolPermission RequiredPermission => ToolPermission.ReadOnly;
 
@@ -55,62 +62,78 @@ namespace SmartWord.OfficeIntegration.Tools
             var useRegex = ReadBool(input, "use_regex", false);
             var contextLines = Math.Max(0, ReadNullableInt(input, "context_lines") ?? 2);
             var maxResults = Math.Max(1, ReadNullableInt(input, "max_results") ?? 10);
+            var scopeInput = ReadScopeInput(input);
 
-            var matches = await _wordApplicationWrapper
-                .SearchTextAsync(keyword, useRegex, maxResults)
+            var snapshotBuilder = new ReadOnlyDocumentSnapshotBuilder(_wordApplicationWrapper);
+            var snapshot = await snapshotBuilder.BuildAsync(cancellationToken).ConfigureAwait(false);
+            var diagnostics = new ReadDiagnostics();
+            var resolvedScope = _readScopeResolver.Resolve(
+                scopeInput,
+                snapshot.ParagraphCount,
+                snapshot.Headings,
+                snapshot.CursorParagraphIndex,
+                snapshot.Selection,
+                diagnostics);
+            var paragraphs = await snapshotBuilder
+                .ReadParagraphsAsync(resolvedScope.FromParagraph, resolvedScope.ToParagraph, cancellationToken)
                 .ConfigureAwait(false);
-            var headings = await _wordApplicationWrapper.GetHeadingsAsync().ConfigureAwait(false);
+            var searchResult = _paragraphSearchEngine.Search(paragraphs, keyword, useRegex, maxResults);
+            if (!string.IsNullOrWhiteSpace(searchResult.ErrorMessage))
+            {
+                return ToolCallResult.Error(Name, searchResult.ErrorMessage);
+            }
+
+            if (searchResult.IsTruncated)
+            {
+                diagnostics.IsPartial = true;
+                diagnostics.AddWarning("命中段落数量超过 max_results，结果已截断。");
+            }
 
             var resultPayloads = new List<object>();
-            foreach (var match in matches)
+            foreach (var match in searchResult.Results)
             {
-                var before = await _wordApplicationWrapper
+                var before = await snapshotBuilder
                     .ReadParagraphsAsync(
-                        Math.Max(0, match.ParagraphIndex - contextLines),
-                        Math.Max(0, match.ParagraphIndex - 1))
+                        Math.Max(resolvedScope.FromParagraph, match.Index - contextLines),
+                        Math.Max(resolvedScope.FromParagraph, match.Index - 1),
+                        cancellationToken)
                     .ConfigureAwait(false);
-                var after = await _wordApplicationWrapper
+                var after = await snapshotBuilder
                     .ReadParagraphsAsync(
-                        match.ParagraphIndex + 1,
-                        match.ParagraphIndex + contextLines)
+                        Math.Min(snapshot.ParagraphCount - 1, match.Index + 1),
+                        Math.Min(resolvedScope.ToParagraph, match.Index + contextLines),
+                        cancellationToken)
                     .ConfigureAwait(false);
 
                 resultPayloads.Add(new
                 {
-                    para_index = match.ParagraphIndex,
-                    text = match.ParagraphText,
-                    highlight_offset = match.CharOffset,
-                    section = ResolveSection(headings, match.ParagraphIndex),
-                    context_before = before.Select(item => new { index = item.Index, text = item.Text }),
-                    context_after = after.Select(item => new { index = item.Index, text = item.Text })
+                    para_index = match.Index,
+                    text = match.Text,
+                    highlight_offset = match.Matches.Count > 0 ? match.Matches[0].Start : -1,
+                    matches = match.Matches,
+                    section = DocumentSectionPathResolver.ResolveSectionPath(snapshot.Headings, match.Index),
+                    context_before = BuildContextPayload(before, match.Index),
+                    context_after = BuildContextPayload(after, match.Index)
                 });
             }
 
             var payload = new
             {
                 keyword,
-                total_matches = matches.Count,
-                results = resultPayloads
+                use_regex = useRegex,
+                total_hit_paragraphs = searchResult.TotalHitParagraphs,
+                total_matches = searchResult.TotalMatches,
+                scope = new
+                {
+                    from_para = resolvedScope.FromParagraph,
+                    to_para = resolvedScope.ToParagraph,
+                    heading = resolvedScope.HeadingText
+                },
+                results = resultPayloads,
+                diagnostics = BuildDiagnosticsPayload(diagnostics)
             };
 
             return ToolCallResult.Ok(JsonSerializer.Serialize(payload, JsonOptions));
-        }
-
-        private static string ResolveSection(IReadOnlyList<DocumentHeading> headings, int paragraphIndex)
-        {
-            if (headings == null || headings.Count == 0)
-            {
-                return string.Empty;
-            }
-
-            var matched = headings
-                .Where(item => item.ParagraphIndex <= paragraphIndex)
-                .OrderByDescending(item => item.ParagraphIndex)
-                .Take(3)
-                .OrderBy(item => item.Level)
-                .Select(item => item.Text)
-                .ToArray();
-            return string.Join(" > ", matched);
         }
 
         private static string ReadString(JsonElement input, string propertyName)
@@ -147,6 +170,54 @@ namespace SmartWord.OfficeIntegration.Tools
 
             return property.ValueKind == JsonValueKind.True
                 || (property.ValueKind != JsonValueKind.False && defaultValue);
+        }
+
+        private static ReadScope ReadScopeInput(JsonElement input)
+        {
+            if (input.ValueKind != JsonValueKind.Object || !input.TryGetProperty("scope", out var scopeToken))
+            {
+                return new ReadScope();
+            }
+
+            return new ReadScope
+            {
+                Heading = ReadString(scopeToken, "heading"),
+                FromParagraph = ReadNullableInt(scopeToken, "from_para"),
+                ToParagraph = ReadNullableInt(scopeToken, "to_para"),
+                AroundCursor = ReadBool(scopeToken, "around_cursor", false),
+                ContextWindow = Math.Max(1, ReadNullableInt(scopeToken, "context_window") ?? 5),
+                SelectionOnly = ReadBool(scopeToken, "selection_only", false)
+            };
+        }
+
+        private static IEnumerable<object> BuildContextPayload(
+            IReadOnlyList<ParagraphSnapshot> paragraphs,
+            int currentParagraphIndex)
+        {
+            foreach (var paragraph in paragraphs)
+            {
+                if (paragraph.Index == currentParagraphIndex)
+                {
+                    continue;
+                }
+
+                yield return new
+                {
+                    index = paragraph.Index,
+                    text = paragraph.Text
+                };
+            }
+        }
+
+        private static object BuildDiagnosticsPayload(ReadDiagnostics diagnostics)
+        {
+            return diagnostics == null || (!diagnostics.IsPartial && !diagnostics.HasWarnings)
+                ? null
+                : new
+                {
+                    is_partial = diagnostics.IsPartial,
+                    warnings = diagnostics.Warnings
+                };
         }
     }
 }

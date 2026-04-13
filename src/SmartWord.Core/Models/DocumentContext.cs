@@ -33,6 +33,8 @@ namespace SmartWord.Core.Models
 
         public int ImageCount { get; set; }
 
+        public int AnnotationCount { get; set; }
+
         public IList<DocumentHeading> Headings { get; set; } = new List<DocumentHeading>();
 
         public DocumentStatus DocumentStatus { get; set; } = new DocumentStatus();

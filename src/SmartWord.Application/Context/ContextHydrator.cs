@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using SmartWord.Core.Interfaces;
 using SmartWord.Core.Models;
+using SmartWord.OfficeIntegration.Reading;
 using SmartWord.OfficeIntegration.WordWrappers;
 
 namespace SmartWord.Application.Context
@@ -24,51 +25,33 @@ namespace SmartWord.Application.Context
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var documentPath = await SafeReadAsync(
-                () => _wordApplicationWrapper.GetActiveDocumentPath(),
-                string.Empty).ConfigureAwait(false);
-            var documentStatus = await SafeReadAsync(
-                () => _wordApplicationWrapper.GetDocumentStatusAsync(),
-                new DocumentStatus()).ConfigureAwait(false);
-            var paragraphCount = await SafeReadAsync(
-                () => _wordApplicationWrapper.GetParagraphCountAsync(),
-                0).ConfigureAwait(false);
-            var wordCount = await SafeReadAsync(
-                () => _wordApplicationWrapper.GetWordCountAsync(),
-                0).ConfigureAwait(false);
-            var pageInfo = await SafeReadAsync(
-                () => _wordApplicationWrapper.GetPageInfoAsync(),
-                (0, 0)).ConfigureAwait(false);
-            var cursorParagraphIndex = await SafeReadAsync(
-                () => _wordApplicationWrapper.GetCursorParagraphIndexAsync(),
-                -1).ConfigureAwait(false);
-            var selectionInfo = await SafeReadAsync(
-                () => _wordApplicationWrapper.GetSelectionInfoAsync(),
-                (false, string.Empty, -1, -1, -1)).ConfigureAwait(false);
-            var headings = await SafeReadAsync(
-                () => _wordApplicationWrapper.GetHeadingsAsync(),
-                new System.Collections.Generic.List<DocumentHeading>()).ConfigureAwait(false);
-            var stats = await SafeReadAsync(
-                () => _wordApplicationWrapper.GetDocumentStatsAsync(),
-                (0, 0)).ConfigureAwait(false);
+            var snapshotBuilder = new ReadOnlyDocumentSnapshotBuilder(_wordApplicationWrapper);
+            var snapshot = await SafeReadAsync(
+                () => snapshotBuilder.BuildAsync(cancellationToken),
+                null).ConfigureAwait(false);
+            if (snapshot == null)
+            {
+                snapshot = new OfficeIntegration.Models.DocumentReadSnapshot();
+            }
 
             return new DocumentContext
             {
-                DocumentPath = documentPath,
-                DocumentName = string.IsNullOrWhiteSpace(documentPath) ? string.Empty : Path.GetFileName(documentPath),
-                DocumentStatus = documentStatus,
-                ParagraphCount = paragraphCount,
-                WordCount = wordCount,
-                CurrentPageNumber = pageInfo.Item1,
-                TotalPages = pageInfo.Item2,
-                Complexity = ResolveComplexity(wordCount),
-                CursorParagraphIndex = cursorParagraphIndex,
-                HasSelection = selectionInfo.Item1,
-                SelectedText = selectionInfo.Item2,
-                SelectionParagraphIndex = selectionInfo.Item3,
-                Headings = headings,
-                TableCount = stats.Item1,
-                ImageCount = stats.Item2
+                DocumentPath = snapshot.DocumentPath,
+                DocumentName = string.IsNullOrWhiteSpace(snapshot.DocumentPath) ? string.Empty : Path.GetFileName(snapshot.DocumentPath),
+                DocumentStatus = snapshot.Status,
+                ParagraphCount = snapshot.ParagraphCount,
+                WordCount = snapshot.WordCount,
+                CurrentPageNumber = snapshot.CurrentPage,
+                TotalPages = snapshot.TotalPages,
+                Complexity = snapshot.Complexity,
+                CursorParagraphIndex = snapshot.CursorParagraphIndex,
+                HasSelection = snapshot.Selection.HasSelection,
+                SelectedText = snapshot.Selection.Text,
+                SelectionParagraphIndex = snapshot.Selection.ParagraphIndex,
+                Headings = new System.Collections.Generic.List<DocumentHeading>(snapshot.Headings),
+                TableCount = snapshot.Stats.TableCount,
+                ImageCount = snapshot.Stats.ImageCount,
+                AnnotationCount = snapshot.Stats.AnnotationCount
             };
         }
 
@@ -82,16 +65,6 @@ namespace SmartWord.Application.Context
             {
                 return defaultValue;
             }
-        }
-
-        private static string ResolveComplexity(int wordCount)
-        {
-            if (wordCount < 1000)
-            {
-                return "small";
-            }
-
-            return wordCount < 10000 ? "medium" : "large";
         }
     }
 }
