@@ -773,30 +773,65 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                     var safeMaxColumns = Math.Max(1, maxColumns);
                     for (var rowIndex = 1; rowIndex <= Math.Min(rowCount, safeMaxRows); rowIndex++)
                     {
+                        dynamic row = null;
+                        dynamic rowCells = null;
                         var rowSnapshot = new TableRowSnapshot
                         {
                             RowIndex = rowIndex - 1
                         };
-
-                        for (var columnIndex = 1; columnIndex <= Math.Min(columnCount, safeMaxColumns); columnIndex++)
+                        try
                         {
-                            dynamic cell = null;
-                            dynamic cellRange = null;
-                            try
+                            row = table.Rows[rowIndex];
+                            rowCells = row == null ? null : row.Cells;
+                            var rowCellCount = rowCells == null ? 0 : SafeConvertToInt(() => rowCells.Count);
+                            if (rowCellCount <= 0)
                             {
-                                cell = table.Cell(rowIndex, columnIndex);
-                                cellRange = cell == null ? null : cell.Range;
-                                rowSnapshot.Cells.Add(new TableCellSnapshot
+                                snapshot.Rows.Add(rowSnapshot);
+                                continue;
+                            }
+
+                            for (var cellIndex = 1; cellIndex <= Math.Min(rowCellCount, safeMaxColumns); cellIndex++)
+                            {
+                                dynamic cell = null;
+                                dynamic cellRange = null;
+                                try
                                 {
-                                    ColumnIndex = columnIndex - 1,
-                                    Text = NormalizeParagraphText(cellRange == null ? string.Empty : Convert.ToString(cellRange.Text))
-                                });
+                                    cell = rowCells[cellIndex];
+                                    cellRange = cell == null ? null : cell.Range;
+                                    rowSnapshot.Cells.Add(new TableCellSnapshot
+                                    {
+                                        ColumnIndex = cellIndex - 1,
+                                        Text = NormalizeParagraphText(cellRange == null ? string.Empty : Convert.ToString(cellRange.Text))
+                                    });
+                                }
+                                catch (Exception ex)
+                                {
+                                    WriteDiagnosticWarning(
+                                        "读取表格单元格失败。TableIndex="
+                                        + tableIndex
+                                        + ", RowIndex="
+                                        + (rowIndex - 1)
+                                        + ", CellIndex="
+                                        + (cellIndex - 1)
+                                        + ", Exception="
+                                        + ex);
+                                    rowSnapshot.Cells.Add(new TableCellSnapshot
+                                    {
+                                        ColumnIndex = cellIndex - 1,
+                                        Text = string.Empty
+                                    });
+                                }
+                                finally
+                                {
+                                    TryReleaseComObject(cellRange);
+                                    TryReleaseComObject(cell);
+                                }
                             }
-                            finally
-                            {
-                                TryReleaseComObject(cellRange);
-                                TryReleaseComObject(cell);
-                            }
+                        }
+                        finally
+                        {
+                            TryReleaseComObject(rowCells);
+                            TryReleaseComObject(row);
                         }
 
                         snapshot.Rows.Add(rowSnapshot);
