@@ -241,7 +241,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                 }
                 catch (Exception ex)
                 {
-                    Trace.WriteLine("[WARN] 读取光标所在段落失败：" + ex);
+                    WriteDiagnosticWarning("读取光标所在段落失败：" + ex);
                     return -1;
                 }
                 finally
@@ -317,8 +317,8 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                         CharEnd = charEnd
                     };
 
-                    Trace.WriteLine(
-                        "[INFO] 读取选区信息成功。ParagraphIndex="
+                    WriteDiagnosticInfo(
+                        "读取选区信息成功。ParagraphIndex="
                         + snapshot.ParagraphIndex
                         + ", HasSelection="
                         + snapshot.HasSelection
@@ -330,7 +330,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                 }
                 catch (Exception ex)
                 {
-                    Trace.WriteLine("[WARN] 读取选区信息失败：" + ex);
+                    WriteDiagnosticWarning("读取选区信息失败：" + ex);
                     return new SelectionSnapshot();
                 }
                 finally
@@ -413,9 +413,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                         headings[i].ChildCount = childCount;
                     }
 
-                    Trace.WriteLine(
-                        "[INFO] 读取文档标题成功。DocumentPath="
-                        + SafeGetDocumentPath(document)
+                    var documentPath = SafeGetDocumentPath(document);
+                    WriteDiagnosticInfo(
+                        "读取文档标题成功。DocumentPath="
+                        + documentPath
                         + ", HeadingCount="
                         + headings.Count
                         + ", DurationMs="
@@ -424,7 +425,8 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                 }
                 catch (Exception ex)
                 {
-                    Trace.WriteLine("[WARN] 读取文档标题失败。DocumentPath=" + SafeGetDocumentPath(document) + "，Exception=" + ex);
+                    var documentPath = SafeGetDocumentPath(document);
+                    WriteDiagnosticWarning("读取文档标题失败。DocumentPath=" + documentPath + "，Exception=" + ex);
                     return headings;
                 }
                 finally
@@ -485,9 +487,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                         }
                     }
 
-                    Trace.WriteLine(
-                        "[INFO] 读取段落区间成功。DocumentPath="
-                        + SafeGetDocumentPath(document)
+                    var documentPath = SafeGetDocumentPath(document);
+                    WriteDiagnosticInfo(
+                        "读取段落区间成功。DocumentPath="
+                        + documentPath
                         + ", FromIndex="
                         + fromIndex
                         + ", ToIndex="
@@ -500,9 +503,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                 }
                 catch (Exception ex)
                 {
-                    Trace.WriteLine(
-                        "[WARN] 读取段落区间失败。DocumentPath="
-                        + SafeGetDocumentPath(document)
+                    var documentPath = SafeGetDocumentPath(document);
+                    WriteDiagnosticWarning(
+                        "读取段落区间失败。DocumentPath="
+                        + documentPath
                         + ", FromIndex="
                         + fromIndex
                         + ", ToIndex="
@@ -592,9 +596,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                         }
                     }
 
-                    Trace.WriteLine(
-                        "[INFO] 搜索文本成功。DocumentPath="
-                        + SafeGetDocumentPath(document)
+                    var documentPath = SafeGetDocumentPath(document);
+                    WriteDiagnosticInfo(
+                        "搜索文本成功。DocumentPath="
+                        + documentPath
                         + ", Keyword="
                         + keyword
                         + ", UseRegex="
@@ -607,9 +612,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                 }
                 catch (Exception ex)
                 {
-                    Trace.WriteLine(
-                        "[WARN] 搜索文本失败。DocumentPath="
-                        + SafeGetDocumentPath(document)
+                    var documentPath = SafeGetDocumentPath(document);
+                    WriteDiagnosticWarning(
+                        "搜索文本失败。DocumentPath="
+                        + documentPath
                         + ", Keyword="
                         + keyword
                         + ", UseRegex="
@@ -696,9 +702,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                             + (shapes == null ? 0 : Convert.ToInt32(shapes.Count)),
                         AnnotationCount = comments == null ? 0 : Convert.ToInt32(comments.Count)
                     };
-                    Trace.WriteLine(
-                        "[INFO] 读取文档统计成功。DocumentPath="
-                        + SafeGetDocumentPath(document)
+                    var documentPath = SafeGetDocumentPath(document);
+                    WriteDiagnosticInfo(
+                        "读取文档统计成功。DocumentPath="
+                        + documentPath
                         + ", TableCount="
                         + stats.TableCount
                         + ", ImageCount="
@@ -711,7 +718,8 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                 }
                 catch (Exception ex)
                 {
-                    Trace.WriteLine("[WARN] 读取文档统计失败。DocumentPath=" + SafeGetDocumentPath(document) + "，Exception=" + ex);
+                    var documentPath = SafeGetDocumentPath(document);
+                    WriteDiagnosticWarning("读取文档统计失败。DocumentPath=" + documentPath + "，Exception=" + ex);
                     return new DocumentStructureStats();
                 }
                 finally
@@ -794,9 +802,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                         snapshot.Rows.Add(rowSnapshot);
                     }
 
-                    Trace.WriteLine(
-                        "[INFO] 读取表格成功。DocumentPath="
-                        + SafeGetDocumentPath(document)
+                    var documentPath = SafeGetDocumentPath(document);
+                    WriteDiagnosticInfo(
+                        "读取表格成功。DocumentPath="
+                        + documentPath
                         + ", TableIndex="
                         + tableIndex
                         + ", RowCount="
@@ -809,9 +818,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                 }
                 catch (Exception ex)
                 {
-                    Trace.WriteLine(
-                        "[WARN] 读取表格失败。DocumentPath="
-                        + SafeGetDocumentPath(document)
+                    var documentPath = SafeGetDocumentPath(document);
+                    WriteDiagnosticWarning(
+                        "读取表格失败。DocumentPath="
+                        + documentPath
                         + ", TableIndex="
                         + tableIndex
                         + ", Exception="
@@ -894,9 +904,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                         }
                     }
 
-                    Trace.WriteLine(
-                        "[INFO] 读取批注成功。DocumentPath="
-                        + SafeGetDocumentPath(document)
+                    var documentPath = SafeGetDocumentPath(document);
+                    WriteDiagnosticInfo(
+                        "读取批注成功。DocumentPath="
+                        + documentPath
                         + ", AuthorFilter="
                         + (authorFilter ?? string.Empty)
                         + ", Count="
@@ -907,9 +918,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                 }
                 catch (Exception ex)
                 {
-                    Trace.WriteLine(
-                        "[WARN] 读取批注失败。DocumentPath="
-                        + SafeGetDocumentPath(document)
+                    var documentPath = SafeGetDocumentPath(document);
+                    WriteDiagnosticWarning(
+                        "读取批注失败。DocumentPath="
+                        + documentPath
                         + ", AuthorFilter="
                         + (authorFilter ?? string.Empty)
                         + ", Exception="
@@ -1038,7 +1050,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
             }
             catch (Exception ex)
             {
-                Trace.WriteLine("[WARN] 根据 Range.Start 定位段落失败。RangeStart=" + rangeStart + "，Exception=" + ex);
+                WriteDiagnosticWarning("根据 Range.Start 定位段落失败。RangeStart=" + rangeStart + "，Exception=" + ex);
                 return -1;
             }
         }
@@ -1122,6 +1134,16 @@ namespace SmartWord.OfficeIntegration.WordWrappers
             {
                 return string.Empty;
             }
+        }
+
+        private static void WriteDiagnosticInfo(string message)
+        {
+            Trace.WriteLine("[INFO] " + (message ?? string.Empty));
+        }
+
+        private static void WriteDiagnosticWarning(string message)
+        {
+            Trace.WriteLine("[WARN] " + (message ?? string.Empty));
         }
 
         private static void TryReleaseComObject(object comObject)

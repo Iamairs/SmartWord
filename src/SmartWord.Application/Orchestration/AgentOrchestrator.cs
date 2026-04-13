@@ -379,13 +379,16 @@ namespace SmartWord.Application.Orchestration
                     }
 
                     // 对工具输出做引用装饰（paragraph -> ref），并更新映射系统消息。
-                    executionResult.Output = DecorateToolOutput(
-                        toolCall.Name,
-                        executionResult.Output,
-                        documentPath,
-                        citationRegistry,
-                        paragraphToRef,
-                        ref nextCitationRef);
+                    if (executionResult.Success)
+                    {
+                        executionResult.Output = DecorateToolOutput(
+                            toolCall.Name,
+                            executionResult.Output,
+                            documentPath,
+                            citationRegistry,
+                            paragraphToRef,
+                            ref nextCitationRef);
+                    }
 
                     // 回写工具结果到存储和消息列表，供下一轮模型继续推理。
                     await AppendToolResultAsync(
@@ -520,6 +523,13 @@ namespace SmartWord.Application.Orchestration
             if (string.IsNullOrWhiteSpace(output))
             {
                 return string.Empty;
+            }
+
+            var trimmedOutput = output.TrimStart();
+            if (!trimmedOutput.StartsWith("{", StringComparison.Ordinal)
+                && !trimmedOutput.StartsWith("[", StringComparison.Ordinal))
+            {
+                return output;
             }
 
             try
