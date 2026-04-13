@@ -17,7 +17,6 @@ export const useChatStore = defineStore('chat', {
     messages: [],
     isLoading: false,
     currentMode: 'ask',
-    isAutoRouted: true,
     activeToolCalls: [],
     citations: []
   }),
@@ -38,9 +37,8 @@ export const useChatStore = defineStore('chat', {
 
       lastMessage.content += content;
     },
-    setMode(mode, isAutoRouted = true) {
+    setMode(mode) {
       this.currentMode = mode || 'ask';
-      this.isAutoRouted = isAutoRouted;
     },
     startToolCall(toolCallId, toolName, toolInput) {
       const existing = this.activeToolCalls.find((item) => item.id === toolCallId);

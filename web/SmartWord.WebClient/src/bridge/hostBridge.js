@@ -1,4 +1,5 @@
 const SETTINGS_STORAGE_KEY = 'smartword-settings';
+const VALID_MODES = new Set(['ask', 'plan', 'agent']);
 
 function hasWebView2Bridge() {
   return Boolean(
@@ -47,10 +48,21 @@ function normalizeSettings(settings) {
 }
 
 function createMockResponse(request, notify) {
+  if (!VALID_MODES.has(request.manualMode)) {
+    window.setTimeout(
+      () =>
+        notify({
+          type: 'error',
+          message: '请求缺少有效的运行模式，请先在前端选择“对话交流”“规划任务”或“自主执行”。'
+        }),
+      120
+    );
+    return;
+  }
+
   const modeEvent = {
     type: 'mode_detected',
-    detectedMode: request.manualMode || 'ask',
-    isAutoRouted: !request.manualMode
+    detectedMode: request.manualMode
   };
 
   const chunkEvent = {
@@ -124,6 +136,10 @@ export const hostBridge = {
   },
 
   async sendMessage(request) {
+    if (!VALID_MODES.has(request?.manualMode)) {
+      throw new Error('请求缺少有效的运行模式，请先选择“对话交流”“规划任务”或“自主执行”。');
+    }
+
     if (this.isAvailable) {
       const payload = JSON.stringify(request);
       window.chrome.webview.hostObjects.bridge.SendMessageAsync(payload);

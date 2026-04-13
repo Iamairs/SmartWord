@@ -10,7 +10,7 @@
         <button class="ghost-button" type="button" @click="settingsStore.togglePanel()">
           {{ settingsStore.isPanelOpen ? '收起设置' : '设置' }}
         </button>
-        <span class="mode-pill">{{ modeLabel }}</span>
+        <span class="mode-pill">{{ modeBadgeText }}</span>
       </div>
     </header>
 
@@ -132,6 +132,22 @@
 
     <form class="composer" @submit.prevent="submitMessage">
       <label class="composer-label" for="chat-input">输入自然语言指令</label>
+      <div class="mode-selector">
+        <p class="mode-selector__label">运行模式</p>
+        <div class="mode-selector__options">
+          <button
+            v-for="option in modeOptions"
+            :key="option.value"
+            class="mode-option"
+            :class="{ 'mode-option--active': chatStore.currentMode === option.value }"
+            type="button"
+            :disabled="chatStore.isLoading"
+            @click="chatStore.setMode(option.value)"
+          >
+            {{ option.label }}
+          </button>
+        </div>
+      </div>
       <textarea
         id="chat-input"
         v-model.trim="draft"
@@ -139,7 +155,7 @@
         rows="4"
         maxlength="3000"
         :disabled="chatStore.isLoading"
-        placeholder="例如：总结当前文档的主要结构"
+        :placeholder="composerPlaceholder"
       ></textarea>
       <div class="composer-footer">
         <p class="environment-hint">{{ environmentHint }}</p>
@@ -164,6 +180,11 @@ const settingsStore = useSettingsStore();
 const draft = ref('');
 const messageListRef = ref(null);
 let unsubscribeAgentEvent = null;
+const modeOptions = [
+  { value: 'ask', label: '对话交流' },
+  { value: 'plan', label: '规划任务' },
+  { value: 'agent', label: '自主执行' }
+];
 
 marked.setOptions({
   breaks: true,
@@ -172,12 +193,26 @@ marked.setOptions({
 
 const modeLabel = computed(() => {
   const labels = {
-    ask: 'Ask',
-    plan: 'Plan',
-    agent: 'Agent'
+    ask: '对话交流',
+    plan: '规划任务',
+    agent: '自主执行'
   };
 
-  return labels[chatStore.currentMode] || 'Auto';
+  return labels[chatStore.currentMode] || '对话交流';
+});
+
+const modeBadgeText = computed(() => {
+  return `当前模式 · ${modeLabel.value}`;
+});
+
+const composerPlaceholder = computed(() => {
+  const placeholders = {
+    ask: '例如：总结当前文档的主要结构',
+    plan: '例如：先规划一下这份报告应该如何修改',
+    agent: '例如：直接帮我把标题层级统一一下'
+  };
+
+  return placeholders[chatStore.currentMode] || placeholders.ask;
 });
 
 const settingsSummary = computed(() => {
@@ -231,6 +266,7 @@ async function submitMessage() {
 
   const request = {
     content: draft.value,
+    manualMode: chatStore.currentMode,
     requireConfirmationForScripts: settingsStore.form.requireConfirmationForScripts,
     customInstructions: settingsStore.form.customInstructions
   };
@@ -262,7 +298,7 @@ function handleAgentEvent(event) {
       chatStore.completeToolCall(event.toolCallId, false, event.toolOutput, 'denied');
       break;
     case 'mode_detected':
-      chatStore.setMode(event.detectedMode, event.isAutoRouted);
+      chatStore.setMode(event.detectedMode);
       break;
     case 'task_completed':
       chatStore.setCitations(event.citations);
@@ -408,6 +444,7 @@ watch(
   color: #ffffff;
   font-size: 12px;
   font-weight: 600;
+  text-align: center;
 }
 
 .ghost-button {
@@ -609,6 +646,48 @@ watch(
   font-size: 12px;
   font-weight: 600;
   color: #395372;
+}
+
+.mode-selector {
+  margin-bottom: 10px;
+}
+
+.mode-selector__label {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: #60758f;
+}
+
+.mode-selector__options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.mode-option {
+  min-height: 38px;
+  padding: 8px 6px;
+  border: 1px solid rgba(89, 118, 161, 0.22);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.84);
+  color: #395372;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.3;
+  cursor: pointer;
+  transition:
+    transform 0.16s ease,
+    box-shadow 0.16s ease,
+    border-color 0.16s ease,
+    background 0.16s ease;
+}
+
+.mode-option--active {
+  border-color: rgba(24, 49, 79, 0.48);
+  background: linear-gradient(135deg, #18314f 0%, #28517d 100%);
+  color: #ffffff;
+  box-shadow: 0 10px 18px rgba(24, 49, 79, 0.18);
 }
 
 .composer-input {

@@ -56,9 +56,6 @@ namespace SmartWord.AddIn.DI
             services.AddSingleton<PermissionGuard>();
             services.AddSingleton(provider => new SystemPromptBuilder(
                 Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "Prompts")));
-            services.AddSingleton(provider => new IntentRouter(
-                provider.GetRequiredService<ILlmClient>(),
-                provider.GetRequiredService<LlmClientOptions>().LightModel));
             services.AddSingleton<IAgentOrchestrator>(provider => new AgentOrchestrator(
                 provider.GetRequiredService<ILlmClient>(),
                 provider.GetRequiredService<IContextHydrator>(),

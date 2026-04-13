@@ -8,7 +8,6 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Serilog;
 using SmartWord.AddIn.DI;
-using SmartWord.Application.Orchestration;
 using SmartWord.Core.Enums;
 using SmartWord.Core.Interfaces;
 using SmartWord.Core.Models;
@@ -94,30 +93,43 @@ namespace SmartWord.AddIn.TaskPane
                         return;
                     }
 
+                    var manualMode = request.Value<string>("manualMode");
+                    if (string.IsNullOrWhiteSpace(manualMode))
+                    {
+                        Log.Warning("前端请求缺少 manualMode，已拒绝执行。");
+                        PostEventToJs(new
+                        {
+                            type = "error",
+                            message = "请求缺少运行模式，请先在前端选择“对话交流”“规划任务”或“自主执行”。"
+                        });
+
+                        return;
+                    }
+
+                    if (!TryParseMode(manualMode, out var selectedMode))
+                    {
+                        Log.Warning("前端请求包含无效 manualMode。ManualMode={ManualMode}", manualMode);
+                        PostEventToJs(new
+                        {
+                            type = "error",
+                            message = $"请求包含无效的运行模式：{manualMode}。"
+                        });
+
+                        return;
+                    }
+
                     var orchestrator = ServiceLocator.GetRequiredService<IAgentOrchestrator>();
-                    var intentRouter = ServiceLocator.GetRequiredService<IntentRouter>();
-                    var contextHydrator = ServiceLocator.GetRequiredService<IContextHydrator>();
                     var llmClientOptions = ServiceLocator.GetRequiredService<LlmClientOptions>();
                     var smartWordSettings = ServiceLocator.GetCurrentSettingsSnapshot();
 
-                    var manualMode = request.Value<string>("manualMode");
-                    var selectedMode = await ResolveModeAsync(
-                        manualMode,
-                        content,
-                        intentRouter,
-                        contextHydrator,
-                        requestCts.Token).ConfigureAwait(false);
-
                     Log.Information(
-                        "请求模式识别完成：Mode={Mode}, IsAutoRouted={IsAutoRouted}",
-                        selectedMode,
-                        string.IsNullOrWhiteSpace(manualMode));
+                        "请求模式已确定：SelectedMode={SelectedMode}",
+                        selectedMode);
 
                     PostEventToJs(new
                     {
                         type = "mode_detected",
-                        detectedMode = selectedMode.ToString().ToLowerInvariant(),
-                        isAutoRouted = string.IsNullOrWhiteSpace(manualMode)
+                        detectedMode = selectedMode.ToString().ToLowerInvariant()
                     });
 
                     var customInstructions = request.Value<string>("customInstructions");
@@ -241,22 +253,6 @@ namespace SmartWord.AddIn.TaskPane
             cancellationTokenSource.Dispose();
         }
 
-        private static async Task<AgentMode> ResolveModeAsync(
-            string manualMode,
-            string content,
-            IntentRouter intentRouter,
-            IContextHydrator contextHydrator,
-            CancellationToken cancellationToken)
-        {
-            if (TryParseMode(manualMode, out var parsedManualMode))
-            {
-                return parsedManualMode;
-            }
-
-            var documentContext = await contextHydrator.HydrateAsync(cancellationToken).ConfigureAwait(false);
-            return await intentRouter.RouteAsync(content, documentContext, cancellationToken).ConfigureAwait(false);
-        }
-
         private static bool TryParseMode(string manualMode, out AgentMode mode)
         {
             mode = AgentMode.Agent;
@@ -299,7 +295,6 @@ namespace SmartWord.AddIn.TaskPane
                 completedSteps = agentEvent.CompletedSteps,
                 totalSteps = agentEvent.TotalSteps,
                 detectedMode = agentEvent.DetectedMode,
-                isAutoRouted = agentEvent.IsAutoRouted,
                 message = agentEvent.Message,
                 citations = agentEvent.Citations
             };
