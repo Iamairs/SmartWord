@@ -54,12 +54,14 @@
     <Compile Include="Enums\AgentMode.cs" />
     <Compile Include="Enums\ToolPermission.cs" />
     <Compile Include="Interfaces\IAgentOrchestrator.cs" />
+    <Compile Include="Interfaces\IConfirmationChannel.cs" />
     <Compile Include="Interfaces\IContextHydrator.cs" />
     <Compile Include="Interfaces\IConversationStore.cs" />
     <Compile Include="Interfaces\ILlmClient.cs" />
     <Compile Include="Interfaces\ITool.cs" />
     <Compile Include="Interfaces\IToolRegistry.cs" />
     <Compile Include="Interfaces\IUndoScope.cs" />
+    <Compile Include="Interfaces\IUndoScopeFactory.cs" />
     <Compile Include="Models\AgentEvent.cs" />
     <Compile Include="Models\AgentMessage.cs" />
     <Compile Include="Models\AgentRunOptions.cs" />

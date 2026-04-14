@@ -25,6 +25,7 @@ namespace SmartWord.Application.Orchestration
     {
         private const int AskModeMaxIterations = 5;
         private const int MaxToolCallsPerIteration = 5;
+        private const int ConsecutiveFailureThreshold = 3;
         private static readonly TimeSpan ToolExecutionTimeout = TimeSpan.FromSeconds(30);
         private const int ToolErrorMessageMaxLength = 500;
         private const int CompactionThreshold = 80000;
@@ -35,6 +36,8 @@ namespace SmartWord.Application.Orchestration
         private readonly SystemPromptBuilder _systemPromptBuilder;
         private readonly IToolRegistry _toolRegistry;
         private readonly PermissionGuard _permissionGuard;
+        private readonly IConfirmationChannel _confirmationChannel;
+        private readonly IUndoScopeFactory _undoScopeFactory;
 
         public AgentOrchestrator(
             ILlmClient llmClient,
@@ -42,7 +45,9 @@ namespace SmartWord.Application.Orchestration
             IConversationStore conversationStore,
             SystemPromptBuilder systemPromptBuilder,
             IToolRegistry toolRegistry,
-            PermissionGuard permissionGuard)
+            PermissionGuard permissionGuard,
+            IConfirmationChannel confirmationChannel,
+            IUndoScopeFactory undoScopeFactory)
         {
             _llmClient = llmClient;
             _contextHydrator = contextHydrator;
@@ -50,6 +55,8 @@ namespace SmartWord.Application.Orchestration
             _systemPromptBuilder = systemPromptBuilder;
             _toolRegistry = toolRegistry;
             _permissionGuard = permissionGuard;
+            _confirmationChannel = confirmationChannel;
+            _undoScopeFactory = undoScopeFactory;
         }
 
         /// <summary>
@@ -60,236 +67,302 @@ namespace SmartWord.Application.Orchestration
         /// 4) 输出流式事件与最终完成事件
         /// </summary>
         public async IAsyncEnumerable<AgentEvent> RunAsync(
-            string userInput,
-            AgentRunOptions options,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    string userInput,
+    AgentRunOptions options,
+    [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+{
+    var safeOptions = options ?? new AgentRunOptions();
+    var documentContext = await _contextHydrator.HydrateAsync(cancellationToken).ConfigureAwait(false);
+    var documentPath = string.IsNullOrWhiteSpace(documentContext.DocumentPath)
+        ? "__active_document__"
+        : documentContext.DocumentPath;
+
+    if (safeOptions.Mode == AgentMode.Agent
+        && (documentContext.DocumentStatus == null || !documentContext.DocumentStatus.IsWritable))
+    {
+        yield return new AgentEvent
         {
-            // 兜底运行参数，避免空引用。
-            var safeOptions = options ?? new AgentRunOptions();
+            Type = AgentEventType.DocumentNotWritable,
+            Message = documentContext.DocumentStatus == null
+                ? "文档当前不可写，系统已停止执行。"
+                : documentContext.DocumentStatus.GetUserFriendlyMessage()
+        };
 
-            // 首次水合文档上下文，用于确定对话归属文档。
-            var documentContext = await _contextHydrator.HydrateAsync(cancellationToken).ConfigureAwait(false);
-            var documentPath = string.IsNullOrWhiteSpace(documentContext.DocumentPath)
+        yield break;
+    }
+
+    var userMessage = new AgentMessage
+    {
+        Role = "user",
+        Content = userInput ?? string.Empty
+    };
+
+    await _conversationStore
+        .AppendUserMessageAsync(documentPath, userMessage, cancellationToken)
+        .ConfigureAwait(false);
+
+    var history = await _conversationStore
+        .GetHistoryAsync(documentPath, cancellationToken)
+        .ConfigureAwait(false);
+
+    var messages = new List<AgentMessage>();
+    var systemPrompt = BuildSystemPrompt(safeOptions, documentContext);
+    if (!string.IsNullOrWhiteSpace(systemPrompt))
+    {
+        messages.Add(new AgentMessage
+        {
+            Role = "system",
+            Content = systemPrompt
+        });
+    }
+
+    messages.AddRange(history);
+
+    if (!string.IsNullOrWhiteSpace(safeOptions.ModelRoutingMessage))
+    {
+        Log.Information(
+            "本次运行的模型能力分流说明：Mode={Mode}, Model={Model}, EnableToolCalling={EnableToolCalling}, RoutingMessage={RoutingMessage}",
+            safeOptions.Mode,
+            safeOptions.Model,
+            safeOptions.EnableToolCalling,
+            safeOptions.ModelRoutingMessage);
+    }
+
+    var toolDefinitions = safeOptions.EnableToolCalling
+        ? _toolRegistry.GetToolDefinitions(safeOptions.Mode)
+        : new List<ToolDefinition>();
+    var citationRegistry = new Dictionary<int, CitationEntry>();
+    var paragraphToRef = new Dictionary<int, int>();
+    var nextCitationRef = 1;
+    var maxIterations = ResolveMaxIterations(safeOptions);
+    var consecutiveFailures = 0;
+    var shouldCommitUndo = false;
+    AgentMessage finalAssistantMessage = null;
+    IUndoScope undoScope = null;
+
+    try
+    {
+        if (safeOptions.Mode == AgentMode.Agent && _undoScopeFactory != null)
+        {
+            undoScope = await _undoScopeFactory
+                .BeginTaskUndoAsync("SmartWord Agent 写入任务", cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        for (var iteration = 0; iteration < maxIterations; iteration++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var latestContext = await _contextHydrator.HydrateAsync(cancellationToken).ConfigureAwait(false);
+            var latestDocumentPath = string.IsNullOrWhiteSpace(latestContext.DocumentPath)
                 ? "__active_document__"
-                : documentContext.DocumentPath;
-
-            // 构造当前用户消息并写入会话存储。
-            var userMessage = new AgentMessage
+                : latestContext.DocumentPath;
+            if (!string.Equals(latestDocumentPath, documentPath, StringComparison.OrdinalIgnoreCase))
             {
-                Role = "user",
-                Content = userInput ?? string.Empty
-            };
-
-            // 
-            await _conversationStore
-                .AppendUserMessageAsync(documentPath, userMessage, cancellationToken)
-                .ConfigureAwait(false);
-
-            // 读取该文档对应的历史消息。
-            var history = await _conversationStore
-                .GetHistoryAsync(documentPath, cancellationToken)
-                .ConfigureAwait(false);
-
-            // 组装发送给模型的消息序列（system + history）。
-            var messages = new List<AgentMessage>();
-            var systemPrompt = BuildSystemPrompt(safeOptions, documentContext);
-            if (!string.IsNullOrWhiteSpace(systemPrompt))
-            {
-                messages.Add(new AgentMessage
+                yield return new AgentEvent
                 {
-                    Role = "system",
-                    Content = systemPrompt
-                });
+                    Type = AgentEventType.DocumentMismatch,
+                    Message = "检测到活动文档已切换，任务已停止。当前回滚仅能做最佳努力处理，请确认文档内容。"
+                };
+
+                yield break;
             }
 
-            messages.AddRange(history);
-
-            // 预取本次模式可用工具定义；初始化引用映射状态。
-            if (!string.IsNullOrWhiteSpace(safeOptions.ModelRoutingMessage))
+            if (_conversationStore.EstimateTokenCount(messages) > Math.Max(CompactionThreshold, safeOptions.CompactionThreshold))
             {
-                Log.Information(
-                    "本次运行的模型能力分流说明：Mode={Mode}, Model={Model}, EnableToolCalling={EnableToolCalling}, RoutingMessage={RoutingMessage}",
-                    safeOptions.Mode,
-                    safeOptions.Model,
-                    safeOptions.EnableToolCalling,
-                    safeOptions.ModelRoutingMessage);
+                yield return new AgentEvent
+                {
+                    Type = AgentEventType.ContextCompacted,
+                    Message = "当前对话已接近上下文上限，系统已停止继续扩展本轮上下文。"
+                };
+
+                break;
             }
 
-            var toolDefinitions = safeOptions.EnableToolCalling
-                ? _toolRegistry.GetToolDefinitions(safeOptions.Mode)
-                : new List<ToolDefinition>();
-            var citationRegistry = new Dictionary<int, CitationEntry>();
-            var paragraphToRef = new Dictionary<int, int>();
-            var nextCitationRef = 1;
-
-            // 计算最大迭代次数（Ask 模式受上限约束）。
-            var maxIterations = ResolveMaxIterations(safeOptions);
-            AgentMessage finalAssistantMessage = null;
-
-            // 主循环：每轮包含一次 LLM 回复 + 若干工具调用。
-            for (var iteration = 0; iteration < maxIterations; iteration++)
+            AgentMessage assistantMessage;
+            if (toolDefinitions.Count > 0)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                // 每轮校验当前文档是否发生切换，防止跨文档误操作。
-                var latestContext = await _contextHydrator.HydrateAsync(cancellationToken).ConfigureAwait(false);
-                var latestDocumentPath = string.IsNullOrWhiteSpace(latestContext.DocumentPath)
-                    ? "__active_document__"
-                    : latestContext.DocumentPath;
-                if (!string.Equals(latestDocumentPath, documentPath, StringComparison.OrdinalIgnoreCase))
+                var chunks = new ConcurrentQueue<string>();
+                using (var signal = new SemaphoreSlim(0))
                 {
-                    yield return new AgentEvent
-                    {
-                        Type = AgentEventType.DocumentMismatch,
-                        Message = "当前文档已切换，任务已取消。请返回原文档后重新发起。"
-                    };
-
-                    yield break;
-                }
-
-                // 会话接近上下文上限时提前终止，避免超出模型输入限制。
-                if (_conversationStore.EstimateTokenCount(messages) > Math.Max(CompactionThreshold, safeOptions.CompactionThreshold))
-                {
-                    yield return new AgentEvent
-                    {
-                        Type = AgentEventType.ContextCompacted,
-                        Message = "当前对话已接近上下文上限，Phase 2 先停止本轮并保留已有结果。"
-                    };
-
-                    break;
-                }
-
-                // 调用模型：有工具定义时走 tool-calling 接口，否则走纯流式文本接口。
-                AgentMessage assistantMessage;
-                if (toolDefinitions.Count > 0)
-                {
-                    var chunks = new ConcurrentQueue<string>();
-                    using (var signal = new SemaphoreSlim(0))
-                    {
-                        // 后台请求模型，回调中持续推入流式片段。
-                        var assistantTask = _llmClient.ChatCompletionWithToolsAsync(
-                            messages,
-                            safeOptions.Model,
-                            toolDefinitions,
-                            chunk =>
-                            {
-                                chunks.Enqueue(chunk);
-                                signal.Release();
-                            },
-                            cancellationToken);
-
-                        // 前台持续消费片段并向上游透传 StreamChunk 事件。
-                        while (!assistantTask.IsCompleted || !chunks.IsEmpty)
+                    var assistantTask = _llmClient.ChatCompletionWithToolsAsync(
+                        messages,
+                        safeOptions.Model,
+                        toolDefinitions,
+                        chunk =>
                         {
-                            while (chunks.TryDequeue(out var chunk))
-                            {
-                                yield return new AgentEvent
-                                {
-                                    Type = AgentEventType.StreamChunk,
-                                    Content = chunk
-                                };
-                            }
+                            chunks.Enqueue(chunk);
+                            signal.Release();
+                        },
+                        cancellationToken);
 
-                            if (assistantTask.IsCompleted)
-                            {
-                                break;
-                            }
-
-                            var waitTask = signal.WaitAsync(cancellationToken);
-                            var completedTask = await Task.WhenAny(assistantTask, waitTask).ConfigureAwait(false);
-                            if (completedTask == waitTask)
-                            {
-                                await waitTask.ConfigureAwait(false);
-                            }
-                        }
-
-                        // 清空尾部残留片段。
-                        while (chunks.TryDequeue(out var remainingChunk))
+                    while (!assistantTask.IsCompleted || !chunks.IsEmpty)
+                    {
+                        while (chunks.TryDequeue(out var chunk))
                         {
                             yield return new AgentEvent
                             {
                                 Type = AgentEventType.StreamChunk,
-                                Content = remainingChunk
+                                Content = chunk
                             };
                         }
 
-                        // 获取最终 assistant 消息（可能包含 tool calls）。
-                        assistantMessage = await assistantTask.ConfigureAwait(false);
-                    }
-                }
-                else
-                {
-                    // 无工具模式：仅拼接流式文本为最终 assistant 内容。
-                    var builder = new StringBuilder();
-                    await foreach (var chunk in _llmClient.ChatCompletionStreamAsync(messages, safeOptions.Model, cancellationToken))
-                    {
-                        if (string.IsNullOrEmpty(chunk))
+                        if (assistantTask.IsCompleted)
                         {
-                            continue;
+                            break;
                         }
 
-                        builder.Append(chunk);
+                        var waitTask = signal.WaitAsync(cancellationToken);
+                        var completedTask = await Task.WhenAny(assistantTask, waitTask).ConfigureAwait(false);
+                        if (completedTask == waitTask)
+                        {
+                            await waitTask.ConfigureAwait(false);
+                        }
+                    }
+
+                    while (chunks.TryDequeue(out var remainingChunk))
+                    {
                         yield return new AgentEvent
                         {
                             Type = AgentEventType.StreamChunk,
-                            Content = chunk
+                            Content = remainingChunk
                         };
                     }
 
-                    assistantMessage = new AgentMessage
+                    assistantMessage = await assistantTask.ConfigureAwait(false);
+                }
+            }
+            else
+            {
+                var builder = new StringBuilder();
+                await foreach (var chunk in _llmClient.ChatCompletionStreamAsync(messages, safeOptions.Model, cancellationToken))
+                {
+                    if (string.IsNullOrEmpty(chunk))
                     {
-                        Role = "assistant",
-                        Content = builder.ToString()
-                    };
-                }
+                        continue;
+                    }
 
-                // 保存本轮 assistant 消息到会话存储和内存消息列表。
-                finalAssistantMessage = assistantMessage;
-                await _conversationStore
-                    .AppendAssistantMessageAsync(documentPath, assistantMessage, cancellationToken)
-                    .ConfigureAwait(false);
-                messages.Add(CloneMessage(assistantMessage));
-
-                // 若模型未请求工具，说明本轮可直接结束。
-                if (assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0)
-                {
-                    break;
-                }
-
-                // 单轮工具调用数量限流，超出则截断并写入系统提示。
-                var toolCalls = assistantMessage.ToolCalls;
-                if (toolCalls.Count > MaxToolCallsPerIteration)
-                {
-                    toolCalls = toolCalls.Take(MaxToolCallsPerIteration).ToList();
-                    Log.Warning(
-                        "本轮工具调用数量超过限制，已截断。MaxToolCallsPerIteration={MaxToolCallsPerIteration}",
-                        MaxToolCallsPerIteration);
-                }
-
-                // 顺序执行工具调用，避免复杂并发状态冲突。
-                foreach (var toolCall in toolCalls)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-
-                    // 通知上游：工具开始执行。
+                    builder.Append(chunk);
                     yield return new AgentEvent
                     {
-                        Type = AgentEventType.ToolCallStarted,
+                        Type = AgentEventType.StreamChunk,
+                        Content = chunk
+                    };
+                }
+
+                assistantMessage = new AgentMessage
+                {
+                    Role = "assistant",
+                    Content = builder.ToString()
+                };
+            }
+
+            finalAssistantMessage = assistantMessage;
+            await _conversationStore
+                .AppendAssistantMessageAsync(documentPath, assistantMessage, cancellationToken)
+                .ConfigureAwait(false);
+            messages.Add(CloneMessage(assistantMessage));
+
+            if (assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0)
+            {
+                break;
+            }
+
+            var toolCalls = assistantMessage.ToolCalls;
+            if (toolCalls.Count > MaxToolCallsPerIteration)
+            {
+                toolCalls = toolCalls.Take(MaxToolCallsPerIteration).ToList();
+                Log.Warning(
+                    "本轮工具调用数量超过限制，已截断。MaxToolCallsPerIteration={MaxToolCallsPerIteration}",
+                    MaxToolCallsPerIteration);
+            }
+
+            foreach (var toolCall in toolCalls)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var tool = _toolRegistry.GetTool(toolCall.Name);
+                var isWriteTool = IsWriteTool(tool);
+
+                JObject parsedInput = null;
+                ToolCallResult inputParseError = null;
+                try
+                {
+                    parsedInput = string.IsNullOrWhiteSpace(toolCall.Input)
+                        ? new JObject()
+                        : JObject.Parse(toolCall.Input);
+                }
+                catch (Exception ex)
+                {
+                    inputParseError = ToolCallResult.Error(toolCall.Name, Truncate(ex.Message, ToolErrorMessageMaxLength));
+                }
+
+                var operationDescription = BuildOperationDescription(toolCall.Name, parsedInput);
+                var requiresConfirmation = safeOptions.Mode == AgentMode.Agent
+                    && safeOptions.RequireConfirmationForScripts
+                    && isWriteTool;
+
+                yield return new AgentEvent
+                {
+                    Type = AgentEventType.ToolCallStarted,
+                    ToolCallId = toolCall.Id,
+                    ToolName = toolCall.Name,
+                    ToolInput = toolCall.Input ?? string.Empty,
+                    RequiresConfirmation = requiresConfirmation,
+                    OperationDescription = operationDescription
+                };
+
+                if (!_permissionGuard.IsAllowed(toolCall.Name, safeOptions.Mode))
+                {
+                    var deniedResult = ToolCallResult.Denied(toolCall.Name);
+                    await AppendToolResultAsync(documentPath, messages, toolCall, deniedResult, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    yield return new AgentEvent
+                    {
+                        Type = AgentEventType.ToolCallDenied,
                         ToolCallId = toolCall.Id,
                         ToolName = toolCall.Name,
-                        ToolInput = toolCall.Input ?? string.Empty
+                        ToolInput = toolCall.Input ?? string.Empty,
+                        ToolOutput = deniedResult.Output,
+                        ToolSuccess = deniedResult.Success,
+                        OperationDescription = operationDescription
                     };
 
-                    // 权限校验失败则返回 denied 结果，不进入真实执行。
-                    if (!_permissionGuard.IsAllowed(toolCall.Name, safeOptions.Mode))
+                    consecutiveFailures++;
+                    if (consecutiveFailures >= ConsecutiveFailureThreshold)
                     {
-                        var deniedResult = ToolCallResult.Denied(toolCall.Name);
-                        await AppendToolResultAsync(
-                                documentPath,
-                                messages,
-                                toolCall,
-                                deniedResult,
-                                cancellationToken)
+                        yield return CreateCircuitBreakerEvent();
+                        yield break;
+                    }
+
+                    continue;
+                }
+
+                if (inputParseError != null)
+                {
+                    await AppendToolResultAsync(documentPath, messages, toolCall, inputParseError, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    yield return CreateToolCompletedEvent(toolCall, inputParseError);
+                    consecutiveFailures++;
+                    if (consecutiveFailures >= ConsecutiveFailureThreshold)
+                    {
+                        yield return CreateCircuitBreakerEvent();
+                        yield break;
+                    }
+
+                    continue;
+                }
+
+                if (requiresConfirmation)
+                {
+                    if (_confirmationChannel == null || !_confirmationChannel.IsAvailable)
+                    {
+                        var unavailableResult = ToolCallResult.Denied(
+                            toolCall.Name,
+                            "当前未连接确认通道，系统已拒绝执行写操作。");
+                        await AppendToolResultAsync(documentPath, messages, toolCall, unavailableResult, cancellationToken)
                             .ConfigureAwait(false);
 
                         yield return new AgentEvent
@@ -298,120 +371,165 @@ namespace SmartWord.Application.Orchestration
                             ToolCallId = toolCall.Id,
                             ToolName = toolCall.Name,
                             ToolInput = toolCall.Input ?? string.Empty,
-                            ToolOutput = deniedResult.Output,
-                            ToolSuccess = deniedResult.Success
+                            ToolOutput = unavailableResult.Output,
+                            ToolSuccess = unavailableResult.Success,
+                            OperationDescription = operationDescription
                         };
 
+                        consecutiveFailures++;
+                        if (consecutiveFailures >= ConsecutiveFailureThreshold)
+                        {
+                            yield return CreateCircuitBreakerEvent();
+                            yield break;
+                        }
+
                         continue;
                     }
 
-                    ToolCallResult executionResult;
-
-                    // 先解析工具输入 JSON；解析失败直接返回错误结果。
-                    JObject parsedInput = null;
-                    ToolCallResult inputParseError = null;
-                    try
+                    var confirmed = await _confirmationChannel
+                        .WaitForConfirmationAsync(toolCall.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (!confirmed)
                     {
-                        parsedInput = string.IsNullOrWhiteSpace(toolCall.Input)
-                            ? new JObject()
-                            : JObject.Parse(toolCall.Input);
-                    }
-                    catch (Exception ex)
-                    {
-                        inputParseError = ToolCallResult.Error(toolCall.Name, Truncate(ex.Message, ToolErrorMessageMaxLength));
-                    }
-
-                    if (inputParseError != null)
-                    {
-                        await AppendToolResultAsync(
-                                documentPath,
-                                messages,
-                                toolCall,
-                                inputParseError,
-                                cancellationToken)
+                        var skippedResult = ToolCallResult.Skipped(toolCall.Name, "用户选择跳过本次写操作。");
+                        await AppendToolResultAsync(documentPath, messages, toolCall, skippedResult, cancellationToken)
                             .ConfigureAwait(false);
 
-                        yield return CreateToolCompletedEvent(toolCall, inputParseError);
+                        yield return new AgentEvent
+                        {
+                            Type = AgentEventType.ToolCallSkipped,
+                            ToolCallId = toolCall.Id,
+                            ToolName = toolCall.Name,
+                            ToolInput = toolCall.Input ?? string.Empty,
+                            ToolOutput = skippedResult.Output,
+                            ToolSuccess = skippedResult.Success,
+                            OperationDescription = operationDescription
+                        };
+
+                        consecutiveFailures = 0;
                         continue;
                     }
+                }
 
-                    // 执行工具：包含工具不存在、超时、异常等兜底处理。
-                    try
+                ToolCallResult executionResult;
+                try
+                {
+                    if (tool == null)
                     {
-                        var tool = _toolRegistry.GetTool(toolCall.Name);
-                        if (tool == null)
+                        executionResult = ToolCallResult.Error(toolCall.Name, "未找到对应的工具实现。");
+                    }
+                    else
+                    {
+                        using (var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
                         {
-                            executionResult = ToolCallResult.Error(toolCall.Name, "未找到对应的工具实现。");
-                        }
-                        else
-                        {
-                            using (var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                            timeoutCts.CancelAfter(ToolExecutionTimeout);
+                            using (var inputDocument = JsonDocument.Parse(parsedInput.ToString(Formatting.None)))
                             {
-                                timeoutCts.CancelAfter(ToolExecutionTimeout);
-                                using (var inputDocument = JsonDocument.Parse(parsedInput.ToString(Formatting.None)))
-                                {
-                                    var toolTask = tool.ExecuteAsync(
-                                        inputDocument.RootElement.Clone(),
-                                        null,
-                                        timeoutCts.Token);
-
-                                    // 双重超时保护：工具 token + Task.Delay 竞速。
-                                    var completedTask = await Task.WhenAny(toolTask, Task.Delay(ToolExecutionTimeout, cancellationToken))
-                                        .ConfigureAwait(false);
-                                    executionResult = completedTask == toolTask
-                                        ? await toolTask.ConfigureAwait(false)
-                                        : ToolCallResult.Error(toolCall.Name, "工具执行超时。");
-                                }
+                                var toolTask = tool.ExecuteAsync(
+                                    inputDocument.RootElement.Clone(),
+                                    undoScope,
+                                    timeoutCts.Token);
+                                var completedTask = await Task.WhenAny(
+                                        toolTask,
+                                        Task.Delay(ToolExecutionTimeout, cancellationToken))
+                                    .ConfigureAwait(false);
+                                executionResult = completedTask == toolTask
+                                    ? await toolTask.ConfigureAwait(false)
+                                    : ToolCallResult.Error(toolCall.Name, "工具执行超时。");
                             }
                         }
                     }
-                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-                    {
-                        // 非外部取消引发的取消，按工具超时处理。
-                        executionResult = ToolCallResult.Error(toolCall.Name, "工具执行超时。");
-                    }
-                    catch (Exception ex)
-                    {
-                        // 其他异常统一截断后返回，避免过长错误污染上下文。
-                        executionResult = ToolCallResult.Error(
-                            toolCall.Name,
-                            Truncate(ex.ToString(), ToolErrorMessageMaxLength));
-                    }
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    executionResult = ToolCallResult.Error(toolCall.Name, "工具执行超时。");
+                }
+                catch (Exception ex)
+                {
+                    executionResult = ToolCallResult.Error(
+                        toolCall.Name,
+                        Truncate(ex.ToString(), ToolErrorMessageMaxLength));
+                }
 
-                    // 对工具输出做引用装饰（paragraph -> ref），并更新映射系统消息。
-                    if (executionResult.Success)
+                if (executionResult.Success)
+                {
+                    executionResult.Output = DecorateToolOutput(
+                        toolCall.Name,
+                        executionResult.Output,
+                        documentPath,
+                        citationRegistry,
+                        paragraphToRef,
+                        ref nextCitationRef);
+                }
+
+                if (string.IsNullOrWhiteSpace(executionResult.OperationDescription))
+                {
+                    executionResult.OperationDescription = operationDescription;
+                }
+
+                await AppendToolResultAsync(documentPath, messages, toolCall, executionResult, cancellationToken)
+                    .ConfigureAwait(false);
+
+                yield return CreateToolCompletedEvent(toolCall, executionResult);
+
+                if (executionResult.Success)
+                {
+                    consecutiveFailures = 0;
+                    if (isWriteTool)
                     {
-                        executionResult.Output = DecorateToolOutput(
-                            toolCall.Name,
-                            executionResult.Output,
-                            documentPath,
-                            citationRegistry,
-                            paragraphToRef,
-                            ref nextCitationRef);
+                        yield return new AgentEvent
+                        {
+                            Type = AgentEventType.ChangeApplied,
+                            ToolCallId = toolCall.Id,
+                            ToolName = toolCall.Name,
+                            AffectedParagraphs = executionResult.AffectedParagraphs,
+                            OperationDescription = executionResult.OperationDescription
+                        };
                     }
-
-                    // 回写工具结果到存储和消息列表，供下一轮模型继续推理。
-                    await AppendToolResultAsync(
-                            documentPath,
-                            messages,
-                            toolCall,
-                            executionResult,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-
-                    // 通知上游：工具执行完成。
-                    yield return CreateToolCompletedEvent(toolCall, executionResult);
+                }
+                else
+                {
+                    consecutiveFailures++;
+                    if (consecutiveFailures >= ConsecutiveFailureThreshold)
+                    {
+                        yield return CreateCircuitBreakerEvent();
+                        yield break;
+                    }
                 }
             }
-
-            // 统一输出任务完成事件，并根据最终答案中的 [n] 提取可见引用列表。
-            yield return new AgentEvent
-            {
-                Type = AgentEventType.TaskCompleted,
-                Citations = BuildCitations(finalAssistantMessage?.Content, citationRegistry),
-                Message = string.Empty
-            };
         }
+
+        shouldCommitUndo = true;
+    }
+    finally
+    {
+        if (undoScope != null)
+        {
+            try
+            {
+                if (shouldCommitUndo)
+                {
+                    undoScope.Commit();
+                }
+                else
+                {
+                    undoScope.Rollback();
+                }
+            }
+            finally
+            {
+                undoScope.Dispose();
+            }
+        }
+    }
+
+    yield return new AgentEvent
+    {
+        Type = AgentEventType.TaskCompleted,
+        Citations = BuildCitations(finalAssistantMessage?.Content, citationRegistry),
+        Message = string.Empty
+    };
+}
 
         private async Task AppendToolResultAsync(
             string documentPath,
@@ -461,6 +579,10 @@ namespace SmartWord.Application.Orchestration
                 $"Stats: tables={documentContext.TableCount}, images={documentContext.ImageCount}, annotations={documentContext.AnnotationCount}");
             contextBuilder.AppendLine(
                 $"Status: {(documentContext.DocumentStatus == null ? string.Empty : documentContext.DocumentStatus.GetUserFriendlyMessage())}");
+            if (documentContext.DocumentStatus != null && documentContext.DocumentStatus.IsTrackChangesEnforced)
+            {
+                contextBuilder.AppendLine("Notice: 当前文档已启用修订模式，写入会以修订痕迹呈现，不应把它误判为失败。");
+            }
             if (documentContext.Headings != null && documentContext.Headings.Count > 0)
             {
                 contextBuilder.AppendLine("Document Outline:");
@@ -499,18 +621,20 @@ namespace SmartWord.Application.Orchestration
         }
 
         private static AgentEvent CreateToolCompletedEvent(ToolCall toolCall, ToolCallResult result)
-        {
-            return new AgentEvent
-            {
-                Type = AgentEventType.ToolCallCompleted,
-                ToolCallId = toolCall.Id,
-                ToolName = toolCall.Name,
-                ToolInput = toolCall.Input ?? string.Empty,
-                ToolOutput = result.Output ?? string.Empty,
-                ToolSuccess = result.Success,
-                ParagraphRefs = result.ParagraphRefs
-            };
-        }
+{
+    return new AgentEvent
+    {
+        Type = AgentEventType.ToolCallCompleted,
+        ToolCallId = toolCall.Id,
+        ToolName = toolCall.Name,
+        ToolInput = toolCall.Input ?? string.Empty,
+        ToolOutput = result.Output ?? string.Empty,
+        ToolSuccess = result.Success,
+        ParagraphRefs = result.ParagraphRefs,
+        AffectedParagraphs = result.AffectedParagraphs,
+        OperationDescription = result.OperationDescription ?? string.Empty
+    };
+}
 
         private static string DecorateToolOutput(
             string toolName,
@@ -774,6 +898,64 @@ namespace SmartWord.Application.Orchestration
             }
 
             return citations;
+        }
+
+        private static AgentEvent CreateCircuitBreakerEvent()
+        {
+            return new AgentEvent
+            {
+                Type = AgentEventType.Error,
+                Message = "工具已连续失败 3 次，系统为防止误操作已停止本次任务。"
+            };
+        }
+
+        private static bool IsWriteTool(ITool tool)
+        {
+            return tool != null && tool.RequiredPermission != ToolPermission.ReadOnly;
+        }
+
+        private static string BuildOperationDescription(string toolName, JObject parsedInput)
+        {
+            if (parsedInput != null)
+            {
+                var description = parsedInput.Value<string>("description");
+                if (!string.IsNullOrWhiteSpace(description))
+                {
+                    return description.Trim();
+                }
+
+                var operation = parsedInput.Value<string>("operation");
+                if (!string.IsNullOrWhiteSpace(operation))
+                {
+                    switch ((toolName ?? string.Empty).Trim().ToLowerInvariant())
+                    {
+                        case "patch_range":
+                            return "准备执行范围写入：" + operation.Trim();
+                        case "verify_change":
+                            return "准备验证改动结果：" + operation.Trim();
+                        case "execute_script":
+                            return "准备执行脚本写入：" + operation.Trim();
+                    }
+                }
+
+                if (parsedInput.TryGetValue("operations", out var operationsToken)
+                    && operationsToken is JArray operationsArray)
+                {
+                    return "准备执行范围写入，共 " + operationsArray.Count + " 个操作。";
+                }
+            }
+
+            switch ((toolName ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "patch_range":
+                    return "准备执行文档范围写入。";
+                case "verify_change":
+                    return "准备验证本次改动结果。";
+                case "execute_script":
+                    return "准备执行脚本写入。";
+                default:
+                    return "准备执行工具：" + (toolName ?? string.Empty);
+            }
         }
 
         private static AgentMessage CloneMessage(AgentMessage message)

@@ -15,14 +15,21 @@ namespace SmartWord.Core.Models
 
         public int[] ParagraphRefs { get; set; }
 
-        public static ToolCallResult Ok(string output, int[] affected = null, object metadata = null)
+        public string OperationDescription { get; set; } = string.Empty;
+
+        public static ToolCallResult Ok(
+            string output,
+            int[] affected = null,
+            object metadata = null,
+            string operationDescription = null)
         {
             return new ToolCallResult
             {
                 Success = true,
                 Output = output,
                 AffectedParagraphs = affected,
-                Metadata = metadata
+                Metadata = metadata,
+                OperationDescription = operationDescription ?? string.Empty
             };
         }
 
@@ -35,21 +42,29 @@ namespace SmartWord.Core.Models
             };
         }
 
-        public static ToolCallResult Denied(string toolName)
+        public static ToolCallResult Denied(string toolName, string errorMessage = null)
         {
             return new ToolCallResult
             {
                 Success = false,
-                Output = "[PERMISSION DENIED] Tool '" + toolName + "' is not allowed in current mode."
+                Output = string.IsNullOrWhiteSpace(errorMessage)
+                    ? "[PERMISSION DENIED] Tool '" + toolName + "' is not allowed in current mode."
+                    : "[PERMISSION DENIED] Tool '" + toolName + "' was blocked."
+                        + System.Environment.NewLine
+                        + errorMessage
             };
         }
 
-        public static ToolCallResult Skipped(string toolName)
+        public static ToolCallResult Skipped(string toolName, string message = null)
         {
             return new ToolCallResult
             {
                 Success = false,
-                Output = "[SKIPPED] Tool '" + toolName + "' was skipped by user."
+                Output = string.IsNullOrWhiteSpace(message)
+                    ? "[SKIPPED] Tool '" + toolName + "' was skipped by user."
+                    : "[SKIPPED] Tool '" + toolName + "' was skipped by user."
+                        + System.Environment.NewLine
+                        + message
             };
         }
     }

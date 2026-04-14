@@ -1,0 +1,360 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Threading;
+using System.Threading.Tasks;
+using SmartWord.Core.Enums;
+using SmartWord.Core.Interfaces;
+using SmartWord.Core.Models;
+using SmartWord.OfficeIntegration.WordWrappers;
+
+namespace SmartWord.OfficeIntegration.Tools
+{
+    /// <summary>
+    /// 提供最小可控的范围级写入能力。
+    /// </summary>
+    public sealed class PatchRangeTool : ITool
+    {
+        private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        };
+
+        private readonly WordApplicationWrapper _wordApplicationWrapper;
+        private readonly JsonElement _inputSchema;
+
+        public PatchRangeTool(WordApplicationWrapper wordApplicationWrapper)
+        {
+            _wordApplicationWrapper = wordApplicationWrapper;
+            _inputSchema = JsonDocument.Parse(
+                "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\"},\"operations\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\"},\"paragraph_index\":{\"type\":\"integer\"},\"text\":{\"type\":\"string\"},\"style\":{\"type\":\"string\"}},\"required\":[\"type\",\"paragraph_index\"]}}},\"required\":[\"operations\"]}")
+                .RootElement
+                .Clone();
+        }
+
+        public string Name => "patch_range";
+
+        public string Description => "以最小风险执行段落替换、插入、样式设置与删除。";
+
+        public ToolPermission RequiredPermission => ToolPermission.Write;
+
+        public JsonElement InputSchema => _inputSchema;
+
+        public async Task<ToolCallResult> ExecuteAsync(JsonElement input, IUndoScope undoScope, CancellationToken cancellationToken)
+        {
+            _ = undoScope;
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var request = PatchRangeRequest.Parse(input);
+            if (request.Operations.Count == 0)
+            {
+                return ToolCallResult.Error(Name, "至少需要提供一个 operations 项。");
+            }
+
+            var results = new List<PatchRangeOperationResult>();
+            var affectedParagraphs = new HashSet<int>();
+
+            foreach (var operation in request.Operations)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                PatchRangeExecutionResult executionResult;
+                try
+                {
+                    executionResult = await ExecuteOperationAsync(operation).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    executionResult = new PatchRangeExecutionResult
+                    {
+                        Success = false,
+                        AffectedParagraphIndex = operation.ParagraphIndex,
+                        Message = ex.Message
+                    };
+                }
+
+                if (executionResult.AffectedParagraphIndex >= 0)
+                {
+                    affectedParagraphs.Add(executionResult.AffectedParagraphIndex);
+                }
+
+                results.Add(new PatchRangeOperationResult
+                {
+                    Index = operation.Index,
+                    Type = operation.Type,
+                    ParagraphIndex = operation.ParagraphIndex,
+                    Success = executionResult.Success,
+                    Message = executionResult.Message,
+                    AffectedParagraphIndex = executionResult.AffectedParagraphIndex
+                });
+            }
+
+            var applied = results.Count(item => item.Success);
+            var failed = results.Count - applied;
+            var payload = new
+            {
+                success = failed == 0,
+                applied,
+                failed,
+                affected_paragraphs = affectedParagraphs.OrderBy(item => item).ToArray(),
+                results = results.Select(item => new
+                {
+                    index = item.Index,
+                    type = item.Type,
+                    paragraph_index = item.ParagraphIndex,
+                    success = item.Success,
+                    message = item.Message,
+                    affected_paragraph_index = item.AffectedParagraphIndex
+                })
+            };
+
+            var operationDescription = string.IsNullOrWhiteSpace(request.Description)
+                ? $"已执行 {request.Operations.Count} 个范围写入操作。"
+                : request.Description;
+
+            return ToolCallResult.Ok(
+                JsonSerializer.Serialize(payload, JsonOptions),
+                affectedParagraphs.OrderBy(item => item).ToArray(),
+                operationDescription: operationDescription);
+        }
+
+        private Task<PatchRangeExecutionResult> ExecuteOperationAsync(PatchRangeOperation operation)
+        {
+            return _wordApplicationWrapper.InvokeWithActiveDocumentAsync((wordApplicationObject, documentObject) =>
+            {
+                dynamic document = documentObject;
+                dynamic paragraphs = null;
+                dynamic paragraph = null;
+                dynamic range = null;
+                dynamic insertedParagraphs = null;
+                dynamic insertedParagraph = null;
+                dynamic insertedRange = null;
+
+                try
+                {
+                    if (document == null)
+                    {
+                        return PatchRangeExecutionResult.Fail(operation.ParagraphIndex, "当前没有活动文档。");
+                    }
+
+                    paragraphs = document.Paragraphs;
+                    var paragraphCount = paragraphs == null ? 0 : Convert.ToInt32(paragraphs.Count);
+                    if (operation.ParagraphIndex < 0 || operation.ParagraphIndex >= paragraphCount)
+                    {
+                        return PatchRangeExecutionResult.Fail(operation.ParagraphIndex, "目标段落索引超出范围。");
+                    }
+
+                    paragraph = paragraphs[operation.ParagraphIndex + 1];
+                    range = paragraph == null ? null : paragraph.Range;
+                    if (range == null)
+                    {
+                        return PatchRangeExecutionResult.Fail(operation.ParagraphIndex, "无法获取目标段落范围。");
+                    }
+
+                    switch ((operation.Type ?? string.Empty).Trim().ToLowerInvariant())
+                    {
+                        case "replace_text":
+                            range.Text = NormalizeTextForParagraph(operation.Text) + "\r";
+                            return PatchRangeExecutionResult.Ok(operation.ParagraphIndex, "段落文本已替换。");
+                        case "insert_paragraph_after":
+                            range.InsertParagraphAfter();
+                            insertedParagraphs = document.Paragraphs;
+                            insertedParagraph = insertedParagraphs[operation.ParagraphIndex + 2];
+                            insertedRange = insertedParagraph == null ? null : insertedParagraph.Range;
+                            if (insertedRange == null)
+                            {
+                                return PatchRangeExecutionResult.Fail(operation.ParagraphIndex, "插入新段落后无法读取结果。");
+                            }
+
+                            insertedRange.Text = NormalizeTextForParagraph(operation.Text) + "\r";
+                            if (!string.IsNullOrWhiteSpace(operation.Style))
+                            {
+                                insertedRange.set_Style(operation.Style);
+                            }
+
+                            return PatchRangeExecutionResult.Ok(operation.ParagraphIndex + 1, "新段落已插入。");
+                        case "set_paragraph_style":
+                            range.set_Style(operation.Style ?? string.Empty);
+                            return PatchRangeExecutionResult.Ok(operation.ParagraphIndex, "段落样式已更新。");
+                        case "delete_paragraph":
+                            range.Delete();
+                            return PatchRangeExecutionResult.Ok(operation.ParagraphIndex, "段落已删除。");
+                        default:
+                            return PatchRangeExecutionResult.Fail(operation.ParagraphIndex, "未知的操作类型。");
+                    }
+                }
+                finally
+                {
+                    TryReleaseComObject(insertedRange);
+                    TryReleaseComObject(insertedParagraph);
+                    TryReleaseComObject(insertedParagraphs);
+                    TryReleaseComObject(range);
+                    TryReleaseComObject(paragraph);
+                    TryReleaseComObject(paragraphs);
+                }
+            });
+        }
+
+        private static string NormalizeTextForParagraph(string text)
+        {
+            return (text ?? string.Empty).TrimEnd('\r', '\n');
+        }
+
+        private static void TryReleaseComObject(object comObject)
+        {
+            if (comObject == null)
+            {
+                return;
+            }
+
+            try
+            {
+                if (Marshal.IsComObject(comObject))
+                {
+                    Marshal.ReleaseComObject(comObject);
+                }
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    public sealed class PatchRangeRequest
+    {
+        public string Description { get; set; } = string.Empty;
+
+        public List<PatchRangeOperation> Operations { get; } = new List<PatchRangeOperation>();
+
+        public static PatchRangeRequest Parse(JsonElement input)
+        {
+            var request = new PatchRangeRequest
+            {
+                Description = ReadString(input, "description")
+            };
+
+            if (input.ValueKind != JsonValueKind.Object
+                || !input.TryGetProperty("operations", out var operationsElement)
+                || operationsElement.ValueKind != JsonValueKind.Array)
+            {
+                return request;
+            }
+
+            var index = 0;
+            foreach (var item in operationsElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                {
+                    index++;
+                    continue;
+                }
+
+                var type = ReadString(item, "type");
+                var paragraphIndex = ReadInt(item, "paragraph_index");
+                if (string.IsNullOrWhiteSpace(type) || !paragraphIndex.HasValue)
+                {
+                    index++;
+                    continue;
+                }
+
+                request.Operations.Add(new PatchRangeOperation
+                {
+                    Index = index,
+                    Type = type.Trim(),
+                    ParagraphIndex = paragraphIndex.Value,
+                    Text = ReadString(item, "text"),
+                    Style = ReadString(item, "style")
+                });
+                index++;
+            }
+
+            return request;
+        }
+
+        private static string ReadString(JsonElement input, string propertyName)
+        {
+            if (input.ValueKind != JsonValueKind.Object
+                || !input.TryGetProperty(propertyName, out var property)
+                || property.ValueKind != JsonValueKind.String)
+            {
+                return string.Empty;
+            }
+
+            return property.GetString() ?? string.Empty;
+        }
+
+        private static int? ReadInt(JsonElement input, string propertyName)
+        {
+            if (input.ValueKind != JsonValueKind.Object
+                || !input.TryGetProperty(propertyName, out var property)
+                || property.ValueKind != JsonValueKind.Number
+                || !property.TryGetInt32(out var value))
+            {
+                return null;
+            }
+
+            return value;
+        }
+    }
+
+    public sealed class PatchRangeOperation
+    {
+        public int Index { get; set; }
+
+        public string Type { get; set; } = string.Empty;
+
+        public int ParagraphIndex { get; set; }
+
+        public string Text { get; set; } = string.Empty;
+
+        public string Style { get; set; } = string.Empty;
+    }
+
+    public sealed class PatchRangeOperationResult
+    {
+        public int Index { get; set; }
+
+        public string Type { get; set; } = string.Empty;
+
+        public int ParagraphIndex { get; set; }
+
+        public bool Success { get; set; }
+
+        public string Message { get; set; } = string.Empty;
+
+        public int AffectedParagraphIndex { get; set; } = -1;
+    }
+
+    internal sealed class PatchRangeExecutionResult
+    {
+        public bool Success { get; set; }
+
+        public int AffectedParagraphIndex { get; set; } = -1;
+
+        public string Message { get; set; } = string.Empty;
+
+        public static PatchRangeExecutionResult Ok(int affectedParagraphIndex, string message)
+        {
+            return new PatchRangeExecutionResult
+            {
+                Success = true,
+                AffectedParagraphIndex = affectedParagraphIndex,
+                Message = message
+            };
+        }
+
+        public static PatchRangeExecutionResult Fail(int affectedParagraphIndex, string message)
+        {
+            return new PatchRangeExecutionResult
+            {
+                Success = false,
+                AffectedParagraphIndex = affectedParagraphIndex,
+                Message = message
+            };
+        }
+    }
+}

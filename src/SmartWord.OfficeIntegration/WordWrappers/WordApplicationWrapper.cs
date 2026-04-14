@@ -16,7 +16,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
     /// <summary>
     /// 负责把对 Word 的访问切回宿主 UI 线程执行。
     /// </summary>
-    public sealed class WordApplicationWrapper : IDisposable
+    public sealed class WordApplicationWrapper : IDisposable, IUndoScopeFactory
     {
         private readonly dynamic _wordApplication;
         private readonly Control _uiThreadInvoker;
@@ -141,10 +141,34 @@ namespace SmartWord.OfficeIntegration.WordWrappers
         {
             return await InvokeAsync<IUndoScope>(() =>
             {
-                var undoScope = new UndoRecordWrapper(_wordApplication);
+                var initialDocumentPath = string.Empty;
+                dynamic activeDocument = null;
+                try
+                {
+                    activeDocument = _wordApplication.ActiveDocument;
+                    initialDocumentPath = activeDocument == null ? string.Empty : Convert.ToString(activeDocument.FullName);
+                }
+                catch
+                {
+                    initialDocumentPath = string.Empty;
+                }
+                finally
+                {
+                    TryReleaseComObject(activeDocument);
+                }
+
+                var undoScope = new UndoRecordWrapper(_wordApplication, this, initialDocumentPath);
                 undoScope.BeginTransaction(operationName);
                 return undoScope;
             });
+        }
+
+        async System.Threading.Tasks.Task<IUndoScope> IUndoScopeFactory.BeginTaskUndoAsync(
+            string operationName,
+            System.Threading.CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return await BeginTaskUndoAsync(operationName).ConfigureAwait(false);
         }
 
         public Task<int> GetParagraphCountAsync()
@@ -669,6 +693,80 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                     TryReleaseComObject(paragraph);
                     TryReleaseComObject(paragraphs);
                     TryReleaseComObject(document);
+                }
+            });
+        }
+
+        public Task<string> GetParagraphStyleAsync(int paragraphIndex)
+        {
+            return InvokeAsync<string>(() =>
+            {
+                dynamic document = null;
+                dynamic paragraphs = null;
+                dynamic paragraph = null;
+                try
+                {
+                    document = _wordApplication.ActiveDocument;
+                    if (document == null)
+                    {
+                        return string.Empty;
+                    }
+
+                    paragraphs = document.Paragraphs;
+                    var paragraphCount = paragraphs == null ? 0 : Convert.ToInt32(paragraphs.Count);
+                    if (paragraphIndex < 0 || paragraphIndex >= paragraphCount)
+                    {
+                        return string.Empty;
+                    }
+
+                    paragraph = paragraphs[paragraphIndex + 1];
+                    return ReadParagraphStyleInternal(paragraph);
+                }
+                catch
+                {
+                    return string.Empty;
+                }
+                finally
+                {
+                    TryReleaseComObject(paragraph);
+                    TryReleaseComObject(paragraphs);
+                    TryReleaseComObject(document);
+                }
+            });
+        }
+
+        public async Task<bool> ParagraphExistsAsync(int paragraphIndex)
+        {
+            if (paragraphIndex < 0)
+            {
+                return false;
+            }
+
+            var paragraphCount = await GetParagraphCountAsync().ConfigureAwait(false);
+            return paragraphIndex < paragraphCount;
+        }
+
+        public Task<T> InvokeWithActiveDocumentAsync<T>(Func<object, object, T> action)
+        {
+            if (action == null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            return InvokeAsync(() =>
+            {
+                dynamic activeDocument = null;
+                try
+                {
+                    activeDocument = _wordApplication.ActiveDocument;
+                    return action((object)_wordApplication, (object)activeDocument);
+                }
+                finally
+                {
+                    if (activeDocument != null)
+                    {
+                        TryReleaseComObject(activeDocument);
+                    }
                 }
             });
         }
@@ -1511,6 +1609,11 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                 Snapshot = snapshot,
                 Diagnostics = diagnostics ?? new ReadDiagnostics()
             };
+        }
+
+        internal static void TryReleaseComObjectSilently(object comObject)
+        {
+            TryReleaseComObject(comObject);
         }
 
         private static void TryReleaseComObject(object comObject)

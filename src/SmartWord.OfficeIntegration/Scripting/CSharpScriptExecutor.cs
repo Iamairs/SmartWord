@@ -1,23 +1,54 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.CodeAnalysis.CSharp.Scripting;
+using Microsoft.CodeAnalysis.Scripting;
 
 namespace SmartWord.OfficeIntegration.Scripting
 {
     /// <summary>
-    /// 预留 Roslyn 脚本执行器骨架。
+    /// 基于 Roslyn 执行受控脚本。
     /// </summary>
     public class CSharpScriptExecutor
     {
-        public Task<ScriptExecutionResult> ExecuteAsync(
+        public async Task<ScriptExecutionResult> ExecuteAsync(
             string code,
             ScriptGlobals scriptGlobals,
             CancellationToken cancellationToken)
         {
-            _ = code;
-            _ = scriptGlobals;
             cancellationToken.ThrowIfCancellationRequested();
-            throw new NotImplementedException("Roslyn 脚本执行将在后续阶段接入。");
+
+            var options = ScriptOptions.Default
+                .AddReferences(
+                    typeof(object).Assembly,
+                    typeof(Enumerable).Assembly,
+                    typeof(ScriptGlobals).Assembly)
+                .AddImports(
+                    "System",
+                    "System.Linq",
+                    "System.Collections.Generic");
+
+            var state = await CSharpScript.RunAsync(
+                    code ?? string.Empty,
+                    options,
+                    scriptGlobals,
+                    typeof(ScriptGlobals),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            var output = scriptGlobals == null ? string.Empty : scriptGlobals.GetOutput();
+            if (string.IsNullOrWhiteSpace(output))
+            {
+                output = state.ReturnValue == null ? "脚本执行完成。" : Convert.ToString(state.ReturnValue);
+            }
+
+            return new ScriptExecutionResult
+            {
+                Success = true,
+                Output = output ?? string.Empty,
+                ReturnValueType = state.ReturnValue == null ? string.Empty : state.ReturnValue.GetType().FullName ?? string.Empty
+            };
         }
     }
 
@@ -26,5 +57,7 @@ namespace SmartWord.OfficeIntegration.Scripting
         public bool Success { get; set; }
 
         public string Output { get; set; } = string.Empty;
+
+        public string ReturnValueType { get; set; } = string.Empty;
     }
 }

@@ -1,0 +1,150 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Threading;
+using System.Threading.Tasks;
+using SmartWord.Core.Enums;
+using SmartWord.Core.Interfaces;
+using SmartWord.Core.Models;
+using SmartWord.OfficeIntegration.Scripting;
+using SmartWord.OfficeIntegration.WordWrappers;
+
+namespace SmartWord.OfficeIntegration.Tools
+{
+    /// <summary>
+    /// 作为复杂编辑场景的后备路径，执行受控 C# 脚本。
+    /// </summary>
+    public sealed class ExecuteScriptTool : ITool
+    {
+        private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        };
+
+        private readonly WordApplicationWrapper _wordApplicationWrapper;
+        private readonly CSharpScriptExecutor _scriptExecutor;
+        private readonly ScriptSecurityValidator _scriptSecurityValidator;
+        private readonly JsonElement _inputSchema;
+
+        public ExecuteScriptTool(
+            WordApplicationWrapper wordApplicationWrapper,
+            CSharpScriptExecutor scriptExecutor,
+            ScriptSecurityValidator scriptSecurityValidator)
+        {
+            _wordApplicationWrapper = wordApplicationWrapper;
+            _scriptExecutor = scriptExecutor;
+            _scriptSecurityValidator = scriptSecurityValidator;
+            _inputSchema = JsonDocument.Parse(
+                "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\"},\"code\":{\"type\":\"string\"},\"affected_paragraphs\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"}}},\"required\":[\"code\"]}")
+                .RootElement
+                .Clone();
+        }
+
+        public string Name => "execute_script";
+
+        public string Description => "执行受控的 C# 脚本以完成 patch_range 难以覆盖的复杂写入。";
+
+        public ToolPermission RequiredPermission => ToolPermission.Write;
+
+        public JsonElement InputSchema => _inputSchema;
+
+        public async Task<ToolCallResult> ExecuteAsync(JsonElement input, IUndoScope undoScope, CancellationToken cancellationToken)
+        {
+            _ = undoScope;
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var request = ExecuteScriptRequest.Parse(input);
+            if (string.IsNullOrWhiteSpace(request.Code))
+            {
+                return ToolCallResult.Error(Name, "脚本内容不能为空。");
+            }
+
+            var validationResult = _scriptSecurityValidator.Validate(request.Code);
+            if (!validationResult.IsValid)
+            {
+                return ToolCallResult.Error(Name, validationResult.Message);
+            }
+
+            var executionResult = await _wordApplicationWrapper
+                .InvokeWithActiveDocumentAsync((wordApplicationObject, documentObject) =>
+                {
+                    var globals = new ScriptGlobals
+                    {
+                        WordApp = wordApplicationObject,
+                        ActiveDoc = documentObject,
+                        Context = new ScriptContext()
+                    };
+
+                    return _scriptExecutor
+                        .ExecuteAsync(request.Code, globals, cancellationToken)
+                        .GetAwaiter()
+                        .GetResult();
+                })
+                .ConfigureAwait(false);
+
+            var payload = new
+            {
+                success = executionResult.Success,
+                output = executionResult.Output,
+                return_value_type = executionResult.ReturnValueType
+            };
+
+            return ToolCallResult.Ok(
+                JsonSerializer.Serialize(payload, JsonOptions),
+                request.AffectedParagraphs.ToArray(),
+                operationDescription: string.IsNullOrWhiteSpace(request.Description)
+                    ? "已执行脚本写入。"
+                    : request.Description);
+        }
+    }
+
+    public sealed class ExecuteScriptRequest
+    {
+        public string Description { get; set; } = string.Empty;
+
+        public string Code { get; set; } = string.Empty;
+
+        public List<int> AffectedParagraphs { get; } = new List<int>();
+
+        public static ExecuteScriptRequest Parse(JsonElement input)
+        {
+            var request = new ExecuteScriptRequest
+            {
+                Description = ReadString(input, "description"),
+                Code = ReadString(input, "code")
+            };
+
+            if (input.ValueKind != JsonValueKind.Object
+                || !input.TryGetProperty("affected_paragraphs", out var affectedParagraphsElement)
+                || affectedParagraphsElement.ValueKind != JsonValueKind.Array)
+            {
+                return request;
+            }
+
+            foreach (var item in affectedParagraphsElement.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.Number && item.TryGetInt32(out var paragraphIndex))
+                {
+                    request.AffectedParagraphs.Add(paragraphIndex);
+                }
+            }
+
+            return request;
+        }
+
+        private static string ReadString(JsonElement input, string propertyName)
+        {
+            if (input.ValueKind != JsonValueKind.Object
+                || !input.TryGetProperty(propertyName, out var property)
+                || property.ValueKind != JsonValueKind.String)
+            {
+                return string.Empty;
+            }
+
+            return property.GetString() ?? string.Empty;
+        }
+    }
+}

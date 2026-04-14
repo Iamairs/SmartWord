@@ -34,5 +34,27 @@ namespace SmartWord.Application.Tests.OfficeIntegration
             Assert.True(properties.TryGetProperty("scope", out var scope));
             Assert.Equal(JsonValueKind.Object, scope.ValueKind);
         }
+
+        [Fact]
+        public void VerifyChangeTool_InputSchema_暴露Checks数组()
+        {
+            var tool = new VerifyChangeTool(null);
+
+            Assert.True(tool.InputSchema.TryGetProperty("properties", out var properties));
+            Assert.True(properties.TryGetProperty("checks", out var checks));
+            Assert.Equal(JsonValueKind.String, checks.GetProperty("type").ValueKind);
+            Assert.Equal("array", checks.GetProperty("type").GetString());
+        }
+
+        [Fact]
+        public void PatchRangeTool_InputSchema_暴露Operations数组()
+        {
+            var tool = new PatchRangeTool(null);
+
+            Assert.True(tool.InputSchema.TryGetProperty("properties", out var properties));
+            Assert.True(properties.TryGetProperty("operations", out var operations));
+            Assert.Equal(JsonValueKind.String, operations.GetProperty("type").ValueKind);
+            Assert.Equal("array", operations.GetProperty("type").GetString());
+        }
     }
 }
