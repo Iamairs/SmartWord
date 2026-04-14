@@ -39,14 +39,14 @@ namespace SmartWord.OfficeIntegration.Tools
             _scriptExecutor = scriptExecutor;
             _scriptSecurityValidator = scriptSecurityValidator;
             _inputSchema = JsonDocument.Parse(
-                "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\",\"description\":\"本次脚本写入的简要说明。\"},\"code\":{\"type\":\"string\",\"description\":\"C# 脚本。可直接使用 app/doc/WordApp/ActiveDoc 访问 Word 应用与当前文档；可调用 Write(\\\"...\\\") 输出调试信息。\"},\"affected_paragraphs\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"},\"description\":\"若已知会影响哪些段落，可显式填写，便于前端摘要展示。\"}},\"required\":[\"code\"]}")
+                "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\",\"description\":\"本次脚本写入的简要说明。仅当 patch_range 难以表达时再使用脚本。\"},\"code\":{\"type\":\"string\",\"description\":\"C# 脚本。可直接使用 app/doc/WordApp/ActiveDoc 访问 Word 应用与当前文档；可调用 Write(\\\"...\\\") 输出调试信息。重要：若直接访问 Word COM 集合（如 Paragraphs、Tables、Comments），其索引通常是 1-based，第一项应写 [1]，不要写 [0]。\"},\"affected_paragraphs\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"},\"description\":\"若已知会影响哪些段落，可显式填写，便于前端摘要展示。这里的段落索引使用 0-based。\"}},\"required\":[\"code\"]}")
                 .RootElement
                 .Clone();
         }
 
         public string Name => "execute_script";
 
-        public string Description => "执行受控的 C# 脚本以完成 patch_range 难以覆盖的复杂写入。";
+        public string Description => "执行受控的 C# 脚本以完成 patch_range 难以覆盖的复杂写入。脚本中若直接访问 Word COM 集合，请使用 1-based 索引。";
 
         public ToolPermission RequiredPermission => ToolPermission.Write;
 

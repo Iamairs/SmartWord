@@ -31,14 +31,14 @@ namespace SmartWord.OfficeIntegration.Tools
         {
             _wordApplicationWrapper = wordApplicationWrapper;
             _inputSchema = JsonDocument.Parse(
-                "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\",\"description\":\"本次写操作的简要说明。\"},\"operations\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\",\"description\":\"支持 replace_text、insert_paragraph_after、set_paragraph_style、delete_paragraph；同时兼容 replace、set_text、insert_after、set_style、delete 等常见别名。\"},\"paragraph_index\":{\"type\":\"integer\"},\"text\":{\"type\":\"string\"},\"style\":{\"type\":\"string\"}},\"required\":[\"type\",\"paragraph_index\"]}}},\"required\":[\"operations\"]}")
+                "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\",\"description\":\"本次写操作的简要说明。\"},\"operations\":{\"type\":\"array\",\"description\":\"按顺序执行的写入操作列表。paragraph_index 使用 0-based 段落索引，即第一段是 0。\",\"items\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\",\"description\":\"支持 replace_text、insert_paragraph_after、set_paragraph_style、delete_paragraph；同时兼容 replace、set_text、insert_after、set_style、delete 等常见别名。优先输出标准名。\"},\"paragraph_index\":{\"type\":\"integer\",\"description\":\"0-based 段落索引。第一段是 0，不是 1。\"},\"text\":{\"type\":\"string\",\"description\":\"目标文本内容。replace_text 会整段替换，insert_paragraph_after 会写入新段落文本。\"},\"style\":{\"type\":\"string\",\"description\":\"Word 中可识别的段落样式名称，例如 Heading 1。\"}},\"required\":[\"type\",\"paragraph_index\"]}}},\"required\":[\"operations\"]}")
                 .RootElement
                 .Clone();
         }
 
         public string Name => "patch_range";
 
-        public string Description => "以最小风险执行段落替换、插入、样式设置与删除。";
+        public string Description => "以最小风险执行段落替换、插入、样式设置与删除。所有 paragraph_index 都使用 0-based 段落索引。";
 
         public ToolPermission RequiredPermission => ToolPermission.Write;
 

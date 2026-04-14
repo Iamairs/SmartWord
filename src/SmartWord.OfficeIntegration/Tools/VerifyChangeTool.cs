@@ -30,14 +30,14 @@ namespace SmartWord.OfficeIntegration.Tools
         {
             _wordApplicationWrapper = wordApplicationWrapper;
             _inputSchema = JsonDocument.Parse(
-                "{\"type\":\"object\",\"properties\":{\"checks\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\"},\"paragraph_index\":{\"type\":\"integer\"},\"expected\":{\"type\":\"string\"},\"should_exist\":{\"type\":\"boolean\"}},\"required\":[\"type\",\"paragraph_index\"]}}},\"required\":[\"checks\"]}")
+                "{\"type\":\"object\",\"properties\":{\"checks\":{\"type\":\"array\",\"description\":\"需要逐项验证的检查列表。paragraph_index 使用 0-based 段落索引，即第一段是 0。\",\"items\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\",\"description\":\"支持 text_contains、text_equals、text_not_contains、style_equals、paragraph_exists。\"},\"paragraph_index\":{\"type\":\"integer\",\"description\":\"0-based 段落索引。第一段是 0，不是 1。\"},\"expected\":{\"type\":\"string\",\"description\":\"期望文本或期望样式名。\"},\"should_exist\":{\"type\":\"boolean\",\"description\":\"仅在 paragraph_exists 时使用。true 表示该段应存在，false 表示该段应不存在。\"}},\"required\":[\"type\",\"paragraph_index\"]}}},\"required\":[\"checks\"]}")
                 .RootElement
                 .Clone();
         }
 
         public string Name => "verify_change";
 
-        public string Description => "回读段落文本、样式与存在性，验证写操作是否达成预期。";
+        public string Description => "回读段落文本、样式与存在性，验证写操作是否达成预期。所有 paragraph_index 都使用 0-based 段落索引。";
 
         public ToolPermission RequiredPermission => ToolPermission.ReadOnly;
 

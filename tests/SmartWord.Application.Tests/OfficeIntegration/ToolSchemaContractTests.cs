@@ -55,6 +55,7 @@ namespace SmartWord.Application.Tests.OfficeIntegration
             Assert.True(properties.TryGetProperty("operations", out var operations));
             Assert.Equal(JsonValueKind.String, operations.GetProperty("type").ValueKind);
             Assert.Equal("array", operations.GetProperty("type").GetString());
+            Assert.Contains("0-based", operations.GetProperty("description").GetString());
         }
 
         [Fact]
@@ -65,6 +66,17 @@ namespace SmartWord.Application.Tests.OfficeIntegration
             Assert.True(tool.InputSchema.TryGetProperty("properties", out var properties));
             Assert.True(properties.TryGetProperty("code", out var code));
             Assert.Contains("app/doc/WordApp/ActiveDoc", code.GetProperty("description").GetString());
+            Assert.Contains("1-based", code.GetProperty("description").GetString());
+        }
+
+        [Fact]
+        public void VerifyChangeTool_InputSchema_强调ParagraphIndex为ZeroBased()
+        {
+            var tool = new VerifyChangeTool(null);
+
+            Assert.True(tool.InputSchema.TryGetProperty("properties", out var properties));
+            Assert.True(properties.TryGetProperty("checks", out var checks));
+            Assert.Contains("0-based", checks.GetProperty("description").GetString());
         }
     }
 }
