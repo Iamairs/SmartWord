@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.CodeAnalysis.Scripting;
 using SmartWord.Core.Enums;
 using SmartWord.Core.Interfaces;
 using SmartWord.Core.Models;
@@ -38,7 +39,7 @@ namespace SmartWord.OfficeIntegration.Tools
             _scriptExecutor = scriptExecutor;
             _scriptSecurityValidator = scriptSecurityValidator;
             _inputSchema = JsonDocument.Parse(
-                "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\"},\"code\":{\"type\":\"string\"},\"affected_paragraphs\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"}}},\"required\":[\"code\"]}")
+                "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\",\"description\":\"本次脚本写入的简要说明。\"},\"code\":{\"type\":\"string\",\"description\":\"C# 脚本。可直接使用 app/doc/WordApp/ActiveDoc 访问 Word 应用与当前文档；可调用 Write(\\\"...\\\") 输出调试信息。\"},\"affected_paragraphs\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"},\"description\":\"若已知会影响哪些段落，可显式填写，便于前端摘要展示。\"}},\"required\":[\"code\"]}")
                 .RootElement
                 .Clone();
         }
@@ -75,13 +76,35 @@ namespace SmartWord.OfficeIntegration.Tools
                     {
                         WordApp = wordApplicationObject,
                         ActiveDoc = documentObject,
+                        App = wordApplicationObject,
+                        Doc = documentObject,
+                        app = wordApplicationObject,
+                        doc = documentObject,
+                        wordApp = wordApplicationObject,
+                        activeDoc = documentObject,
                         Context = new ScriptContext()
                     };
 
-                    return _scriptExecutor
-                        .ExecuteAsync(request.Code, globals, cancellationToken)
-                        .GetAwaiter()
-                        .GetResult();
+                    try
+                    {
+                        return _scriptExecutor
+                            .ExecuteAsync(request.Code, globals, cancellationToken)
+                            .GetAwaiter()
+                            .GetResult();
+                    }
+                    catch (CompilationErrorException ex)
+                    {
+                        var diagnostics = ex.Diagnostics == null
+                            ? string.Empty
+                            : string.Join(
+                                Environment.NewLine,
+                                ex.Diagnostics.Select(item => item.ToString()));
+                        throw new InvalidOperationException(
+                            "脚本编译失败。可用全局变量：app、doc、WordApp、ActiveDoc；可调用 Write(\"文本\") 输出调试信息。"
+                                + Environment.NewLine
+                                + diagnostics,
+                            ex);
+                    }
                 })
                 .ConfigureAwait(false);
 

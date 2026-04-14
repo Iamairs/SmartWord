@@ -8,9 +8,21 @@ namespace SmartWord.OfficeIntegration.Scripting
     /// </summary>
     public class ScriptGlobals
     {
-        public object WordApp { get; set; }
+        public dynamic WordApp { get; set; }
 
-        public object ActiveDoc { get; set; }
+        public dynamic ActiveDoc { get; set; }
+
+        public dynamic App { get; set; }
+
+        public dynamic Doc { get; set; }
+
+        public dynamic app { get; set; }
+
+        public dynamic doc { get; set; }
+
+        public dynamic wordApp { get; set; }
+
+        public dynamic activeDoc { get; set; }
 
         public ScriptContext Context { get; set; } = new ScriptContext();
 

@@ -32,5 +32,22 @@ namespace SmartWord.Application.Tests.OfficeIntegration
             Assert.Equal("delete_paragraph", request.Operations[0].Type);
             Assert.Equal(2, request.Operations[0].ParagraphIndex);
         }
+
+        [Theory]
+        [InlineData("replace", "replace_text")]
+        [InlineData("set_text", "replace_text")]
+        [InlineData("insert_after", "insert_paragraph_after")]
+        [InlineData("set_style", "set_paragraph_style")]
+        [InlineData("delete", "delete_paragraph")]
+        public void Parse_CommonAliases_AreNormalized(string rawType, string expectedType)
+        {
+            using var document = JsonDocument.Parse(
+                $"{{\"operations\":[{{\"type\":\"{rawType}\",\"paragraph_index\":1}}]}}");
+
+            var request = PatchRangeRequest.Parse(document.RootElement);
+
+            Assert.Single(request.Operations);
+            Assert.Equal(expectedType, request.Operations[0].Type);
+        }
     }
 }

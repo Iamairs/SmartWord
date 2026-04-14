@@ -19,6 +19,14 @@ namespace SmartWord.OfficeIntegration.Scripting
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            var scriptBody = string.Join(
+                Environment.NewLine,
+                "dynamic app = App ?? WordApp;",
+                "dynamic doc = Doc ?? ActiveDoc;",
+                "dynamic wordApp = WordApp ?? App;",
+                "dynamic activeDoc = ActiveDoc ?? Doc;",
+                code ?? string.Empty);
+
             var options = ScriptOptions.Default
                 .AddReferences(
                     typeof(object).Assembly,
@@ -30,7 +38,7 @@ namespace SmartWord.OfficeIntegration.Scripting
                     "System.Collections.Generic");
 
             var state = await CSharpScript.RunAsync(
-                    code ?? string.Empty,
+                    scriptBody,
                     options,
                     scriptGlobals,
                     typeof(ScriptGlobals),

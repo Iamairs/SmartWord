@@ -56,5 +56,15 @@ namespace SmartWord.Application.Tests.OfficeIntegration
             Assert.Equal(JsonValueKind.String, operations.GetProperty("type").ValueKind);
             Assert.Equal("array", operations.GetProperty("type").GetString());
         }
+
+        [Fact]
+        public void ExecuteScriptTool_InputSchema_描述可用脚本全局变量()
+        {
+            var tool = new ExecuteScriptTool(null, null, null);
+
+            Assert.True(tool.InputSchema.TryGetProperty("properties", out var properties));
+            Assert.True(properties.TryGetProperty("code", out var code));
+            Assert.Contains("app/doc/WordApp/ActiveDoc", code.GetProperty("description").GetString());
+        }
     }
 }

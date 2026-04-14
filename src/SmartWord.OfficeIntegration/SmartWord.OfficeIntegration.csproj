@@ -60,6 +60,10 @@
       <HintPath>$(UserProfile)\.nuget\packages\serilog\3.1.1\lib\net462\Serilog.dll</HintPath>
       <Private>True</Private>
     </Reference>
+    <Reference Include="System.Collections.Immutable">
+      <HintPath>$(UserProfile)\.nuget\packages\system.collections.immutable\8.0.0\lib\net462\System.Collections.Immutable.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
     <Reference Include="System.Memory">
       <HintPath>$(UserProfile)\.nuget\packages\system.memory\4.5.5\lib\net461\System.Memory.dll</HintPath>
       <Private>True</Private>
@@ -109,6 +113,7 @@
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.11.0" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.11.0" />
     <PackageReference Include="Serilog" Version="3.1.1" />
+    <PackageReference Include="System.Collections.Immutable" Version="8.0.0" />
     <PackageReference Include="System.Memory" Version="4.5.5" />
     <PackageReference Include="System.Text.Json" Version="6.0.10" />
   </ItemGroup>

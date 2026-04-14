@@ -31,7 +31,7 @@ namespace SmartWord.OfficeIntegration.Tools
         {
             _wordApplicationWrapper = wordApplicationWrapper;
             _inputSchema = JsonDocument.Parse(
-                "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\"},\"operations\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\"},\"paragraph_index\":{\"type\":\"integer\"},\"text\":{\"type\":\"string\"},\"style\":{\"type\":\"string\"}},\"required\":[\"type\",\"paragraph_index\"]}}},\"required\":[\"operations\"]}")
+                "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\",\"description\":\"本次写操作的简要说明。\"},\"operations\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\",\"description\":\"支持 replace_text、insert_paragraph_after、set_paragraph_style、delete_paragraph；同时兼容 replace、set_text、insert_after、set_style、delete 等常见别名。\"},\"paragraph_index\":{\"type\":\"integer\"},\"text\":{\"type\":\"string\"},\"style\":{\"type\":\"string\"}},\"required\":[\"type\",\"paragraph_index\"]}}},\"required\":[\"operations\"]}")
                 .RootElement
                 .Clone();
         }
@@ -184,7 +184,9 @@ namespace SmartWord.OfficeIntegration.Tools
                             range.Delete();
                             return PatchRangeExecutionResult.Ok(operation.ParagraphIndex, "段落已删除。");
                         default:
-                            return PatchRangeExecutionResult.Fail(operation.ParagraphIndex, "未知的操作类型。");
+                            return PatchRangeExecutionResult.Fail(
+                                operation.ParagraphIndex,
+                                "未知的操作类型。当前支持 replace_text、insert_paragraph_after、set_paragraph_style、delete_paragraph。");
                     }
                 }
                 finally
@@ -264,7 +266,7 @@ namespace SmartWord.OfficeIntegration.Tools
                 request.Operations.Add(new PatchRangeOperation
                 {
                     Index = index,
-                    Type = type.Trim(),
+                    Type = NormalizeOperationType(type),
                     ParagraphIndex = paragraphIndex.Value,
                     Text = ReadString(item, "text"),
                     Style = ReadString(item, "style")
@@ -298,6 +300,28 @@ namespace SmartWord.OfficeIntegration.Tools
             }
 
             return value;
+        }
+
+        private static string NormalizeOperationType(string type)
+        {
+            var normalized = (type ?? string.Empty).Trim().ToLowerInvariant();
+            switch (normalized)
+            {
+                case "replace":
+                case "set_text":
+                    return "replace_text";
+                case "insert_after":
+                case "append_paragraph_after":
+                    return "insert_paragraph_after";
+                case "set_style":
+                case "apply_style":
+                    return "set_paragraph_style";
+                case "delete":
+                case "remove_paragraph":
+                    return "delete_paragraph";
+                default:
+                    return normalized;
+            }
         }
     }
 
