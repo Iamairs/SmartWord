@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -26,6 +27,10 @@ namespace SmartWord.AddIn.TaskPane
     {
         private readonly Control _ownerControl;
         private readonly object _ctsSyncRoot = new object();
+        private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _pendingToolConfirmations =
+            new ConcurrentDictionary<string, TaskCompletionSource<bool>>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, bool> _earlyConfirmationResults =
+            new ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         private CoreWebView2 _coreWebView2;
         private CancellationTokenSource _currentCts;
 
@@ -212,6 +217,34 @@ namespace SmartWord.AddIn.TaskPane
             });
         }
 
+        public string ConfirmToolCall(string toolCallId, bool confirmed)
+        {
+            if (string.IsNullOrWhiteSpace(toolCallId))
+            {
+                return JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    message = "toolCallId 不能为空。"
+                });
+            }
+
+            if (_pendingToolConfirmations.TryRemove(toolCallId, out var pendingConfirmation))
+            {
+                pendingConfirmation.TrySetResult(confirmed);
+            }
+            else
+            {
+                _earlyConfirmationResults[toolCallId] = confirmed;
+            }
+
+            return JsonConvert.SerializeObject(new
+            {
+                success = true,
+                toolCallId,
+                confirmed
+            });
+        }
+
         public void PostEventToJs(object agentEvent)
         {
             if (_coreWebView2 == null)
@@ -227,6 +260,40 @@ namespace SmartWord.AddIn.TaskPane
             }
 
             _coreWebView2.PostWebMessageAsJson(eventJson);
+        }
+
+        internal Task<bool> WaitForToolConfirmationAsync(string toolCallId, CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(toolCallId))
+            {
+                throw new ArgumentException("toolCallId 不能为空。", nameof(toolCallId));
+            }
+
+            if (_earlyConfirmationResults.TryRemove(toolCallId, out var earlyResult))
+            {
+                return Task.FromResult(earlyResult);
+            }
+
+            var taskCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!_pendingToolConfirmations.TryAdd(toolCallId, taskCompletionSource))
+            {
+                if (_pendingToolConfirmations.TryGetValue(toolCallId, out var existing))
+                {
+                    return existing.Task;
+                }
+
+                return Task.FromResult(false);
+            }
+
+            cancellationToken.Register(() =>
+            {
+                if (_pendingToolConfirmations.TryRemove(toolCallId, out var pending))
+                {
+                    pending.TrySetCanceled(cancellationToken);
+                }
+            });
+
+            return taskCompletionSource.Task;
         }
 
         private CancellationTokenSource ReplaceCurrentCancellationTokenSource()

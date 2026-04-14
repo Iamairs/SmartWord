@@ -5,6 +5,7 @@ using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using Serilog;
+using SmartWord.AddIn.DI;
 
 namespace SmartWord.AddIn.TaskPane
 {
@@ -21,6 +22,7 @@ namespace SmartWord.AddIn.TaskPane
         public SmartWordTaskPaneControl()
         {
             _bridge = new SmartWordBridge(this);
+            ServiceLocator.AttachTaskPaneBridge(_bridge);
             _webView = new WebView2
             {
                 Dock = DockStyle.Fill

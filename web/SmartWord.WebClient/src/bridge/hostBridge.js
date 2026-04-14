@@ -1,6 +1,8 @@
 const SETTINGS_STORAGE_KEY = 'smartword-settings';
 const VALID_MODES = new Set(['ask', 'plan', 'agent']);
 
+let pendingMockConfirmation = null;
+
 function hasWebView2Bridge() {
   return Boolean(
     window.chrome &&
@@ -60,24 +62,62 @@ function createMockResponse(request, notify) {
     return;
   }
 
-  const modeEvent = {
+  notify({
     type: 'mode_detected',
     detectedMode: request.manualMode
-  };
+  });
 
-  const chunkEvent = {
-    type: 'stream_chunk',
-    content: `已收到请求：${request.content}`
-  };
+  if (request.manualMode === 'agent' && request.requireConfirmationForScripts !== false) {
+    pendingMockConfirmation = {
+      toolCallId: 'mock-tool-call-1',
+      toolName: 'patch_range',
+      toolInput: JSON.stringify(
+        {
+          operations: [
+            {
+              type: 'replace_text',
+              paragraph_index: 2,
+              text: '这是浏览器预览模式下的模拟写入。'
+            }
+          ]
+        },
+        null,
+        2
+      ),
+      operationDescription: '浏览器预览模式下的模拟写入。'
+    };
 
-  const completedEvent = {
-    type: 'task_completed',
-    message: '当前为浏览器降级模式，设置与对话请求将走本地模拟。'
-  };
+    window.setTimeout(
+      () =>
+        notify({
+          type: 'tool_call_started',
+          toolCallId: pendingMockConfirmation.toolCallId,
+          toolName: pendingMockConfirmation.toolName,
+          toolInput: pendingMockConfirmation.toolInput,
+          requiresConfirmation: true,
+          operationDescription: pendingMockConfirmation.operationDescription
+        }),
+      140
+    );
+    return;
+  }
 
-  window.setTimeout(() => notify(modeEvent), 120);
-  window.setTimeout(() => notify(chunkEvent), 260);
-  window.setTimeout(() => notify(completedEvent), 420);
+  window.setTimeout(
+    () =>
+      notify({
+        type: 'stream_chunk',
+        content: `已收到请求：${request.content}`
+      }),
+    180
+  );
+  window.setTimeout(
+    () =>
+      notify({
+        type: 'task_completed',
+        message: '当前为浏览器降级模式，设置与对话请求将走本地模拟。'
+      }),
+    360
+  );
 }
 
 const listeners = new Set();
@@ -148,6 +188,54 @@ export const hostBridge = {
 
     console.warn('WebView2 HostObject 不可用，已回退到本地模拟。');
     createMockResponse(request, emitEvent);
+  },
+
+  async confirmToolCall(toolCallId, confirmed) {
+    if (this.isAvailable) {
+      await callBridge('ConfirmToolCall', toolCallId, confirmed === true);
+      return;
+    }
+
+    if (!pendingMockConfirmation || pendingMockConfirmation.toolCallId !== toolCallId) {
+      return;
+    }
+
+    if (confirmed) {
+      emitEvent({
+        type: 'tool_call_completed',
+        toolCallId,
+        toolName: pendingMockConfirmation.toolName,
+        toolOutput: '{"success":true}',
+        toolSuccess: true,
+        operationDescription: pendingMockConfirmation.operationDescription
+      });
+      emitEvent({
+        type: 'change_applied',
+        toolCallId,
+        toolName: pendingMockConfirmation.toolName,
+        affectedParagraphs: [2],
+        operationDescription: pendingMockConfirmation.operationDescription
+      });
+      emitEvent({
+        type: 'task_completed',
+        message: '当前为浏览器降级模式，已完成模拟写入。'
+      });
+    } else {
+      emitEvent({
+        type: 'tool_call_skipped',
+        toolCallId,
+        toolName: pendingMockConfirmation.toolName,
+        toolOutput: "[SKIPPED] Tool 'patch_range' was skipped by user.",
+        toolSuccess: false,
+        operationDescription: pendingMockConfirmation.operationDescription
+      });
+      emitEvent({
+        type: 'task_completed',
+        message: '当前为浏览器降级模式，模拟写入已被跳过。'
+      });
+    }
+
+    pendingMockConfirmation = null;
   },
 
   async navigateToParagraph(paragraphIndex) {

@@ -103,6 +103,17 @@
 
     <section class="message-list" ref="messageListRef" @click="handleMessageListClick">
       <ThoughtActionTrace :tool-calls="chatStore.activeToolCalls" />
+      <ContentPreviewPanel
+        v-if="chatStore.pendingConfirmation"
+        :confirmation="chatStore.pendingConfirmation"
+        @confirm="confirmPendingToolCall"
+        @skip="skipPendingToolCall"
+      />
+      <ChangesSummaryPanel
+        v-if="chatStore.completedTaskChanges.length"
+        :changes="chatStore.completedTaskChanges"
+        @navigate="navigateToParagraph"
+      />
 
       <article
         v-for="message in chatStore.messages"
@@ -173,6 +184,8 @@ import { marked } from 'marked';
 import { useChatStore } from '../stores/chat';
 import { useSettingsStore } from '../stores/settings';
 import { hostBridge } from '../bridge/hostBridge';
+import ChangesSummaryPanel from './ChangesSummaryPanel.vue';
+import ContentPreviewPanel from './ContentPreviewPanel.vue';
 import ThoughtActionTrace from './ThoughtActionTrace.vue';
 
 const chatStore = useChatStore();
@@ -283,13 +296,44 @@ async function submitMessage() {
   }
 }
 
+async function respondToPendingToolCall(confirmed) {
+  if (!chatStore.pendingConfirmation) {
+    return;
+  }
+
+  chatStore.setPendingConfirmationSubmitting(true);
+  try {
+    await hostBridge.confirmToolCall(chatStore.pendingConfirmation.toolCallId, confirmed);
+  } catch (error) {
+    chatStore.appendAssistantMessage(`确认写操作失败：${error.message || '未知错误'}`);
+    chatStore.clearPendingConfirmation();
+  } finally {
+    chatStore.setPendingConfirmationSubmitting(false);
+  }
+}
+
+async function confirmPendingToolCall() {
+  await respondToPendingToolCall(true);
+}
+
+async function skipPendingToolCall() {
+  await respondToPendingToolCall(false);
+}
+
+async function navigateToParagraph(paragraphIndex) {
+  await hostBridge.navigateToParagraph(paragraphIndex);
+}
+
 function handleAgentEvent(event) {
   switch (event.type) {
     case 'stream_chunk':
       chatStore.appendAssistantChunk(event.content || '');
       break;
     case 'tool_call_started':
-      chatStore.startToolCall(event.toolCallId, event.toolName, event.toolInput);
+      chatStore.startToolCall(event.toolCallId, event.toolName, event.toolInput, {
+        requiresConfirmation: event.requiresConfirmation === true,
+        operationDescription: event.operationDescription || ''
+      });
       break;
     case 'tool_call_completed':
       chatStore.completeToolCall(event.toolCallId, event.toolSuccess, event.toolOutput);
@@ -297,19 +341,29 @@ function handleAgentEvent(event) {
     case 'tool_call_denied':
       chatStore.completeToolCall(event.toolCallId, false, event.toolOutput, 'denied');
       break;
+    case 'tool_call_skipped':
+      chatStore.completeToolCall(event.toolCallId, false, event.toolOutput, 'skipped');
+      break;
+    case 'change_applied':
+      chatStore.recordChangeApplied(event);
+      break;
     case 'mode_detected':
       chatStore.setMode(event.detectedMode);
       break;
     case 'task_completed':
       chatStore.setCitations(event.citations);
       chatStore.finishLoading();
+      chatStore.finalizeTaskChanges();
       if (event.message) {
         chatStore.appendAssistantMessage(event.message);
       }
       break;
+    case 'document_not_writable':
+    case 'document_mismatch':
     case 'error':
     case 'cancelled':
       chatStore.finishLoading();
+      chatStore.discardCurrentTaskChanges();
       if (event.message) {
         chatStore.appendAssistantMessage(event.message);
       }
@@ -331,7 +385,7 @@ async function handleMessageListClick(event) {
     return;
   }
 
-  await hostBridge.navigateToParagraph(citation.paragraphIndex);
+  await navigateToParagraph(citation.paragraphIndex);
 }
 
 async function scrollToBottom() {

@@ -88,6 +88,10 @@ function toggle(toolCallId) {
   background: #b42318;
 }
 
+.trace-status--skipped {
+  background: #60758f;
+}
+
 .trace-name {
   flex: 1;
   font-size: 12px;

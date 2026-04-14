@@ -8,10 +8,12 @@ using SmartWord.Application.Orchestration;
 using SmartWord.Application.Pipeline;
 using SmartWord.Application.PromptBuilder;
 using SmartWord.Application.Tools;
+using SmartWord.AddIn.TaskPane;
 using SmartWord.Core.Interfaces;
 using SmartWord.Infrastructure.Configuration;
 using SmartWord.Infrastructure.LlmClients;
 using SmartWord.Infrastructure.Persistence;
+using SmartWord.OfficeIntegration.Scripting;
 using SmartWord.OfficeIntegration.Tools;
 using SmartWord.OfficeIntegration.WordWrappers;
 
@@ -24,6 +26,7 @@ namespace SmartWord.AddIn.DI
     {
         private static readonly object SettingsSyncRoot = new object();
         private static ServiceProvider _serviceProvider;
+        private static WebViewConfirmationChannel _confirmationChannel;
 
         public static void Initialize(Microsoft.Office.Interop.Word.Application wordApplication)
         {
@@ -33,8 +36,14 @@ namespace SmartWord.AddIn.DI
             // 必须在 AddIn 启动的 UI 线程上提前创建包装器，
             // 避免首次在后台线程解析单例时把错误线程记录为 Word COM 所属线程。
             var wordApplicationWrapper = new WordApplicationWrapper(wordApplication);
+            _confirmationChannel = new WebViewConfirmationChannel();
             services.AddSingleton(wordApplication);
             services.AddSingleton(wordApplicationWrapper);
+            services.AddSingleton<IUndoScopeFactory>(wordApplicationWrapper);
+            services.AddSingleton(_confirmationChannel);
+            services.AddSingleton<IConfirmationChannel>(_confirmationChannel);
+            services.AddSingleton<ScriptSecurityValidator>();
+            services.AddSingleton<CSharpScriptExecutor>();
             services.AddSingleton(provider => LoadSmartWordSettings());
             services.AddSingleton(provider => CreateLlmClientOptions(
                 provider.GetRequiredService<SmartWordSettings>()));
@@ -51,6 +60,12 @@ namespace SmartWord.AddIn.DI
                 registry.Register(new GetSelectionContextTool(wordWrapper));
                 registry.Register(new ReadTableTool(wordWrapper));
                 registry.Register(new ReadAnnotationsTool(wordWrapper));
+                registry.Register(new VerifyChangeTool(wordWrapper));
+                registry.Register(new PatchRangeTool(wordWrapper));
+                registry.Register(new ExecuteScriptTool(
+                    wordWrapper,
+                    provider.GetRequiredService<CSharpScriptExecutor>(),
+                    provider.GetRequiredService<ScriptSecurityValidator>()));
                 return registry;
             });
             services.AddSingleton<PermissionGuard>();
@@ -62,7 +77,9 @@ namespace SmartWord.AddIn.DI
                 provider.GetRequiredService<IConversationStore>(),
                 provider.GetRequiredService<SystemPromptBuilder>(),
                 provider.GetRequiredService<IToolRegistry>(),
-                provider.GetRequiredService<PermissionGuard>()));
+                provider.GetRequiredService<PermissionGuard>(),
+                provider.GetRequiredService<IConfirmationChannel>(),
+                provider.GetRequiredService<IUndoScopeFactory>()));
             services.AddSingleton<ConversationCompressor>();
             services.AddSingleton<StreamingResponseHandler>();
 
@@ -144,8 +161,15 @@ namespace SmartWord.AddIn.DI
 
         public static void Dispose()
         {
+            _confirmationChannel?.DetachBridge();
+            _confirmationChannel = null;
             _serviceProvider?.Dispose();
             _serviceProvider = null;
+        }
+
+        public static void AttachTaskPaneBridge(SmartWordBridge bridge)
+        {
+            _confirmationChannel?.AttachBridge(bridge);
         }
 
         private static SmartWordSettings LoadSmartWordSettings()
