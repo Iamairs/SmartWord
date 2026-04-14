@@ -54,7 +54,7 @@ msbuild xxx
 对于复杂功能：
 step 1：写一个临时的docs/project_cur.md描述当前需求及注意事项；
 step 2：基于当前需求，生成一个临时的docs/plan_cur.md，详细规划实现步骤；
-step 3：安装plan_cur.md执行，生成代码。并迭代更新docs/plan_cur.md，直到完成全部任务
+step 3：按照plan_cur.md执行，生成代码。并迭代更新docs/plan_cur.md，直到完成全部任务
 step 4：进行测试；
 step 5：完成完整任务并测试通过后，更新（修改，替换，新增或删除）文件`docs\已实现的功能.md`中的功能。
 
