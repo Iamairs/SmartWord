@@ -29,7 +29,7 @@
 ### 第三层：形成下一阶段专项设计输入
 
 - [x] T9：整理 `ExecuteScriptTool` 线程模型设计输入
-- [ ] T10：整理设置模型与依赖注入收敛输入
+- [x] T10：整理设置模型与依赖注入收敛输入
 - [ ] T11：整理长期对话治理输入
 - [ ] T12：整理 Bridge 显式 COM 接口评估输入
 
@@ -473,6 +473,32 @@ T9~T12 汇总下一阶段专项设计输入
 ### 完成标准
 
 - 下一轮可以按批次推进，而不是一次性大改 DI 路径。
+
+### 当前结论
+
+1. 当前设置模型里同时存在 `ApiBaseUrl` 与 `BaseUrl`，真实运行时又以 `LlmClientOptions.BaseUrl` 为主，这说明这里本质上是**历史兼容字段与当前主字段并存**。
+2. `ServiceLocator.SaveSettings()` 当前会：
+   - 持久化 `settings.json`
+   - 原地更新单例 `SmartWordSettings`
+   - 同步把值写回单例 `LlmClientOptions`
+3. 这种“原地更新单例”在当前阶段是可接受的折中，但必须明确它的边界：
+   - 适合低频设置更新
+   - 不适合作为复杂运行时配置热切换框架
+4. `SmartWordBridge` / `WebViewBridge` 当前仍直接依赖 `ServiceLocator` 拉取 `IAgentOrchestrator`、`LlmClientOptions`、`WordApplicationWrapper` 与设置快照，因此它仍然是一个**运行时服务定位入口**，而不是纯构造注入对象。
+
+### 下一轮分批推进建议
+
+1. 先统一设置字段主语义：
+   - 明确 `BaseUrl` 为内部主字段
+   - `ApiBaseUrl` 只保留输入/输出兼容职责
+2. 再把设置保存从“直接改多个单例”收敛到一个明确的设置应用服务。
+3. 最后才考虑减少 `ServiceLocator` 在 Bridge 层的直接使用，把依赖逐步下沉到可注入组件。
+
+### 本阶段不做的事
+
+1. 不一次性移除 `ServiceLocator`。
+2. 不在当前宿主初始化路径中强推全量 DI 重构。
+3. 不把设置热更新问题扩大成整套配置中心改造。
 
 ---
 
