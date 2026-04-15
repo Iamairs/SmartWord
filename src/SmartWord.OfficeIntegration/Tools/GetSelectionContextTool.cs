@@ -30,14 +30,14 @@ namespace SmartWord.OfficeIntegration.Tools
         public GetSelectionContextTool(WordApplicationWrapper wordApplicationWrapper)
         {
             _wordApplicationWrapper = wordApplicationWrapper;
-            _inputSchema = JsonDocument.Parse("{\"type\":\"object\",\"properties\":{}}")
+            _inputSchema = JsonDocument.Parse("{\"type\":\"object\",\"properties\":{},\"description\":\"无需参数。返回的 para_index、start_para_index、end_para_index、paragraph_index 一律使用 0-based。\"}")
                 .RootElement
                 .Clone();
         }
 
         public string Name => "get_selection_context";
 
-        public string Description => "读取当前选区文本、所在段落与前后文；若当前无显式选区，则回退到光标所在段落。";
+        public string Description => "读取当前选区文本、所在段落与前后文；若当前无显式选区，则回退到光标所在段落。返回的段落索引一律使用 0-based。";
 
         public ToolPermission RequiredPermission => ToolPermission.ReadOnly;
 

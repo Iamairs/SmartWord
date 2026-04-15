@@ -32,14 +32,14 @@ namespace SmartWord.OfficeIntegration.Tools
         {
             _wordApplicationWrapper = wordApplicationWrapper;
             _inputSchema = JsonDocument.Parse(
-                "{\"type\":\"object\",\"properties\":{\"include_stats\":{\"type\":\"boolean\"},\"include_headings\":{\"type\":\"boolean\"}}}")
+                "{\"type\":\"object\",\"properties\":{\"include_stats\":{\"type\":\"boolean\",\"description\":\"是否返回 table_count/image_count/annotation_count 等统计信息。\"},\"include_headings\":{\"type\":\"boolean\",\"description\":\"是否返回 outline 标题结构。返回的 para_index 一律使用 0-based。\"}}}")
                 .RootElement
                 .Clone();
         }
 
         public string Name => "probe_document";
 
-        public string Description => "获取文档全局结构、统计信息、光标位置、最近标题与选区信息。";
+        public string Description => "获取文档全局结构、统计信息、光标位置、最近标题与选区信息。返回中的 para_index 一律使用 0-based。";
 
         public ToolPermission RequiredPermission => ToolPermission.ReadOnly;
 

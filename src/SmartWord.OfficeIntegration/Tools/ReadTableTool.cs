@@ -28,14 +28,14 @@ namespace SmartWord.OfficeIntegration.Tools
         {
             _wordApplicationWrapper = wordApplicationWrapper;
             _inputSchema = JsonDocument.Parse(
-                "{\"type\":\"object\",\"properties\":{\"table_index\":{\"type\":\"integer\"},\"max_rows\":{\"type\":\"integer\"},\"max_columns\":{\"type\":\"integer\"}},\"required\":[\"table_index\"]}")
+                "{\"type\":\"object\",\"properties\":{\"table_index\":{\"type\":\"integer\",\"description\":\"目标表格索引，0-based。第一个表格是 0，不是 1。\"},\"max_rows\":{\"type\":\"integer\",\"description\":\"最多返回多少行。\"},\"max_columns\":{\"type\":\"integer\",\"description\":\"最多返回多少列。\"}},\"required\":[\"table_index\"]}")
                 .RootElement
                 .Clone();
         }
 
         public string Name => "read_table";
 
-        public string Description => "按 0 基表格索引读取表格结构、锚点段落与单元格文本。";
+        public string Description => "按 0-based 表格索引读取表格结构、锚点段落与单元格文本。table_index=0 表示第一个表格。";
 
         public ToolPermission RequiredPermission => ToolPermission.ReadOnly;
 

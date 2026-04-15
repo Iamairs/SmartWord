@@ -30,14 +30,14 @@ namespace SmartWord.OfficeIntegration.Tools
         {
             _wordApplicationWrapper = wordApplicationWrapper;
             _inputSchema = JsonDocument.Parse(
-                "{\"type\":\"object\",\"properties\":{\"author\":{\"type\":\"string\"},\"max_results\":{\"type\":\"integer\"}}}")
+                "{\"type\":\"object\",\"properties\":{\"author\":{\"type\":\"string\",\"description\":\"按作者名过滤批注；为空表示不过滤。\"},\"max_results\":{\"type\":\"integer\",\"description\":\"最多返回多少条批注。返回结果中的 para_index 一律使用 0-based。\"}}}")
                 .RootElement
                 .Clone();
         }
 
         public string Name => "read_annotations";
 
-        public string Description => "读取文档批注，返回作者、时间、批注内容、锚点文本和所在段落。";
+        public string Description => "读取文档批注，返回作者、时间、批注内容、锚点文本和所在段落。结果中的 para_index 一律使用 0-based。";
 
         public ToolPermission RequiredPermission => ToolPermission.ReadOnly;
 

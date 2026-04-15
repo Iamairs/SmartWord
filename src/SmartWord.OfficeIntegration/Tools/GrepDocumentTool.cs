@@ -35,14 +35,14 @@ namespace SmartWord.OfficeIntegration.Tools
             _readScopeResolver = new ReadScopeResolver();
             _paragraphSearchEngine = new ParagraphSearchEngine();
             _inputSchema = JsonDocument.Parse(
-                "{\"type\":\"object\",\"properties\":{\"keyword\":{\"type\":\"string\"},\"use_regex\":{\"type\":\"boolean\"},\"context_lines\":{\"type\":\"integer\"},\"max_results\":{\"type\":\"integer\"},\"scope\":{\"type\":\"object\",\"properties\":{\"heading\":{\"type\":\"string\"},\"from_para\":{\"type\":\"integer\"},\"to_para\":{\"type\":\"integer\"},\"around_cursor\":{\"type\":\"boolean\"},\"context_window\":{\"type\":\"integer\"},\"selection_only\":{\"type\":\"boolean\"}}}},\"required\":[\"keyword\"]}")
+                "{\"type\":\"object\",\"properties\":{\"keyword\":{\"type\":\"string\",\"description\":\"要搜索的关键词或 .NET 正则表达式。keyword 必须是普通字符串。\"},\"use_regex\":{\"type\":\"boolean\",\"description\":\"true 时按标准 .NET 正则解释 keyword；非法正则会直接报错。\"},\"context_lines\":{\"type\":\"integer\",\"description\":\"每个命中段落前后额外返回多少段上下文。\"},\"max_results\":{\"type\":\"integer\",\"description\":\"最多返回多少个命中段落。\"},\"scope\":{\"type\":\"object\",\"description\":\"可选的搜索范围限制。scope 自身必须是 JSON 对象。\",\"properties\":{\"heading\":{\"type\":\"string\",\"description\":\"按标题限制搜索范围。\"},\"from_para\":{\"type\":\"integer\",\"description\":\"起始段落，0-based。\"},\"to_para\":{\"type\":\"integer\",\"description\":\"结束段落，0-based 且包含该段。\"},\"around_cursor\":{\"type\":\"boolean\",\"description\":\"true 表示以光标附近为搜索范围。\"},\"context_window\":{\"type\":\"integer\",\"description\":\"around_cursor=true 时，表示光标前后各包含多少段。\"},\"selection_only\":{\"type\":\"boolean\",\"description\":\"true 表示仅在当前选区覆盖的段落范围内搜索。\"}}}},\"required\":[\"keyword\"]}")
                 .RootElement
                 .Clone();
         }
 
         public string Name => "grep_document";
 
-        public string Description => "搜索关键词或 .NET 正则表达式，返回总命中次数、每段全部命中偏移、所属章节与前后文。";
+        public string Description => "搜索关键词或 .NET 正则表达式，返回总命中次数、每段全部命中偏移、所属章节与前后文。scope.from_para/to_para 都是 0-based。";
 
         public ToolPermission RequiredPermission => ToolPermission.ReadOnly;
 
