@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Serilog;
 using SmartWord.Core.Interfaces;
 using SmartWord.Core.Models;
 using SmartWord.OfficeIntegration.Models;
@@ -1242,12 +1243,12 @@ namespace SmartWord.OfficeIntegration.WordWrappers
 
         private static void WriteDiagnosticInfo(string message)
         {
-            Trace.WriteLine("[INFO] " + (message ?? string.Empty));
+            Log.Information("{Message}", message ?? string.Empty);
         }
 
         private static void WriteDiagnosticWarning(string message)
         {
-            Trace.WriteLine("[WARN] " + (message ?? string.Empty));
+            Log.Warning("{Message}", message ?? string.Empty);
         }
 
         private static bool TryBuildTableSnapshotFromFlattenedCells(

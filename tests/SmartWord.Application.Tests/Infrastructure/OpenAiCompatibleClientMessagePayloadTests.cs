@@ -86,6 +86,23 @@ namespace SmartWord.Application.Tests.Infrastructure
             Assert.Equal("user", payload[0]?["role"]?.Value<string>());
         }
 
+        [Fact]
+        public void SummarizeBody_LongBody_IsTruncated()
+        {
+            var method = typeof(OpenAiCompatibleClient).GetMethod(
+                "SummarizeBody",
+                BindingFlags.Static | BindingFlags.NonPublic);
+
+            Assert.NotNull(method);
+
+            var body = new string('a', 400);
+            var summary = Assert.IsType<string>(method.Invoke(null, new object[] { body }));
+
+            Assert.Contains("len=400", summary);
+            Assert.EndsWith("...", summary);
+            Assert.DoesNotContain(body, summary);
+        }
+
         private static JArray InvokeBuildMessagesPayload(IReadOnlyList<AgentMessage> messages)
         {
             var method = typeof(OpenAiCompatibleClient).GetMethod(

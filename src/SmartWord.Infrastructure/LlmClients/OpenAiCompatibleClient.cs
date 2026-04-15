@@ -59,14 +59,14 @@ namespace SmartWord.Infrastructure.LlmClients
                 request.Content = BuildRequestContent(requestJson);
 
                 Log.Information(
-                    "开始调用 LLM 流式接口。Endpoint={Endpoint}, Model={Model}, SupportsToolCalling={SupportsToolCalling}, RequiresReasoningContentReplay={RequiresReasoningContentReplay}, MessageCount={MessageCount}, MessageSummary={MessageSummary}, RequestBody={RequestBody}",
+                    "开始调用 LLM 流式接口。Endpoint={Endpoint}, Model={Model}, SupportsToolCalling={SupportsToolCalling}, RequiresReasoningContentReplay={RequiresReasoningContentReplay}, MessageCount={MessageCount}, MessageSummary={MessageSummary}, RequestBodyLength={RequestBodyLength}",
                     request.RequestUri,
                     model,
                     capability == null ? false : capability.SupportsToolCalling,
                     capability == null ? false : capability.RequiresReasoningContentReplay,
                     messages == null ? 0 : messages.Count,
                     BuildMessageSummary(messages),
-                    requestJson);
+                    GetTextLength(requestJson));
 
                 using (var response = await SharedHttpClient
                     .SendAsync(
@@ -79,15 +79,15 @@ namespace SmartWord.Infrastructure.LlmClients
                     {
                         var errorBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                         Log.Error(
-                            "LLM 流式接口返回错误。Endpoint={Endpoint}, Model={Model}, StatusCode={StatusCode}, ReasonPhrase={ReasonPhrase}, TraceId={TraceId}, ResponseHeaders={ResponseHeaders}, ResponseBody={ResponseBody}, RequestBody={RequestBody}",
+                            "LLM 流式接口返回错误。Endpoint={Endpoint}, Model={Model}, StatusCode={StatusCode}, ReasonPhrase={ReasonPhrase}, TraceId={TraceId}, ResponseHeaders={ResponseHeaders}, ResponseBodySummary={ResponseBodySummary}, RequestBodyLength={RequestBodyLength}",
                             request.RequestUri,
                             model,
                             (int)response.StatusCode,
                             response.ReasonPhrase,
                             GetTraceId(response),
                             FormatHeaders(response.Headers, response.Content == null ? null : response.Content.Headers),
-                            errorBody,
-                            requestJson);
+                            SummarizeBody(errorBody),
+                            GetTextLength(requestJson));
                         throw new HttpRequestException(
                             $"LLM 请求失败：{(int)response.StatusCode} {response.ReasonPhrase} {errorBody}，TraceId={GetTraceId(response)}");
                     }
@@ -192,7 +192,7 @@ namespace SmartWord.Infrastructure.LlmClients
                 request.Content = BuildRequestContent(requestJson);
 
                 Log.Information(
-                    "开始调用 LLM 工具接口。Endpoint={Endpoint}, Model={Model}, SupportsToolCalling={SupportsToolCalling}, RequiresReasoningContentReplay={RequiresReasoningContentReplay}, ToolCount={ToolCount}, MessageCount={MessageCount}, MessageSummary={MessageSummary}, ToolSummary={ToolSummary}, RequestBody={RequestBody}",
+                    "开始调用 LLM 工具接口。Endpoint={Endpoint}, Model={Model}, SupportsToolCalling={SupportsToolCalling}, RequiresReasoningContentReplay={RequiresReasoningContentReplay}, ToolCount={ToolCount}, MessageCount={MessageCount}, MessageSummary={MessageSummary}, ToolSummary={ToolSummary}, RequestBodyLength={RequestBodyLength}",
                     request.RequestUri,
                     model,
                     capability == null ? false : capability.SupportsToolCalling,
@@ -201,7 +201,7 @@ namespace SmartWord.Infrastructure.LlmClients
                     messages == null ? 0 : messages.Count,
                     BuildMessageSummary(messages),
                     BuildToolSummary(tools),
-                    requestJson);
+                    GetTextLength(requestJson));
 
                 using (var response = await SharedHttpClient
                     .SendAsync(
@@ -214,15 +214,15 @@ namespace SmartWord.Infrastructure.LlmClients
                     {
                         var errorBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                         Log.Error(
-                            "LLM 工具接口返回错误。Endpoint={Endpoint}, Model={Model}, StatusCode={StatusCode}, ReasonPhrase={ReasonPhrase}, TraceId={TraceId}, ResponseHeaders={ResponseHeaders}, ResponseBody={ResponseBody}, RequestBody={RequestBody}",
+                            "LLM 工具接口返回错误。Endpoint={Endpoint}, Model={Model}, StatusCode={StatusCode}, ReasonPhrase={ReasonPhrase}, TraceId={TraceId}, ResponseHeaders={ResponseHeaders}, ResponseBodySummary={ResponseBodySummary}, RequestBodyLength={RequestBodyLength}",
                             request.RequestUri,
                             model,
                             (int)response.StatusCode,
                             response.ReasonPhrase,
                             GetTraceId(response),
                             FormatHeaders(response.Headers, response.Content == null ? null : response.Content.Headers),
-                            errorBody,
-                            requestJson);
+                            SummarizeBody(errorBody),
+                            GetTextLength(requestJson));
                         throw new HttpRequestException(
                             $"LLM 请求失败：{(int)response.StatusCode} {response.ReasonPhrase} {errorBody}，TraceId={GetTraceId(response)}");
                     }
@@ -377,6 +377,35 @@ namespace SmartWord.Infrastructure.LlmClients
             {
                 Timeout = Timeout.InfiniteTimeSpan
             };
+        }
+
+        private static int GetTextLength(string text)
+        {
+            return string.IsNullOrEmpty(text) ? 0 : text.Length;
+        }
+
+        private static string SummarizeBody(string body)
+        {
+            if (string.IsNullOrWhiteSpace(body))
+            {
+                return "len=0";
+            }
+
+            var normalized = body
+                .Replace("\r", " ")
+                .Replace("\n", " ")
+                .Trim();
+            const int maxPreviewLength = 300;
+            if (normalized.Length <= maxPreviewLength)
+            {
+                return "len=" + normalized.Length + ", preview=" + normalized;
+            }
+
+            return "len="
+                + normalized.Length
+                + ", preview="
+                + normalized.Substring(0, maxPreviewLength)
+                + "...";
         }
 
         private void ValidateRequest(

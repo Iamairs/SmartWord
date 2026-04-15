@@ -83,7 +83,7 @@ namespace SmartWord.AddIn.TaskPane
                 var requestCts = ReplaceCurrentCancellationTokenSource();
                 try
                 {
-                    Log.Information("收到前端请求：{RequestJson}", requestJson);
+                    Log.Information("收到前端请求。RequestSummary={RequestSummary}", SummarizeRequestJson(requestJson));
 
                     var request = JObject.Parse(requestJson);
                     var content = request.Value<string>("content") ?? string.Empty;
@@ -402,6 +402,39 @@ namespace SmartWord.AddIn.TaskPane
                 case AgentEventType.Error:
                 default:
                     return "error";
+            }
+        }
+
+        private static string SummarizeRequestJson(string requestJson)
+        {
+            if (string.IsNullOrWhiteSpace(requestJson))
+            {
+                return "jsonLen=0";
+            }
+
+            try
+            {
+                var request = JObject.Parse(requestJson);
+                var content = request.Value<string>("content") ?? string.Empty;
+                var manualMode = request.Value<string>("manualMode") ?? string.Empty;
+                var customInstructions = request.Value<string>("customInstructions") ?? string.Empty;
+
+                return "jsonLen="
+                    + requestJson.Length
+                    + ", mode="
+                    + (string.IsNullOrWhiteSpace(manualMode) ? "empty" : manualMode)
+                    + ", contentLen="
+                    + content.Length
+                    + ", hasCustomInstructions="
+                    + (!string.IsNullOrWhiteSpace(customInstructions))
+                    + ", requireConfirmationForScripts="
+                    + (request.Value<bool?>("requireConfirmationForScripts") ?? true)
+                    + ", maxIterations="
+                    + (request.Value<int?>("maxIterations") ?? 8);
+            }
+            catch (Exception ex)
+            {
+                return "jsonLen=" + requestJson.Length + ", parseFailed=" + ex.GetType().Name;
             }
         }
     }
