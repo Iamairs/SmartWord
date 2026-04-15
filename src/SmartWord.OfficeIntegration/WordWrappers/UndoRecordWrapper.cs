@@ -28,17 +28,22 @@ namespace SmartWord.OfficeIntegration.WordWrappers
 
         public void BeginTransaction(string operationName)
         {
+            object undoRecord = null;
             try
             {
-                var undoRecord = _wordApplication == null ? null : _wordApplication.UndoRecord;
+                undoRecord = _wordApplication == null ? null : _wordApplication.UndoRecord;
                 if (undoRecord != null)
                 {
-                    undoRecord.StartCustomRecord(operationName);
+                    ((dynamic)undoRecord).StartCustomRecord(operationName);
                 }
             }
             catch (Exception ex)
             {
                 Log.Warning(ex, "启动 Word UndoRecord 失败。OperationName={OperationName}", operationName);
+            }
+            finally
+            {
+                WordApplicationWrapper.TryReleaseComObjectSilently(undoRecord);
             }
         }
 
@@ -119,17 +124,22 @@ namespace SmartWord.OfficeIntegration.WordWrappers
 
             _recordClosed = true;
 
+            object undoRecord = null;
             try
             {
-                var undoRecord = _wordApplication == null ? null : _wordApplication.UndoRecord;
+                undoRecord = _wordApplication == null ? null : _wordApplication.UndoRecord;
                 if (undoRecord != null)
                 {
-                    undoRecord.EndCustomRecord();
+                    ((dynamic)undoRecord).EndCustomRecord();
                 }
             }
             catch (Exception ex)
             {
                 Log.Warning(ex, "结束 Word UndoRecord 失败。");
+            }
+            finally
+            {
+                WordApplicationWrapper.TryReleaseComObjectSilently(undoRecord);
             }
         }
 
