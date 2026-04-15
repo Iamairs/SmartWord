@@ -22,6 +22,7 @@ namespace SmartWord.Infrastructure.LlmClients
         private static readonly TimeSpan ResponseHeadersTimeout = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan FirstLineTimeout = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan NextLineTimeout = TimeSpan.FromSeconds(60);
+        private static readonly HttpClient SharedHttpClient = CreateSharedHttpClient();
 
         private sealed class ToolCallAccumulator
         {
@@ -49,10 +50,8 @@ namespace SmartWord.Infrastructure.LlmClients
             var requestJson = BuildRequestJson(model, messages, null, capability);
 
             using (var responseHeadersTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
-            using (var httpClient = new HttpClient())
             using (var request = new HttpRequestMessage(HttpMethod.Post, BuildChatCompletionsUri(endpoint)))
             {
-                httpClient.Timeout = Timeout.InfiniteTimeSpan;
                 responseHeadersTimeoutCts.CancelAfter(ResponseHeadersTimeout);
 
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
@@ -69,7 +68,7 @@ namespace SmartWord.Infrastructure.LlmClients
                     BuildMessageSummary(messages),
                     requestJson);
 
-                using (var response = await httpClient
+                using (var response = await SharedHttpClient
                     .SendAsync(
                         request,
                         HttpCompletionOption.ResponseHeadersRead,
@@ -184,10 +183,8 @@ namespace SmartWord.Infrastructure.LlmClients
             var toolCallAccumulators = new Dictionary<int, ToolCallAccumulator>();
 
             using (var responseHeadersTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
-            using (var httpClient = new HttpClient())
             using (var request = new HttpRequestMessage(HttpMethod.Post, BuildChatCompletionsUri(endpoint)))
             {
-                httpClient.Timeout = Timeout.InfiniteTimeSpan;
                 responseHeadersTimeoutCts.CancelAfter(ResponseHeadersTimeout);
 
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
@@ -206,7 +203,7 @@ namespace SmartWord.Infrastructure.LlmClients
                     BuildToolSummary(tools),
                     requestJson);
 
-                using (var response = await httpClient
+                using (var response = await SharedHttpClient
                     .SendAsync(
                         request,
                         HttpCompletionOption.ResponseHeadersRead,
@@ -372,6 +369,14 @@ namespace SmartWord.Infrastructure.LlmClients
 
         public void Dispose()
         {
+        }
+
+        private static HttpClient CreateSharedHttpClient()
+        {
+            return new HttpClient
+            {
+                Timeout = Timeout.InfiniteTimeSpan
+            };
         }
 
         private void ValidateRequest(
