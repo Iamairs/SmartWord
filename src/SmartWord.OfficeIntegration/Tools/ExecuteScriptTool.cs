@@ -39,14 +39,14 @@ namespace SmartWord.OfficeIntegration.Tools
             _scriptExecutor = scriptExecutor;
             _scriptSecurityValidator = scriptSecurityValidator;
             _inputSchema = JsonDocument.Parse(
-                "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\",\"description\":\"本次脚本写入的简要说明。仅当 patch_range 难以表达时再使用脚本。\"},\"code\":{\"type\":\"string\",\"description\":\"C# 脚本。可直接使用 app/doc/WordApp/ActiveDoc 访问 Word 应用与当前文档；可调用 Write(\\\"...\\\") 输出调试信息。重要：若直接访问 Word COM 集合（如 Paragraphs、Tables、Comments），其索引通常是 1-based，第一项应写 [1]，不要写 [0]。\"},\"affected_paragraphs\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"},\"description\":\"若已知会影响哪些段落，可显式填写，便于前端摘要展示。这里的段落索引使用 0-based。\"}},\"required\":[\"code\"]}")
+                "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\",\"description\":\"本次脚本写入的简要说明。仅当 patch_range 难以表达时再使用脚本。\"},\"code\":{\"type\":\"string\",\"description\":\"C# 脚本。当前脚本环境只支持通过 app/doc/WordApp/ActiveDoc 这些 dynamic 全局变量访问 Word COM；不要声明 Paragraph、Range、Shape、InlineShape 等静态 Interop 类型，也不要写 Microsoft.Office.Interop.Word 或 Microsoft.Office.Core.MsoTriState。若直接访问 Word COM 集合（如 Paragraphs、Tables、Comments），其索引通常是 1-based，第一项应写 [1]，不要写 [0]。如需输出调试信息，调用 Write(\\\"...\\\")。\"},\"affected_paragraphs\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"},\"description\":\"若已知会影响哪些段落，可显式填写，便于前端摘要展示。这里的段落索引使用 0-based。\"}},\"required\":[\"code\"]}")
                 .RootElement
                 .Clone();
         }
 
         public string Name => "execute_script";
 
-        public string Description => "执行受控的 C# 脚本以完成 patch_range 难以覆盖的复杂写入。脚本中若直接访问 Word COM 集合，请使用 1-based 索引。";
+        public string Description => "执行受控的 C# 脚本以完成 patch_range 难以覆盖的复杂写入。当前脚本环境应使用 app/doc/WordApp/ActiveDoc 这些 dynamic 全局变量直接操作 Word COM，不要声明 Microsoft.Office.Interop.Word 静态类型；访问 Word COM 集合时请使用 1-based 索引。";
 
         public ToolPermission RequiredPermission => ToolPermission.Write;
 
@@ -100,7 +100,7 @@ namespace SmartWord.OfficeIntegration.Tools
                                 Environment.NewLine,
                                 ex.Diagnostics.Select(item => item.ToString()));
                         throw new InvalidOperationException(
-                            "脚本编译失败。可用全局变量：app、doc、WordApp、ActiveDoc；可调用 Write(\"文本\") 输出调试信息。"
+                            "脚本编译失败。可用全局变量：app、doc、WordApp、ActiveDoc；可调用 Write(\"文本\") 输出调试信息。当前脚本环境只支持 dynamic COM 写法，不支持声明 Microsoft.Office.Interop.Word / Microsoft.Office.Core 的静态类型；请不要写 Paragraph、Range、Shape、InlineShape、MsoTriState 这类类型名。"
                                 + Environment.NewLine
                                 + diagnostics,
                             ex);
