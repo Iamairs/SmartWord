@@ -247,7 +247,7 @@ namespace SmartWord.AddIn.TaskPane
 
         public void PostEventToJs(object agentEvent)
         {
-            if (_coreWebView2 == null)
+            if (_coreWebView2 == null || !IsOwnerControlAvailable())
             {
                 return;
             }
@@ -255,14 +255,32 @@ namespace SmartWord.AddIn.TaskPane
             var eventJson = JsonConvert.SerializeObject(agentEvent);
             if (_ownerControl.InvokeRequired)
             {
-                _ownerControl.BeginInvoke(new Action(() => _coreWebView2.PostWebMessageAsJson(eventJson)));
+                try
+                {
+                    _ownerControl.BeginInvoke(new Action(() =>
+                    {
+                        if (!IsOwnerControlAvailable() || _coreWebView2 == null)
+                        {
+                            return;
+                        }
+
+                        TryPostWebMessage(eventJson);
+                    }));
+                }
+                catch (InvalidOperationException)
+                {
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+
                 return;
             }
 
-            _coreWebView2.PostWebMessageAsJson(eventJson);
+            TryPostWebMessage(eventJson);
         }
 
-        internal Task<bool> WaitForToolConfirmationAsync(string toolCallId, CancellationToken cancellationToken)
+        internal async Task<bool> WaitForToolConfirmationAsync(string toolCallId, CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(toolCallId))
             {
@@ -271,7 +289,7 @@ namespace SmartWord.AddIn.TaskPane
 
             if (_earlyConfirmationResults.TryRemove(toolCallId, out var earlyResult))
             {
-                return Task.FromResult(earlyResult);
+                return earlyResult;
             }
 
             var taskCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -279,13 +297,13 @@ namespace SmartWord.AddIn.TaskPane
             {
                 if (_pendingToolConfirmations.TryGetValue(toolCallId, out var existing))
                 {
-                    return existing.Task;
+                    return await existing.Task.ConfigureAwait(false);
                 }
 
-                return Task.FromResult(false);
+                return false;
             }
 
-            cancellationToken.Register(() =>
+            var registration = cancellationToken.Register(() =>
             {
                 if (_pendingToolConfirmations.TryRemove(toolCallId, out var pending))
                 {
@@ -293,7 +311,14 @@ namespace SmartWord.AddIn.TaskPane
                 }
             });
 
-            return taskCompletionSource.Task;
+            try
+            {
+                return await taskCompletionSource.Task.ConfigureAwait(false);
+            }
+            finally
+            {
+                registration.Dispose();
+            }
         }
 
         private CancellationTokenSource ReplaceCurrentCancellationTokenSource()
@@ -341,6 +366,30 @@ namespace SmartWord.AddIn.TaskPane
                     return true;
                 default:
                     return false;
+            }
+        }
+
+        private bool IsOwnerControlAvailable()
+        {
+            return _ownerControl != null
+                && !_ownerControl.IsDisposed
+                && _ownerControl.IsHandleCreated;
+        }
+
+        private void TryPostWebMessage(string eventJson)
+        {
+            try
+            {
+                _coreWebView2?.PostWebMessageAsJson(eventJson);
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            catch (COMException)
+            {
             }
         }
 
