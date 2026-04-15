@@ -69,6 +69,7 @@ namespace SmartWord.AddIn.DI
                 return registry;
             });
             services.AddSingleton<PermissionGuard>();
+            services.AddSingleton<ConversationCompressor>();
             services.AddSingleton(provider => new SystemPromptBuilder(
                 Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "Prompts")));
             services.AddSingleton<IAgentOrchestrator>(provider => new AgentOrchestrator(
@@ -79,8 +80,8 @@ namespace SmartWord.AddIn.DI
                 provider.GetRequiredService<IToolRegistry>(),
                 provider.GetRequiredService<PermissionGuard>(),
                 provider.GetRequiredService<IConfirmationChannel>(),
-                provider.GetRequiredService<IUndoScopeFactory>()));
-            services.AddSingleton<ConversationCompressor>();
+                provider.GetRequiredService<IUndoScopeFactory>(),
+                provider.GetRequiredService<ConversationCompressor>()));
             services.AddSingleton<StreamingResponseHandler>();
 
             _serviceProvider = services.BuildServiceProvider();

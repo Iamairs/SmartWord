@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Serilog;
+using SmartWord.Application.Context;
 using SmartWord.Application.PromptBuilder;
 using SmartWord.Application.Tools;
 using SmartWord.Core.Enums;
@@ -38,6 +39,7 @@ namespace SmartWord.Application.Orchestration
         private readonly PermissionGuard _permissionGuard;
         private readonly IConfirmationChannel _confirmationChannel;
         private readonly IUndoScopeFactory _undoScopeFactory;
+        private readonly ConversationCompressor _conversationCompressor;
 
         public AgentOrchestrator(
             ILlmClient llmClient,
@@ -47,7 +49,8 @@ namespace SmartWord.Application.Orchestration
             IToolRegistry toolRegistry,
             PermissionGuard permissionGuard,
             IConfirmationChannel confirmationChannel,
-            IUndoScopeFactory undoScopeFactory)
+            IUndoScopeFactory undoScopeFactory,
+            ConversationCompressor conversationCompressor)
         {
             _llmClient = llmClient;
             _contextHydrator = contextHydrator;
@@ -57,6 +60,7 @@ namespace SmartWord.Application.Orchestration
             _permissionGuard = permissionGuard;
             _confirmationChannel = confirmationChannel;
             _undoScopeFactory = undoScopeFactory;
+            _conversationCompressor = conversationCompressor ?? throw new ArgumentNullException(nameof(conversationCompressor));
         }
 
         /// <summary>
@@ -137,6 +141,7 @@ namespace SmartWord.Application.Orchestration
     var maxIterations = ResolveMaxIterations(safeOptions);
     var consecutiveFailures = 0;
     var shouldCommitUndo = false;
+    var hasCompactedContext = false;
     AgentMessage finalAssistantMessage = null;
     IUndoScope undoScope = null;
 
@@ -168,15 +173,34 @@ namespace SmartWord.Application.Orchestration
                 yield break;
             }
 
-            if (_conversationStore.EstimateTokenCount(messages) > Math.Max(CompactionThreshold, safeOptions.CompactionThreshold))
+            var compactionThreshold = safeOptions.CompactionThreshold > 0
+                ? safeOptions.CompactionThreshold
+                : CompactionThreshold;
+            var estimatedTokenCount = _conversationStore.EstimateTokenCount(messages);
+            if (estimatedTokenCount > compactionThreshold)
             {
+                var compactedMessages = _conversationCompressor.Compress(messages);
+                var compactedTokenCount = _conversationStore.EstimateTokenCount(compactedMessages);
+                var canContinueWithCompactedContext = compactedMessages != null
+                    && compactedMessages.Count < messages.Count
+                    && compactedTokenCount < estimatedTokenCount;
+
                 yield return new AgentEvent
                 {
                     Type = AgentEventType.ContextCompacted,
-                    Message = "当前对话已接近上下文上限，系统已停止继续扩展本轮上下文。"
+                    Message = canContinueWithCompactedContext
+                        ? "当前对话已接近上下文上限，系统已压缩较早消息并继续执行。"
+                        : "当前对话已接近上下文上限，压缩后仍不足以继续执行，系统已停止本轮任务。"
                 };
 
-                break;
+                if (!canContinueWithCompactedContext || hasCompactedContext)
+                {
+                    break;
+                }
+
+                messages = compactedMessages.ToList();
+                hasCompactedContext = true;
+                continue;
             }
 
             AgentMessage assistantMessage;

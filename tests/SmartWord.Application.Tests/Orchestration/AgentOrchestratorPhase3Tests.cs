@@ -1,10 +1,12 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using SmartWord.Application.Orchestration;
 using SmartWord.Application.PromptBuilder;
 using SmartWord.Application.Tools;
+using SmartWord.Application.Context;
 using SmartWord.Core.Enums;
 using SmartWord.Core.Interfaces;
 using SmartWord.Core.Models;
@@ -163,12 +165,52 @@ namespace SmartWord.Application.Tests.Orchestration
             Assert.Equal(0, undoScopeFactory.LastScope.RollbackCount);
         }
 
+        [Fact]
+        public async Task RunAsync_ContextExceeded_CompressesHistoryAndContinues()
+        {
+            var llmClient = new FakeLlmClient(new AgentMessage
+            {
+                Role = "assistant",
+                Content = "压缩后继续完成。"
+            });
+            var conversationStore = new FakeConversationStore(new[]
+            {
+                CreateHistoryMessage("user", "历史用户消息 1"),
+                CreateHistoryMessage("assistant", "历史助手消息 1"),
+                CreateHistoryMessage("user", "历史用户消息 2"),
+                CreateHistoryMessage("assistant", "历史助手消息 2"),
+                CreateHistoryMessage("user", "历史用户消息 3"),
+                CreateHistoryMessage("assistant", "历史助手消息 3"),
+                CreateHistoryMessage("user", "历史用户消息 4"),
+                CreateHistoryMessage("assistant", "历史助手消息 4")
+            });
+            var orchestrator = CreateOrchestrator(
+                llmClient,
+                CreateWritableHydrator(),
+                conversationStore: conversationStore);
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "继续处理当前任务",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Ask,
+                    EnableToolCalling = false,
+                    CompactionThreshold = 9000
+                },
+                CancellationToken.None));
+
+            Assert.Contains(events, item => item.Type == AgentEventType.ContextCompacted);
+            Assert.Contains(events, item => item.Type == AgentEventType.TaskCompleted);
+            Assert.Contains(conversationStore.LastEstimatedMessages, item => item.IsCompressedSummary);
+        }
+
         private static AgentOrchestrator CreateOrchestrator(
             ILlmClient llmClient,
             IContextHydrator contextHydrator,
             ITool tool = null,
             IConfirmationChannel confirmationChannel = null,
-            IUndoScopeFactory undoScopeFactory = null)
+            IUndoScopeFactory undoScopeFactory = null,
+            IConversationStore conversationStore = null)
         {
             var registry = new ToolRegistry();
             if (tool != null)
@@ -179,12 +221,13 @@ namespace SmartWord.Application.Tests.Orchestration
             return new AgentOrchestrator(
                 llmClient,
                 contextHydrator,
-                new InMemoryConversationStore(),
+                conversationStore ?? new InMemoryConversationStore(),
                 new SystemPromptBuilder(string.Empty),
                 registry,
                 new PermissionGuard(registry),
                 confirmationChannel ?? new FakeConfirmationChannel(true, false),
-                undoScopeFactory ?? new FakeUndoScopeFactory());
+                undoScopeFactory ?? new FakeUndoScopeFactory(),
+                new ConversationCompressor());
         }
 
         private static FakeContextHydrator CreateWritableHydrator()
@@ -213,6 +256,15 @@ namespace SmartWord.Application.Tests.Orchestration
                         Input = input
                     }
                 }
+            };
+        }
+
+        private static AgentMessage CreateHistoryMessage(string role, string content)
+        {
+            return new AgentMessage
+            {
+                Role = role,
+                Content = content
             };
         }
 
@@ -380,6 +432,93 @@ namespace SmartWord.Application.Tests.Orchestration
 
             public void Dispose()
             {
+            }
+        }
+
+        private sealed class FakeConversationStore : IConversationStore
+        {
+            private readonly List<AgentMessage> _history;
+
+            public FakeConversationStore(IEnumerable<AgentMessage> history)
+            {
+                _history = history == null
+                    ? new List<AgentMessage>()
+                    : new List<AgentMessage>(history);
+                LastEstimatedMessages = new List<AgentMessage>();
+            }
+
+            public List<AgentMessage> LastEstimatedMessages { get; private set; }
+
+            public Task AppendUserMessageAsync(string documentPath, AgentMessage message, CancellationToken cancellationToken)
+            {
+                _ = documentPath;
+                cancellationToken.ThrowIfCancellationRequested();
+                _history.Add(CloneMessage(message));
+                return Task.CompletedTask;
+            }
+
+            public Task AppendAssistantMessageAsync(string documentPath, AgentMessage message, CancellationToken cancellationToken)
+            {
+                _ = documentPath;
+                cancellationToken.ThrowIfCancellationRequested();
+                _history.Add(CloneMessage(message));
+                return Task.CompletedTask;
+            }
+
+            public Task AppendToolResultAsync(
+                string documentPath,
+                string toolCallId,
+                string toolName,
+                string rawInput,
+                ToolCallResult result,
+                CancellationToken cancellationToken)
+            {
+                _ = documentPath;
+                _ = rawInput;
+                cancellationToken.ThrowIfCancellationRequested();
+                _history.Add(new AgentMessage
+                {
+                    Role = "tool",
+                    ToolCallId = toolCallId ?? string.Empty,
+                    ToolName = toolName ?? string.Empty,
+                    Content = result == null ? string.Empty : result.Output,
+                    ToolSuccess = result != null && result.Success
+                });
+                return Task.CompletedTask;
+            }
+
+            public Task<IReadOnlyList<AgentMessage>> GetHistoryAsync(string documentPath, CancellationToken cancellationToken)
+            {
+                _ = documentPath;
+                cancellationToken.ThrowIfCancellationRequested();
+                return Task.FromResult((IReadOnlyList<AgentMessage>)_history.ConvertAll(CloneMessage));
+            }
+
+            public int EstimateTokenCount(IReadOnlyCollection<AgentMessage> messages)
+            {
+                LastEstimatedMessages = messages == null
+                    ? new List<AgentMessage>()
+                    : new List<AgentMessage>(messages.Select(CloneMessage));
+                return (messages == null ? 0 : messages.Count) * 1000;
+            }
+
+            private static AgentMessage CloneMessage(AgentMessage message)
+            {
+                return new AgentMessage
+                {
+                    Role = message == null ? string.Empty : message.Role,
+                    Content = message == null ? string.Empty : message.Content,
+                    ReasoningContent = message == null ? string.Empty : message.ReasoningContent,
+                    ToolCallId = message == null ? string.Empty : message.ToolCallId,
+                    Name = message == null ? string.Empty : message.Name,
+                    IsCompressedSummary = message != null && message.IsCompressedSummary,
+                    ToolName = message == null ? string.Empty : message.ToolName,
+                    RawToolInput = message == null ? string.Empty : message.RawToolInput,
+                    ToolSuccess = message != null && message.ToolSuccess,
+                    ToolCalls = message == null || message.ToolCalls == null
+                        ? new List<ToolCall>()
+                        : new List<ToolCall>(message.ToolCalls)
+                };
             }
         }
     }
