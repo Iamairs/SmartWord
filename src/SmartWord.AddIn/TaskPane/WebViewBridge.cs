@@ -267,10 +267,10 @@ namespace SmartWord.AddIn.TaskPane
                         TryPostWebMessage(eventJson);
                     }));
                 }
-                catch (InvalidOperationException)
+                catch (ObjectDisposedException)
                 {
                 }
-                catch (ObjectDisposedException)
+                catch (InvalidOperationException)
                 {
                 }
 
