@@ -30,14 +30,14 @@ namespace SmartWord.OfficeIntegration.Tools
         {
             _wordApplicationWrapper = wordApplicationWrapper;
             _inputSchema = JsonDocument.Parse(
-                "{\"type\":\"object\",\"properties\":{\"checks\":{\"type\":\"array\",\"description\":\"需要逐项验证的检查列表。paragraph_index 使用 0-based 段落索引，即第一段是 0。\",\"items\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\",\"description\":\"支持 text_contains、text_equals、text_not_contains、style_equals、paragraph_exists。\"},\"paragraph_index\":{\"type\":\"integer\",\"description\":\"0-based 段落索引。第一段是 0，不是 1。\"},\"expected\":{\"type\":\"string\",\"description\":\"期望文本或期望样式名。\"},\"should_exist\":{\"type\":\"boolean\",\"description\":\"仅在 paragraph_exists 时使用。true 表示该段应存在，false 表示该段应不存在。\"}},\"required\":[\"type\",\"paragraph_index\"]}}},\"required\":[\"checks\"]}")
+                "{\"type\":\"object\",\"properties\":{\"checks\":{\"type\":\"array\",\"description\":\"需要逐项验证的检查列表。checks 必须是 JSON 数组本身，不要传字符串化后的 JSON。paragraph_index 使用 0-based 段落索引，即第一段是 0。text_contains / text_equals / text_not_contains / style_equals 应提供 expected；paragraph_exists 应提供 should_exist。\",\"items\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\",\"description\":\"支持 text_contains、text_equals、text_not_contains、style_equals、paragraph_exists。\"},\"paragraph_index\":{\"type\":\"integer\",\"description\":\"0-based 段落索引。第一段是 0，不是 1。\"},\"expected\":{\"type\":\"string\",\"description\":\"期望文本或期望样式名。仅在 text_contains、text_equals、text_not_contains、style_equals 中使用。\"},\"should_exist\":{\"type\":\"boolean\",\"description\":\"仅在 paragraph_exists 时使用。true 表示该段应存在，false 表示该段应不存在。\"}},\"required\":[\"type\",\"paragraph_index\"]}}},\"required\":[\"checks\"]}")
                 .RootElement
                 .Clone();
         }
 
         public string Name => "verify_change";
 
-        public string Description => "回读段落文本、样式与存在性，验证写操作是否达成预期。所有 paragraph_index 都使用 0-based 段落索引。";
+        public string Description => "回读段落文本、样式与存在性，验证写操作是否达成预期。checks 必须传真正的 JSON 数组，不要传字符串化 JSON；所有 paragraph_index 都使用 0-based 段落索引。";
 
         public ToolPermission RequiredPermission => ToolPermission.ReadOnly;
 
@@ -47,6 +47,12 @@ namespace SmartWord.OfficeIntegration.Tools
         {
             _ = undoScope;
             cancellationToken.ThrowIfCancellationRequested();
+
+            var checksError = ValidateChecksShape(input);
+            if (!string.IsNullOrWhiteSpace(checksError))
+            {
+                return ToolCallResult.Error(Name, checksError);
+            }
 
             var request = VerifyChangeRequest.Parse(input);
             if (request.Checks.Count == 0)
@@ -91,6 +97,27 @@ namespace SmartWord.OfficeIntegration.Tools
                 JsonSerializer.Serialize(payload, JsonOptions),
                 results.Select(item => item.ParagraphIndex).Distinct().ToArray(),
                 operationDescription: "已完成改动验证。");
+        }
+
+        private static string ValidateChecksShape(JsonElement input)
+        {
+            if (input.ValueKind != JsonValueKind.Object
+                || !input.TryGetProperty("checks", out var checksElement))
+            {
+                return string.Empty;
+            }
+
+            if (checksElement.ValueKind == JsonValueKind.String)
+            {
+                return "checks 必须是 JSON 数组，不要传字符串化后的 JSON。正确示例：\"checks\":[{\"type\":\"text_contains\",\"paragraph_index\":3,\"expected\":\"...\"}]。";
+            }
+
+            if (checksElement.ValueKind != JsonValueKind.Array)
+            {
+                return "checks 必须是 JSON 数组。";
+            }
+
+            return string.Empty;
         }
     }
 

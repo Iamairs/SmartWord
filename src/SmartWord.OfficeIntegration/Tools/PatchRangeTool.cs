@@ -31,14 +31,14 @@ namespace SmartWord.OfficeIntegration.Tools
         {
             _wordApplicationWrapper = wordApplicationWrapper;
             _inputSchema = JsonDocument.Parse(
-                "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\",\"description\":\"本次写操作的简要说明。\"},\"operations\":{\"type\":\"array\",\"description\":\"按顺序执行的写入操作列表。paragraph_index 使用 0-based 段落索引，即第一段是 0。\",\"items\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\",\"description\":\"支持 replace_text、insert_paragraph_after、set_paragraph_style、delete_paragraph；同时兼容 replace、set_text、insert_after、set_style、delete 等常见别名。优先输出标准名。\"},\"paragraph_index\":{\"type\":\"integer\",\"description\":\"0-based 段落索引。第一段是 0，不是 1。\"},\"text\":{\"type\":\"string\",\"description\":\"目标文本内容。replace_text 会整段替换，insert_paragraph_after 会写入新段落文本。\"},\"style\":{\"type\":\"string\",\"description\":\"Word 中可识别的段落样式名称，例如 Heading 1。\"}},\"required\":[\"type\",\"paragraph_index\"]}}},\"required\":[\"operations\"]}")
+                "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\",\"description\":\"本次写操作的简要说明。\"},\"operations\":{\"type\":\"array\",\"description\":\"按顺序执行的写入操作列表。operations 必须是 JSON 数组本身，不要传字符串化后的 JSON。paragraph_index 使用 0-based 段落索引，即第一段是 0。当前批处理语义按实时文档顺序执行，前一步插入/删除会影响后续 paragraph_index。默认优先一次只做 1 个写操作。\" ,\"items\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\",\"description\":\"支持 replace_text、insert_paragraph_after、set_paragraph_style、delete_paragraph；同时兼容 replace、set_text、insert_after、set_style、delete 等常见别名。优先输出标准名。\"},\"paragraph_index\":{\"type\":\"integer\",\"description\":\"0-based 段落索引。第一段是 0，不是 1。\"},\"text\":{\"type\":\"string\",\"description\":\"目标文本内容。replace_text 会整段替换目标段落；insert_paragraph_after 会在目标段落后新增一段，并把 text 写入新段落。text 是普通字符串，不要再额外包一层 JSON。\"},\"style\":{\"type\":\"string\",\"description\":\"Word 中可识别的段落样式名称，例如 Heading 1。仅在 set_paragraph_style 或 insert_paragraph_after 需要设置样式时使用。\"}},\"required\":[\"type\",\"paragraph_index\"]}}},\"required\":[\"operations\"]}")
                 .RootElement
                 .Clone();
         }
 
         public string Name => "patch_range";
 
-        public string Description => "以最小风险执行段落替换、插入、样式设置与删除。所有 paragraph_index 都使用 0-based 段落索引。";
+        public string Description => "以最小风险执行段落替换、插入、样式设置与删除。operations 必须传真正的 JSON 数组，不要传字符串化 JSON；所有 paragraph_index 都使用 0-based 段落索引。当前批处理按实时文档顺序执行，前一步对结构的影响会改变后续索引。";
 
         public ToolPermission RequiredPermission => ToolPermission.Write;
 
@@ -48,6 +48,12 @@ namespace SmartWord.OfficeIntegration.Tools
         {
             _ = undoScope;
             cancellationToken.ThrowIfCancellationRequested();
+
+            var operationsError = ValidateOperationsShape(input);
+            if (!string.IsNullOrWhiteSpace(operationsError))
+            {
+                return ToolCallResult.Error(Name, operationsError);
+            }
 
             var request = PatchRangeRequest.Parse(input);
             if (request.Operations.Count == 0)
@@ -204,6 +210,27 @@ namespace SmartWord.OfficeIntegration.Tools
         private static string NormalizeTextForParagraph(string text)
         {
             return (text ?? string.Empty).TrimEnd('\r', '\n');
+        }
+
+        private static string ValidateOperationsShape(JsonElement input)
+        {
+            if (input.ValueKind != JsonValueKind.Object
+                || !input.TryGetProperty("operations", out var operationsElement))
+            {
+                return string.Empty;
+            }
+
+            if (operationsElement.ValueKind == JsonValueKind.String)
+            {
+                return "operations 必须是 JSON 数组，不要传字符串化后的 JSON。正确示例：\"operations\":[{\"type\":\"replace_text\",\"paragraph_index\":3,\"text\":\"...\"}]。";
+            }
+
+            if (operationsElement.ValueKind != JsonValueKind.Array)
+            {
+                return "operations 必须是 JSON 数组。";
+            }
+
+            return string.Empty;
         }
 
         private static void TryReleaseComObject(object comObject)

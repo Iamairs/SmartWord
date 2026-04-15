@@ -39,14 +39,14 @@ namespace SmartWord.OfficeIntegration.Tools
             _scriptExecutor = scriptExecutor;
             _scriptSecurityValidator = scriptSecurityValidator;
             _inputSchema = JsonDocument.Parse(
-                "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\",\"description\":\"本次脚本写入的简要说明。仅当 patch_range 难以表达时再使用脚本。\"},\"code\":{\"type\":\"string\",\"description\":\"C# 脚本。当前脚本环境只支持通过 app/doc/WordApp/ActiveDoc 这些 dynamic 全局变量访问 Word COM；不要声明 Paragraph、Range、Shape、InlineShape 等静态 Interop 类型，也不要写 Microsoft.Office.Interop.Word 或 Microsoft.Office.Core.MsoTriState。若直接访问 Word COM 集合（如 Paragraphs、Tables、Comments），其索引通常是 1-based，第一项应写 [1]，不要写 [0]。如需输出调试信息，调用 Write(\\\"...\\\")。\"},\"affected_paragraphs\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"},\"description\":\"若已知会影响哪些段落，可显式填写，便于前端摘要展示。这里的段落索引使用 0-based。\"}},\"required\":[\"code\"]}")
+                "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\",\"description\":\"本次脚本写入的简要说明。仅当 patch_range 难以表达时再使用脚本。\"},\"code\":{\"type\":\"string\",\"description\":\"C# 脚本。当前脚本环境只支持通过 app/doc/WordApp/ActiveDoc 这些 dynamic 全局变量访问 Word COM；不要声明 Paragraph、Range、Shape、InlineShape 等静态 Interop 类型，也不要写 Microsoft.Office.Interop.Word 或 Microsoft.Office.Core.MsoTriState。若直接访问 Word COM 集合（如 Paragraphs、Tables、Comments、Rows、Cells、Shapes、InlineShapes），不要使用 foreach 枚举，应读取 Count 后按 1-based 索引循环访问，例如 for (int i = 1; i <= collection.Count; i++)。如需 Office 常量，优先直接使用已知数值，不要依赖未引用的枚举类型。如需输出调试信息，调用 Write(\\\"...\\\")。\"},\"affected_paragraphs\":{\"type\":\"array\",\"items\":{\"type\":\"integer\"},\"description\":\"若已知会影响哪些段落，可显式填写，便于前端摘要展示。这里的段落索引使用 0-based。\"}},\"required\":[\"code\"]}")
                 .RootElement
                 .Clone();
         }
 
         public string Name => "execute_script";
 
-        public string Description => "执行受控的 C# 脚本以完成 patch_range 难以覆盖的复杂写入。当前脚本环境应使用 app/doc/WordApp/ActiveDoc 这些 dynamic 全局变量直接操作 Word COM，不要声明 Microsoft.Office.Interop.Word 静态类型；访问 Word COM 集合时请使用 1-based 索引。";
+        public string Description => "执行受控的 C# 脚本以完成 patch_range 难以覆盖的复杂写入。当前脚本环境应使用 app/doc/WordApp/ActiveDoc 这些 dynamic 全局变量直接操作 Word COM，不要声明 Microsoft.Office.Interop.Word 静态类型；访问 Word COM 集合时请使用 Count + 1-based 下标循环，不要对 COM 集合使用 foreach。";
 
         public ToolPermission RequiredPermission => ToolPermission.Write;
 
@@ -105,6 +105,12 @@ namespace SmartWord.OfficeIntegration.Tools
                                 + diagnostics,
                             ex);
                     }
+                    catch (InvalidCastException ex)
+                    {
+                        throw new InvalidOperationException(
+                            BuildScriptRuntimeErrorMessage(ex),
+                            ex);
+                    }
                 })
                 .ConfigureAwait(false);
 
@@ -121,6 +127,20 @@ namespace SmartWord.OfficeIntegration.Tools
                 operationDescription: string.IsNullOrWhiteSpace(request.Description)
                     ? "已执行脚本写入。"
                     : request.Description);
+        }
+
+        private static string BuildScriptRuntimeErrorMessage(InvalidCastException exception)
+        {
+            var rawMessage = exception == null ? string.Empty : exception.Message ?? string.Empty;
+            if (rawMessage.IndexOf("IEnumerable", StringComparison.OrdinalIgnoreCase) >= 0
+                || rawMessage.IndexOf("DISPID_NEWENUM", StringComparison.OrdinalIgnoreCase) >= 0
+                || rawMessage.IndexOf("E_NOINTERFACE", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "脚本运行失败。不要对 Word COM 集合使用 foreach；当前 Word COM 集合通常不支持 foreach 枚举，请改为读取 Count 后按 1-based 索引循环访问，例如 for (int i = 1; i <= rows.Count; i++)。涉及 Rows、Cells、Paragraphs、Tables、Shapes、InlineShapes 等集合时都应遵循此规则。原始错误："
+                    + rawMessage;
+            }
+
+            return "脚本运行失败：" + rawMessage;
         }
     }
 
