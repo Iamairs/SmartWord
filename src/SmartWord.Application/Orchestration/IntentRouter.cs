@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Serilog;
@@ -16,6 +17,8 @@ namespace SmartWord.Application.Orchestration
     public class IntentRouter
     {
         private static readonly TimeSpan RoutingStreamDisposeTimeout = TimeSpan.FromSeconds(2);
+        private static readonly Regex DecisionRegex =
+            new Regex(@"\b(ask|plan|agent)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         private readonly ILlmClient _llmClient;
         private readonly string _lightModel;
@@ -40,6 +43,14 @@ namespace SmartWord.Application.Orchestration
             {
                 return await GetDecisionFromLlmAsync(userInput, documentContext, cancellationToken)
                     .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException))
+            {
+                Log.Warning(
+                    ex,
+                    "意图路由调用轻量模型失败，已回退到关键词规则。UserInputLength={UserInputLength}",
+                    userInput.Length);
+                return RouteWithKeywords(userInput);
             }
             catch
             {
@@ -167,23 +178,24 @@ namespace SmartWord.Application.Orchestration
                 return null;
             }
 
-            var normalized = decision.Trim().ToLowerInvariant();
-            if (normalized.Contains("ask"))
+            var matches = DecisionRegex.Matches(decision);
+            if (matches.Count != 1)
             {
-                return AgentMode.Ask;
+                return null;
             }
 
-            if (normalized.Contains("plan"))
+            var normalized = matches[0].Value.Trim().ToLowerInvariant();
+            switch (normalized)
             {
-                return AgentMode.Plan;
+                case "ask":
+                    return AgentMode.Ask;
+                case "plan":
+                    return AgentMode.Plan;
+                case "agent":
+                    return AgentMode.Agent;
+                default:
+                    return null;
             }
-
-            if (normalized.Contains("agent"))
-            {
-                return AgentMode.Agent;
-            }
-
-            return null;
         }
 
         private static AgentMode RouteWithKeywords(string userInput)
