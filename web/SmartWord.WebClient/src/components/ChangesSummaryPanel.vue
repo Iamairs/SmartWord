@@ -85,7 +85,7 @@ const summaryHint = computed(() => {
   }
 
   if (verifiedCount.value === props.changes.length) {
-    return '本次写入均已通过 verify_change 验证。';
+    return '本次写入均已通过验证步骤确认。';
   }
 
   const fragments = [];
