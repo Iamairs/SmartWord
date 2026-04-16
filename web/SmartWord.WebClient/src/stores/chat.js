@@ -12,6 +12,21 @@ function createMessage(role, content) {
   };
 }
 
+function cloneParagraphs(affectedParagraphs) {
+  return Array.isArray(affectedParagraphs) ? [...affectedParagraphs] : [];
+}
+
+function createChangeRecord(change) {
+  return {
+    id: change.toolCallId || `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    toolName: change.toolName || 'unknown_tool',
+    operationDescription: change.operationDescription || '已执行写入。',
+    affectedParagraphs: cloneParagraphs(change.affectedParagraphs),
+    status: 'executed',
+    statusMessage: change.message || ''
+  };
+}
+
 export const useChatStore = defineStore('chat', {
   state: () => ({
     messages: [],
@@ -110,15 +125,40 @@ export const useChatStore = defineStore('chat', {
     clearPendingConfirmation() {
       this.pendingConfirmation = null;
     },
-    recordChangeApplied(change) {
-      this.currentTaskChanges.push({
-        id: change.toolCallId || `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-        toolName: change.toolName || 'unknown_tool',
-        operationDescription: change.operationDescription || '已执行改动。',
-        affectedParagraphs: Array.isArray(change.affectedParagraphs)
-          ? [...change.affectedParagraphs]
-          : []
+    upsertTaskChange(change, status) {
+      const changeId = change.toolCallId || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const existing = this.currentTaskChanges.find((item) => item.id === changeId);
+      const nextRecord = existing || createChangeRecord({
+        ...change,
+        toolCallId: changeId
       });
+
+      nextRecord.id = changeId;
+      nextRecord.toolName = change.toolName || nextRecord.toolName || 'unknown_tool';
+      nextRecord.operationDescription =
+        change.operationDescription || nextRecord.operationDescription || '已执行写入。';
+      nextRecord.affectedParagraphs = cloneParagraphs(change.affectedParagraphs ?? nextRecord.affectedParagraphs);
+      nextRecord.status = status || nextRecord.status || 'executed';
+      nextRecord.statusMessage = change.message || nextRecord.statusMessage || '';
+
+      if (!existing) {
+        this.currentTaskChanges.push(nextRecord);
+      }
+    },
+    recordChangeExecuted(change) {
+      this.upsertTaskChange(change, 'executed');
+    },
+    recordChangeApplied(change) {
+      this.upsertTaskChange(change, 'verified');
+    },
+    recordChangeUnverified(change) {
+      this.upsertTaskChange(change, 'unverified');
+    },
+    recordChangeVerificationFailed(change) {
+      this.upsertTaskChange(change, 'verification_failed');
+    },
+    recordChangeRepairRequired(change) {
+      this.upsertTaskChange(change, 'repair_required');
     },
     finalizeTaskChanges() {
       this.completedTaskChanges = this.currentTaskChanges.map((item) => ({
@@ -126,11 +166,6 @@ export const useChatStore = defineStore('chat', {
         affectedParagraphs: [...item.affectedParagraphs]
       }));
       this.currentTaskChanges = [];
-      this.pendingConfirmation = null;
-    },
-    discardCurrentTaskChanges() {
-      this.currentTaskChanges = [];
-      this.completedTaskChanges = [];
       this.pendingConfirmation = null;
     },
     findCitation(ref) {

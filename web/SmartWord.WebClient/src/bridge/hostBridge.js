@@ -210,11 +210,20 @@ export const hostBridge = {
         operationDescription: pendingMockConfirmation.operationDescription
       });
       emitEvent({
+        type: 'change_executed',
+        toolCallId,
+        toolName: pendingMockConfirmation.toolName,
+        affectedParagraphs: [2],
+        operationDescription: pendingMockConfirmation.operationDescription,
+        message: '写入已执行，等待 verify_change 验证结果。'
+      });
+      emitEvent({
         type: 'change_applied',
         toolCallId,
         toolName: pendingMockConfirmation.toolName,
         affectedParagraphs: [2],
-        operationDescription: pendingMockConfirmation.operationDescription
+        operationDescription: pendingMockConfirmation.operationDescription,
+        message: '已通过 verify_change 验证，改动已确认生效。'
       });
       emitEvent({
         type: 'task_completed',

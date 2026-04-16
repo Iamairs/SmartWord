@@ -344,8 +344,20 @@ function handleAgentEvent(event) {
     case 'tool_call_skipped':
       chatStore.completeToolCall(event.toolCallId, false, event.toolOutput, 'skipped');
       break;
+    case 'change_executed':
+      chatStore.recordChangeExecuted(event);
+      break;
     case 'change_applied':
       chatStore.recordChangeApplied(event);
+      break;
+    case 'change_unverified':
+      chatStore.recordChangeUnverified(event);
+      break;
+    case 'change_verification_failed':
+      chatStore.recordChangeVerificationFailed(event);
+      break;
+    case 'change_repair_required':
+      chatStore.recordChangeRepairRequired(event);
       break;
     case 'mode_detected':
       chatStore.setMode(event.detectedMode);
@@ -362,8 +374,9 @@ function handleAgentEvent(event) {
     case 'document_mismatch':
     case 'error':
     case 'cancelled':
+      chatStore.setCitations(event.citations);
       chatStore.finishLoading();
-      chatStore.discardCurrentTaskChanges();
+      chatStore.finalizeTaskChanges();
       if (event.message) {
         chatStore.appendAssistantMessage(event.message);
       }
