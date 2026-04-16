@@ -177,12 +177,21 @@ namespace SmartWord.AddIn.TaskPane
                         PostEventToJs(MapEventToJs(agentEvent));
                     }
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException) when (requestCts.IsCancellationRequested)
                 {
                     PostEventToJs(new
                     {
                         type = "cancelled",
                         message = "任务已取消。"
+                    });
+                }
+                catch (OperationCanceledException ex)
+                {
+                    Log.Error(ex, "任务在执行过程中发生了非预期的取消异常。");
+                    PostEventToJs(new
+                    {
+                        type = "error",
+                        message = "任务在执行过程中被中断，请检查上一个失败步骤并重试。"
                     });
                 }
                 catch (Exception ex)
@@ -438,8 +447,16 @@ namespace SmartWord.AddIn.TaskPane
                     return "max_iterations_reached";
                 case AgentEventType.ProgressUpdate:
                     return "progress_update";
+                case AgentEventType.ChangeExecuted:
+                    return "change_executed";
                 case AgentEventType.ChangeApplied:
                     return "change_applied";
+                case AgentEventType.ChangeUnverified:
+                    return "change_unverified";
+                case AgentEventType.ChangeVerificationFailed:
+                    return "change_verification_failed";
+                case AgentEventType.ChangeRepairRequired:
+                    return "change_repair_required";
                 case AgentEventType.ModeDetected:
                     return "mode_detected";
                 case AgentEventType.DocumentMismatch:

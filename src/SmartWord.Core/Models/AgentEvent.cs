@@ -16,12 +16,16 @@ namespace SmartWord.Core.Models
         TaskCompleted = 6,
         MaxIterationsReached = 7,
         ProgressUpdate = 8,
-        ChangeApplied = 9,
-        ModeDetected = 10,
-        DocumentMismatch = 11,
-        DocumentNotWritable = 12,
-        Error = 13,
-        Cancelled = 14
+        ChangeExecuted = 9,
+        ChangeApplied = 10,
+        ChangeUnverified = 11,
+        ChangeVerificationFailed = 12,
+        ChangeRepairRequired = 13,
+        ModeDetected = 14,
+        DocumentMismatch = 15,
+        DocumentNotWritable = 16,
+        Error = 17,
+        Cancelled = 18
     }
 
     /// <summary>
