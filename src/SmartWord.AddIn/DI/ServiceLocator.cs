@@ -60,7 +60,10 @@ namespace SmartWord.AddIn.DI
                 registry.Register(new GetSelectionContextTool(wordWrapper));
                 registry.Register(new ReadTableTool(wordWrapper));
                 registry.Register(new ReadAnnotationsTool(wordWrapper));
-                registry.Register(new VerifyChangeTool(wordWrapper));
+                registry.Register(new VerifyScriptTool(
+                    wordWrapper,
+                    provider.GetRequiredService<CSharpScriptExecutor>(),
+                    provider.GetRequiredService<ScriptSecurityValidator>()));
                 registry.Register(new PatchRangeTool(wordWrapper));
                 registry.Register(new ExecuteScriptTool(
                     wordWrapper,

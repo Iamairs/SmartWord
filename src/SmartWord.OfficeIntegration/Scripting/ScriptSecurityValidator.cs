@@ -12,6 +12,25 @@ namespace SmartWord.OfficeIntegration.Scripting
     /// </summary>
     public class ScriptSecurityValidator
     {
+        private static readonly string[] ForbiddenMutationMethodNames =
+        {
+            "Delete",
+            "InsertAfter",
+            "InsertBefore",
+            "InsertParagraphAfter",
+            "InsertParagraphBefore",
+            "Save",
+            "SaveAs",
+            "SaveAs2",
+            "Close",
+            "Undo",
+            "Redo",
+            "Cut",
+            "Paste",
+            "TypeText",
+            "TypeParagraph"
+        };
+
         private static readonly string[] ForbiddenNamespacePrefixes =
         {
             "System.IO",
@@ -35,7 +54,7 @@ namespace SmartWord.OfficeIntegration.Scripting
             "AppDomain"
         };
 
-        public ValidationResult Validate(string code)
+        public ValidationResult Validate(string code, ScriptValidationMode mode = ScriptValidationMode.Write)
         {
             if (string.IsNullOrWhiteSpace(code))
             {
@@ -88,6 +107,27 @@ namespace SmartWord.OfficeIntegration.Scripting
                 }
             }
 
+            if (mode == ScriptValidationMode.ReadOnly)
+            {
+                foreach (var assignment in root.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+                {
+                    if (assignment.Left is MemberAccessExpressionSyntax
+                        || assignment.Left is ElementAccessExpressionSyntax)
+                    {
+                        return ValidationResult.Invalid("验证脚本必须保持只读，禁止给 Word DOM 成员或索引器赋值。");
+                    }
+                }
+
+                foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+                {
+                    var methodName = ResolveInvocationMethodName(invocation);
+                    if (ForbiddenMutationMethodNames.Contains(methodName, StringComparer.Ordinal))
+                    {
+                        return ValidationResult.Invalid("验证脚本必须保持只读，禁止调用写入方法：" + methodName);
+                    }
+                }
+            }
+
             return ValidationResult.Valid();
         }
 
@@ -96,6 +136,27 @@ namespace SmartWord.OfficeIntegration.Scripting
             return ForbiddenNamespacePrefixes.Any(prefix =>
                 namespaceText.StartsWith(prefix, StringComparison.Ordinal));
         }
+
+        private static string ResolveInvocationMethodName(InvocationExpressionSyntax invocation)
+        {
+            if (invocation?.Expression is MemberAccessExpressionSyntax memberAccess)
+            {
+                return memberAccess.Name?.Identifier.ValueText ?? string.Empty;
+            }
+
+            if (invocation?.Expression is IdentifierNameSyntax identifierName)
+            {
+                return identifierName.Identifier.ValueText;
+            }
+
+            return string.Empty;
+        }
+    }
+
+    public enum ScriptValidationMode
+    {
+        Write = 0,
+        ReadOnly = 1
     }
 
     public class ValidationResult

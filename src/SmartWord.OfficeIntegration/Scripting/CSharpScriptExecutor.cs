@@ -45,16 +45,17 @@ namespace SmartWord.OfficeIntegration.Scripting
                     cancellationToken)
                 .ConfigureAwait(false);
 
-            var output = scriptGlobals == null ? string.Empty : scriptGlobals.GetOutput();
-            if (string.IsNullOrWhiteSpace(output))
-            {
-                output = state.ReturnValue == null ? "脚本执行完成。" : Convert.ToString(state.ReturnValue);
-            }
+            var logOutput = scriptGlobals == null ? string.Empty : scriptGlobals.GetOutput();
+            var output = string.IsNullOrWhiteSpace(logOutput)
+                ? (state.ReturnValue == null ? "脚本执行完成。" : Convert.ToString(state.ReturnValue))
+                : logOutput;
 
             return new ScriptExecutionResult
             {
                 Success = true,
                 Output = output ?? string.Empty,
+                LogOutput = logOutput ?? string.Empty,
+                ReturnValue = state.ReturnValue,
                 ReturnValueType = state.ReturnValue == null ? string.Empty : state.ReturnValue.GetType().FullName ?? string.Empty
             };
         }
@@ -65,6 +66,10 @@ namespace SmartWord.OfficeIntegration.Scripting
         public bool Success { get; set; }
 
         public string Output { get; set; } = string.Empty;
+
+        public string LogOutput { get; set; } = string.Empty;
+
+        public object ReturnValue { get; set; }
 
         public string ReturnValueType { get; set; } = string.Empty;
     }

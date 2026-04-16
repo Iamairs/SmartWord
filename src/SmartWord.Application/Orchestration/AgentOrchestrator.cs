@@ -323,7 +323,7 @@ namespace SmartWord.Application.Orchestration
                         yield return CreateChangeEvent(
                             AgentEventType.ChangeApplied,
                             pendingWriteStep,
-                            "模型未显式调用 verify_change，系统已自动补验证并确认改动生效。",
+                            "模型未显式调用验证步骤，系统已自动补验证并确认改动生效。",
                             autoVerifyOutcome.Result == null ? string.Empty : autoVerifyOutcome.Result.Output);
                         pendingWriteStep = null;
                     }
@@ -353,7 +353,7 @@ namespace SmartWord.Application.Orchestration
 
                 if (pendingWriteStep != null
                     && pendingWriteStep.State == PendingWriteState.AwaitingVerification
-                    && !IsVerifyChangeTool(toolCall.Name))
+                    && !IsVerificationTool(toolCall.Name))
                 {
                     var autoVerifyOutcome = await ExecuteAutoVerifyAsync(
                             documentPath,
@@ -375,7 +375,7 @@ namespace SmartWord.Application.Orchestration
                     {
                         var verificationRequiredResult = ToolCallResult.Error(
                             toolCall.Name,
-                            "上一条写操作已执行，但显式 verify_change 缺失，系统自动补验证未通过。");
+                            "上一条写操作已执行，但显式验证步骤缺失，系统自动补验证未通过。");
 
                         await AppendToolResultAsync(documentPath, messages, toolCall, verificationRequiredResult, cancellationToken)
                             .ConfigureAwait(false);
@@ -396,7 +396,7 @@ namespace SmartWord.Application.Orchestration
                     yield return CreateChangeEvent(
                         AgentEventType.ChangeApplied,
                         pendingWriteStep,
-                        "模型未显式调用 verify_change，系统已自动补验证并确认改动生效。",
+                        "模型未显式调用验证步骤，系统已自动补验证并确认改动生效。",
                         autoVerifyOutcome.Result == null ? string.Empty : autoVerifyOutcome.Result.Output);
                     pendingWriteStep = null;
                 }
@@ -451,12 +451,12 @@ namespace SmartWord.Application.Orchestration
 
                     if (pendingWriteStep != null
                         && pendingWriteStep.State == PendingWriteState.AwaitingVerification
-                        && IsVerifyChangeTool(toolCall.Name))
+                        && IsVerificationTool(toolCall.Name))
                     {
                         yield return CreateChangeEvent(
                             AgentEventType.ChangeVerificationFailed,
                             pendingWriteStep,
-                            "写入已执行，但 verify_change 被权限策略拒绝，改动未被确认。");
+                            "写入已执行，但验证步骤被权限策略拒绝，改动未被确认。");
                     }
 
                     consecutiveFailures++;
@@ -478,12 +478,12 @@ namespace SmartWord.Application.Orchestration
 
                     if (pendingWriteStep != null
                         && pendingWriteStep.State == PendingWriteState.AwaitingVerification
-                        && IsVerifyChangeTool(toolCall.Name))
+                        && IsVerificationTool(toolCall.Name))
                     {
                         yield return CreateChangeEvent(
                             AgentEventType.ChangeVerificationFailed,
                             pendingWriteStep,
-                            "写入已执行，但 verify_change 输入格式无效，改动未被确认。");
+                            "写入已执行，但验证步骤输入格式无效，改动未被确认。");
                     }
 
                     consecutiveFailures++;
@@ -636,20 +636,20 @@ namespace SmartWord.Application.Orchestration
                         yield return CreateChangeEvent(
                             AgentEventType.ChangeExecuted,
                             pendingWriteStep,
-                            "写入已执行，等待 verify_change 验证结果。");
+                            "写入已执行，等待验证步骤返回结果。");
                         continue;
                     }
 
                     if (pendingWriteStep != null
                         && pendingWriteStep.State == PendingWriteState.AwaitingVerification
-                        && IsVerifyChangeTool(toolCall.Name))
+                        && IsVerificationTool(toolCall.Name))
                     {
-                        if (TryGetVerifyAllPassed(executionResult.Output, out var allPassed) && allPassed)
+                        if (TryGetVerificationAllPassed(executionResult.Output, out var allPassed) && allPassed)
                         {
                             yield return CreateChangeEvent(
                                 AgentEventType.ChangeApplied,
                                 pendingWriteStep,
-                                "已通过 verify_change 验证，改动已确认生效。",
+                                "已通过验证步骤确认改动生效。",
                                 executionResult.Output);
                             consecutiveFailures = 0;
                             pendingWriteStep = null;
@@ -711,7 +711,7 @@ namespace SmartWord.Application.Orchestration
 
                     if (pendingWriteStep != null
                         && pendingWriteStep.State == PendingWriteState.AwaitingVerification
-                        && IsVerifyChangeTool(toolCall.Name))
+                        && IsVerificationTool(toolCall.Name))
                     {
                         pendingWriteStep = pendingWriteStep.MarkRepairRequired(
                             BuildVerificationFailureMessage(executionResult));
@@ -770,7 +770,7 @@ namespace SmartWord.Application.Orchestration
                 yield return CreateChangeEvent(
                     AgentEventType.ChangeApplied,
                     pendingWriteStep,
-                    "模型未显式调用 verify_change，系统已自动补验证并确认改动生效。",
+                    "模型未显式调用验证步骤，系统已自动补验证并确认改动生效。",
                     autoVerifyOutcome.Result == null ? string.Empty : autoVerifyOutcome.Result.Output);
                 pendingWriteStep = null;
             }
@@ -1210,9 +1210,9 @@ namespace SmartWord.Application.Orchestration
             return tool != null && tool.RequiredPermission != ToolPermission.ReadOnly;
         }
 
-        private static bool IsVerifyChangeTool(string toolName)
+        private static bool IsVerificationTool(string toolName)
         {
-            return string.Equals(toolName, "verify_change", StringComparison.OrdinalIgnoreCase);
+            return string.Equals(toolName, "verify_script", StringComparison.OrdinalIgnoreCase);
         }
 
         private static AutoVerifyPlan BuildAutoVerifyPlan(string toolName, JObject parsedInput)
@@ -1297,7 +1297,7 @@ namespace SmartWord.Application.Orchestration
                         });
                         break;
                     case "delete_paragraph":
-                        return AutoVerifyPlan.Unsupported("delete_paragraph 暂不支持可靠的系统自动补验证，请显式调用 verify_change。");
+                        return AutoVerifyPlan.Unsupported("delete_paragraph 暂不支持可靠的系统自动补验证，请显式调用 verify_script。");
                     default:
                         return AutoVerifyPlan.Unsupported("存在当前版本不支持自动补验证的 patch_range 操作类型：" + operation.Type);
                 }
@@ -1305,14 +1305,12 @@ namespace SmartWord.Application.Orchestration
 
             if (checks.Count == 0)
             {
-                return AutoVerifyPlan.Unsupported("当前写步骤未生成任何可执行的自动验证检查。");
+                return AutoVerifyPlan.Unsupported("当前写步骤未生成任何可执行的自动验证脚本。");
             }
 
             return AutoVerifyPlan.Supported(
-                new JObject
-                {
-                    ["checks"] = checks
-                }.ToString(Formatting.None),
+                "verify_script",
+                BuildPatchRangeAutoVerifyInput(checks),
                 "系统正在自动补验证上一写步骤。");
         }
 
@@ -1323,15 +1321,18 @@ namespace SmartWord.Application.Orchestration
                 return AutoVerifyPlan.Unsupported("execute_script 缺少结构化输入，无法自动补验证。");
             }
 
-            if (!(parsedInput["expected_checks"] is JArray expectedChecks) || expectedChecks.Count == 0)
+            var verifyCode = parsedInput.Value<string>("verify_code");
+            if (string.IsNullOrWhiteSpace(verifyCode))
             {
-                return AutoVerifyPlan.Unsupported("execute_script 未提供 expected_checks，系统无法对脚本写入做可靠自动补验证。");
+                return AutoVerifyPlan.Unsupported("execute_script 未提供 verify_code，系统无法对脚本写入做可靠自动补验证。");
             }
 
             return AutoVerifyPlan.Supported(
+                "verify_script",
                 new JObject
                 {
-                    ["checks"] = (JArray)expectedChecks.DeepClone()
+                    ["description"] = "验证上一脚本写步骤是否生效。",
+                    ["code"] = verifyCode
                 }.ToString(Formatting.None),
                 "系统正在自动补验证上一脚本写步骤。");
         }
@@ -1358,24 +1359,24 @@ namespace SmartWord.Application.Orchestration
             if (!pendingWriteStep.HasAutoVerifyPlan)
             {
                 return AutoVerifyOutcome.CreateFailed(
-                    pendingWriteStep.AutoVerifyFailureReason,
-                    "上一写步骤缺少显式 verify_change，且系统无法自动补验证，任务已中止。");
+                    pendingWriteStep.VerificationFailureReason,
+                    "上一写步骤缺少显式验证步骤，且系统无法自动补验证，任务已中止。");
             }
 
-            var verifyTool = _toolRegistry.GetTool("verify_change");
+            var verifyTool = _toolRegistry.GetTool(pendingWriteStep.VerificationToolName);
             if (verifyTool == null)
             {
                 return AutoVerifyOutcome.CreateFailed(
-                    "系统未找到 verify_change 工具实现，无法自动补验证。",
-                    "上一写步骤缺少显式 verify_change，且系统无法自动补验证，任务已中止。");
+                    "系统未找到验证工具实现，无法自动补验证。",
+                    "上一写步骤缺少显式验证步骤，且系统无法自动补验证，任务已中止。");
             }
 
             var autoVerifyCall = new ToolCall
             {
                 Id = pendingWriteStep.ToolCallId + "__auto_verify",
-                Name = "verify_change",
-                Input = pendingWriteStep.AutoVerifyInput,
-                Description = pendingWriteStep.AutoVerifyOperationDescription
+                Name = pendingWriteStep.VerificationToolName,
+                Input = pendingWriteStep.VerificationInput,
+                Description = pendingWriteStep.VerificationOperationDescription
             };
 
             ToolCallResult executionResult;
@@ -1384,7 +1385,7 @@ namespace SmartWord.Application.Orchestration
                 using (var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
                 {
                     timeoutCts.CancelAfter(ToolExecutionTimeout);
-                    using (var inputDocument = JsonDocument.Parse(pendingWriteStep.AutoVerifyInput))
+                    using (var inputDocument = JsonDocument.Parse(pendingWriteStep.VerificationInput))
                     {
                         var toolTask = verifyTool.ExecuteAsync(
                             inputDocument.RootElement.Clone(),
@@ -1396,30 +1397,30 @@ namespace SmartWord.Application.Orchestration
                             .ConfigureAwait(false);
                         executionResult = completedTask == toolTask
                             ? await toolTask.ConfigureAwait(false)
-                            : ToolCallResult.Error("verify_change", "工具执行超时。");
+                            : ToolCallResult.Error(autoVerifyCall.Name, "工具执行超时。");
                     }
                 }
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                executionResult = ToolCallResult.Error("verify_change", "工具执行超时。");
+                executionResult = ToolCallResult.Error(autoVerifyCall.Name, "工具执行超时。");
             }
             catch (Exception ex)
             {
                 executionResult = ToolCallResult.Error(
-                    "verify_change",
+                    autoVerifyCall.Name,
                     Truncate(ex.ToString(), ToolErrorMessageMaxLength));
             }
 
             await AppendToolResultAsync(documentPath, messages, autoVerifyCall, executionResult, cancellationToken)
                 .ConfigureAwait(false);
 
-            if (executionResult.Success && TryGetVerifyAllPassed(executionResult.Output, out var allPassed) && allPassed)
+            if (executionResult.Success && TryGetVerificationAllPassed(executionResult.Output, out var allPassed) && allPassed)
             {
                 return AutoVerifyOutcome.CreatePassed(
                     autoVerifyCall,
                     executionResult,
-                    pendingWriteStep.AutoVerifyOperationDescription);
+                    pendingWriteStep.VerificationOperationDescription);
             }
 
             return AutoVerifyOutcome.CreateFailed(
@@ -1427,7 +1428,97 @@ namespace SmartWord.Application.Orchestration
                 "上一写步骤的系统自动补验证未通过，任务已中止。",
                 autoVerifyCall,
                 executionResult,
-                pendingWriteStep.AutoVerifyOperationDescription);
+                pendingWriteStep.VerificationOperationDescription);
+        }
+
+        private static string BuildPatchRangeAutoVerifyInput(JArray checks)
+        {
+            var codeBuilder = new StringBuilder();
+            codeBuilder.AppendLine("var results = new List<object>();");
+            codeBuilder.AppendLine("bool allPassed = true;");
+            codeBuilder.AppendLine("dynamic paragraphs = ActiveDoc == null ? null : ActiveDoc.Paragraphs;");
+            codeBuilder.AppendLine("int paragraphCount = paragraphs == null ? 0 : Convert.ToInt32(paragraphs.Count);");
+            codeBuilder.AppendLine("bool ParagraphExists(int index) { return index >= 0 && index < paragraphCount; }");
+            codeBuilder.AppendLine("string NormalizeText(string text) { return string.IsNullOrEmpty(text) ? string.Empty : text.Replace(\"\\r\", string.Empty).Replace(\"\\a\", string.Empty).Trim(); }");
+            codeBuilder.AppendLine("string ReadParagraphText(int index) { if (!ParagraphExists(index)) { return string.Empty; } dynamic paragraph = paragraphs[index + 1]; dynamic range = paragraph == null ? null : paragraph.Range; return NormalizeText(range == null ? string.Empty : Convert.ToString(range.Text)); }");
+            codeBuilder.AppendLine("string ReadParagraphStyle(int index) { if (!ParagraphExists(index)) { return string.Empty; } dynamic paragraph = paragraphs[index + 1]; dynamic style = null; try { style = paragraph == null ? null : paragraph.get_Style(); if (style == null) { return string.Empty; } try { return Convert.ToString(style.NameLocal); } catch { return Convert.ToString(style); } } catch { return string.Empty; } }");
+            codeBuilder.AppendLine("void AddResult(string checkKey, bool passed, string actual, string expected, string hint) { results.Add(new { check_key = checkKey, passed = passed, actual = actual, expected = expected, hint = passed ? string.Empty : hint }); if (!passed) { allPassed = false; } }");
+
+            for (var index = 0; index < checks.Count; index++)
+            {
+                if (!(checks[index] is JObject check))
+                {
+                    continue;
+                }
+
+                AppendPatchRangeCheckScript(codeBuilder, check, index);
+            }
+
+            codeBuilder.AppendLine("return new { all_passed = allPassed, results = results };");
+
+            return new JObject
+            {
+                ["description"] = "验证上一 patch_range 写步骤是否生效。",
+                ["code"] = codeBuilder.ToString()
+            }.ToString(Formatting.None);
+        }
+
+        private static void AppendPatchRangeCheckScript(StringBuilder builder, JObject check, int index)
+        {
+            var type = (check.Value<string>("type") ?? string.Empty).Trim().ToLowerInvariant();
+            var paragraphIndex = check.Value<int?>("paragraph_index") ?? -1;
+            var expected = check.Value<string>("expected") ?? string.Empty;
+            var shouldExist = check.Value<bool?>("should_exist") ?? true;
+            var checkKey = type + "_" + index;
+
+            switch (type)
+            {
+                case "text_contains":
+                    builder.AppendLine("{");
+                    builder.AppendLine("    var actual = ReadParagraphText(" + paragraphIndex + ");");
+                    builder.AppendLine("    var exists = ParagraphExists(" + paragraphIndex + ");");
+                    builder.AppendLine("    var expected = " + JsonConvert.ToString(expected) + ";");
+                    builder.AppendLine("    var passed = exists && !string.IsNullOrEmpty(expected) && actual.IndexOf(expected, StringComparison.Ordinal) >= 0;");
+                    builder.AppendLine("    AddResult(" + JsonConvert.ToString(checkKey) + ", passed, actual, expected, \"文本未包含预期内容，建议先回读目标段落，再检查是否写入到了错误位置。\");");
+                    builder.AppendLine("}");
+                    break;
+                case "text_equals":
+                    builder.AppendLine("{");
+                    builder.AppendLine("    var actual = ReadParagraphText(" + paragraphIndex + ");");
+                    builder.AppendLine("    var exists = ParagraphExists(" + paragraphIndex + ");");
+                    builder.AppendLine("    var expected = " + JsonConvert.ToString(expected) + ";");
+                    builder.AppendLine("    var passed = exists && string.Equals(actual, expected, StringComparison.Ordinal);");
+                    builder.AppendLine("    AddResult(" + JsonConvert.ToString(checkKey) + ", passed, actual, expected, \"文本与预期不完全一致，建议检查是否残留了原有内容或换行。\");");
+                    builder.AppendLine("}");
+                    break;
+                case "text_not_contains":
+                    builder.AppendLine("{");
+                    builder.AppendLine("    var actual = ReadParagraphText(" + paragraphIndex + ");");
+                    builder.AppendLine("    var exists = ParagraphExists(" + paragraphIndex + ");");
+                    builder.AppendLine("    var expected = " + JsonConvert.ToString(expected) + ";");
+                    builder.AppendLine("    var passed = exists && (string.IsNullOrEmpty(expected) || actual.IndexOf(expected, StringComparison.Ordinal) < 0);");
+                    builder.AppendLine("    AddResult(" + JsonConvert.ToString(checkKey) + ", passed, actual, expected, \"目标文本仍然存在，建议改用更精确的范围写入或补充删除操作。\");");
+                    builder.AppendLine("}");
+                    break;
+                case "style_equals":
+                    builder.AppendLine("{");
+                    builder.AppendLine("    var actual = ReadParagraphStyle(" + paragraphIndex + ");");
+                    builder.AppendLine("    var exists = ParagraphExists(" + paragraphIndex + ");");
+                    builder.AppendLine("    var expected = " + JsonConvert.ToString(expected) + ";");
+                    builder.AppendLine("    var passed = exists && string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase);");
+                    builder.AppendLine("    AddResult(" + JsonConvert.ToString(checkKey) + ", passed, actual, expected, \"段落样式未达到预期，建议确认样式名称是否与 Word 中的本地样式名一致。\");");
+                    builder.AppendLine("}");
+                    break;
+                case "paragraph_exists":
+                    builder.AppendLine("{");
+                    builder.AppendLine("    var exists = ParagraphExists(" + paragraphIndex + ");");
+                    builder.AppendLine("    var actual = exists ? \"true\" : \"false\";");
+                    builder.AppendLine("    var expected = " + JsonConvert.ToString(shouldExist ? "true" : "false") + ";");
+                    builder.AppendLine("    var passed = exists == " + (shouldExist ? "true" : "false") + ";");
+                    builder.AppendLine("    AddResult(" + JsonConvert.ToString(checkKey) + ", passed, actual, expected, " + JsonConvert.ToString(shouldExist ? "目标段落不存在，建议先确认段落索引是否仍然有效。" : "目标段落仍然存在，删除操作可能没有真正命中段落标记。") + ");");
+                    builder.AppendLine("}");
+                    break;
+            }
         }
 
         private static string NormalizeAutoVerifyText(string text)
@@ -1477,7 +1568,7 @@ namespace SmartWord.Application.Orchestration
             {
                 return CreatePendingWriteErrorEvent(
                     pendingWriteStep,
-                    "写步骤已执行，但任务在 verify_change 完成前结束，系统已停止任务并回滚未确认写入。");
+                    "写步骤已执行，但任务在验证步骤完成前结束，系统已停止任务并回滚未确认写入。");
             }
 
             return CreatePendingWriteErrorEvent(
@@ -1497,7 +1588,7 @@ namespace SmartWord.Application.Orchestration
                 return CreateChangeEvent(
                     AgentEventType.ChangeUnverified,
                     pendingWriteStep,
-                    "写步骤已执行，但任务在 verify_change 完成前结束，当前步骤未被确认。");
+                    "写步骤已执行，但任务在验证步骤完成前结束，当前步骤未被确认。");
             }
 
             return CreateChangeEvent(
@@ -1526,7 +1617,7 @@ namespace SmartWord.Application.Orchestration
             };
         }
 
-        private static bool TryGetVerifyAllPassed(string output, out bool allPassed)
+        private static bool TryGetVerificationAllPassed(string output, out bool allPassed)
         {
             allPassed = false;
             if (string.IsNullOrWhiteSpace(output))
@@ -1556,22 +1647,22 @@ namespace SmartWord.Application.Orchestration
         {
             if (verificationResult == null)
             {
-                return "写步骤已执行，但 verify_change 未返回结果，当前步骤待修复。";
+                return "写步骤已执行，但验证步骤未返回结果，当前步骤待修复。";
             }
 
             if (!verificationResult.Success)
             {
-                return "写步骤已执行，但 verify_change 执行失败，当前步骤待修复。";
+                return "写步骤已执行，但验证步骤执行失败，当前步骤待修复。";
             }
 
-            if (!TryGetVerifyAllPassed(verificationResult.Output, out var allPassed))
+            if (!TryGetVerificationAllPassed(verificationResult.Output, out var allPassed))
             {
-                return "写步骤已执行，但 verify_change 返回结果无法判定，当前步骤待修复。";
+                return "写步骤已执行，但验证步骤返回结果无法判定，当前步骤待修复。";
             }
 
             return allPassed
-                ? "已通过 verify_change 验证，改动已确认生效。"
-                : "写步骤已执行，但 verify_change 未全部通过，当前步骤待修复。";
+                ? "已通过验证步骤确认改动生效。"
+                : "写步骤已执行，但验证步骤未全部通过，当前步骤待修复。";
         }
 
         private static string BuildWriteRepairMessage(ToolCallResult executionResult)
@@ -1611,7 +1702,7 @@ namespace SmartWord.Application.Orchestration
                     {
                         case "patch_range":
                             return "准备执行范围写入：" + operation.Trim();
-                        case "verify_change":
+                        case "verify_script":
                             return "准备验证改动结果：" + operation.Trim();
                         case "execute_script":
                             return "准备执行脚本写入：" + operation.Trim();
@@ -1629,7 +1720,7 @@ namespace SmartWord.Application.Orchestration
             {
                 case "patch_range":
                     return "准备执行文档范围写入。";
-                case "verify_change":
+                case "verify_script":
                     return "准备验证本次改动结果。";
                 case "execute_script":
                     return "准备执行脚本写入。";
@@ -1691,6 +1782,8 @@ namespace SmartWord.Application.Orchestration
 
         private sealed class AutoVerifyPlan
         {
+            public string ToolName { get; private set; } = string.Empty;
+
             public string InputJson { get; private set; } = string.Empty;
 
             public string OperationDescription { get; private set; } = string.Empty;
@@ -1699,10 +1792,11 @@ namespace SmartWord.Application.Orchestration
 
             public bool IsSupported => !string.IsNullOrWhiteSpace(InputJson);
 
-            public static AutoVerifyPlan Supported(string inputJson, string operationDescription)
+            public static AutoVerifyPlan Supported(string toolName, string inputJson, string operationDescription)
             {
                 return new AutoVerifyPlan
                 {
+                    ToolName = toolName ?? string.Empty,
                     InputJson = inputJson ?? string.Empty,
                     OperationDescription = operationDescription ?? string.Empty
                 };
@@ -1783,13 +1877,16 @@ namespace SmartWord.Application.Orchestration
 
             public string LastFailureMessage { get; private set; } = string.Empty;
 
-            public string AutoVerifyInput { get; private set; } = string.Empty;
+            public string VerificationToolName { get; private set; } = string.Empty;
 
-            public string AutoVerifyOperationDescription { get; private set; } = string.Empty;
+            public string VerificationInput { get; private set; } = string.Empty;
 
-            public string AutoVerifyFailureReason { get; private set; } = string.Empty;
+            public string VerificationOperationDescription { get; private set; } = string.Empty;
 
-            public bool HasAutoVerifyPlan => !string.IsNullOrWhiteSpace(AutoVerifyInput);
+            public string VerificationFailureReason { get; private set; } = string.Empty;
+
+            public bool HasAutoVerifyPlan => !string.IsNullOrWhiteSpace(VerificationToolName)
+                && !string.IsNullOrWhiteSpace(VerificationInput);
 
             public static PendingWriteStep CreateAwaitingVerification(
                 ToolCall toolCall,
@@ -1803,9 +1900,10 @@ namespace SmartWord.Application.Orchestration
                     AffectedParagraphs = result?.AffectedParagraphs,
                     OperationDescription = result?.OperationDescription ?? string.Empty,
                     State = PendingWriteState.AwaitingVerification,
-                    AutoVerifyInput = autoVerifyPlan == null ? string.Empty : autoVerifyPlan.InputJson,
-                    AutoVerifyOperationDescription = autoVerifyPlan == null ? string.Empty : autoVerifyPlan.OperationDescription,
-                    AutoVerifyFailureReason = autoVerifyPlan == null ? string.Empty : autoVerifyPlan.FailureReason
+                    VerificationToolName = autoVerifyPlan == null ? string.Empty : autoVerifyPlan.ToolName,
+                    VerificationInput = autoVerifyPlan == null ? string.Empty : autoVerifyPlan.InputJson,
+                    VerificationOperationDescription = autoVerifyPlan == null ? string.Empty : autoVerifyPlan.OperationDescription,
+                    VerificationFailureReason = autoVerifyPlan == null ? string.Empty : autoVerifyPlan.FailureReason
                 };
             }
 
@@ -1825,9 +1923,10 @@ namespace SmartWord.Application.Orchestration
                     State = PendingWriteState.RepairRequired,
                     RepairAttempts = 1,
                     LastFailureMessage = BuildWriteRepairMessage(result),
-                    AutoVerifyInput = string.Empty,
-                    AutoVerifyOperationDescription = string.Empty,
-                    AutoVerifyFailureReason = string.Empty
+                    VerificationToolName = string.Empty,
+                    VerificationInput = string.Empty,
+                    VerificationOperationDescription = string.Empty,
+                    VerificationFailureReason = string.Empty
                 };
             }
 
@@ -1842,9 +1941,10 @@ namespace SmartWord.Application.Orchestration
                     State = PendingWriteState.RepairRequired,
                     RepairAttempts = RepairAttempts,
                     LastFailureMessage = failureMessage ?? string.Empty,
-                    AutoVerifyInput = AutoVerifyInput,
-                    AutoVerifyOperationDescription = AutoVerifyOperationDescription,
-                    AutoVerifyFailureReason = AutoVerifyFailureReason
+                    VerificationToolName = VerificationToolName,
+                    VerificationInput = VerificationInput,
+                    VerificationOperationDescription = VerificationOperationDescription,
+                    VerificationFailureReason = VerificationFailureReason
                 };
             }
 
@@ -1864,9 +1964,10 @@ namespace SmartWord.Application.Orchestration
                     State = PendingWriteState.AwaitingVerification,
                     RepairAttempts = RepairAttempts,
                     LastFailureMessage = string.Empty,
-                    AutoVerifyInput = autoVerifyPlan == null ? string.Empty : autoVerifyPlan.InputJson,
-                    AutoVerifyOperationDescription = autoVerifyPlan == null ? string.Empty : autoVerifyPlan.OperationDescription,
-                    AutoVerifyFailureReason = autoVerifyPlan == null ? string.Empty : autoVerifyPlan.FailureReason
+                    VerificationToolName = autoVerifyPlan == null ? string.Empty : autoVerifyPlan.ToolName,
+                    VerificationInput = autoVerifyPlan == null ? string.Empty : autoVerifyPlan.InputJson,
+                    VerificationOperationDescription = autoVerifyPlan == null ? string.Empty : autoVerifyPlan.OperationDescription,
+                    VerificationFailureReason = autoVerifyPlan == null ? string.Empty : autoVerifyPlan.FailureReason
                 };
             }
 
@@ -1886,9 +1987,10 @@ namespace SmartWord.Application.Orchestration
                     State = PendingWriteState.RepairRequired,
                     RepairAttempts = RepairAttempts + 1,
                     LastFailureMessage = BuildWriteRepairMessage(result),
-                    AutoVerifyInput = AutoVerifyInput,
-                    AutoVerifyOperationDescription = AutoVerifyOperationDescription,
-                    AutoVerifyFailureReason = AutoVerifyFailureReason
+                    VerificationToolName = VerificationToolName,
+                    VerificationInput = VerificationInput,
+                    VerificationOperationDescription = VerificationOperationDescription,
+                    VerificationFailureReason = VerificationFailureReason
                 };
             }
         }
