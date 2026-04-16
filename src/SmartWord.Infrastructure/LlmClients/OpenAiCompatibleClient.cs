@@ -19,9 +19,6 @@ namespace SmartWord.Infrastructure.LlmClients
     /// </summary>
     public sealed class OpenAiCompatibleClient : ILlmClient, IDisposable
     {
-        private static readonly TimeSpan ResponseHeadersTimeout = TimeSpan.FromSeconds(30);
-        private static readonly TimeSpan FirstLineTimeout = TimeSpan.FromSeconds(30);
-        private static readonly TimeSpan NextLineTimeout = TimeSpan.FromSeconds(60);
         private static readonly HttpClient SharedHttpClient = CreateSharedHttpClient();
 
         private sealed class ToolCallAccumulator
@@ -48,32 +45,58 @@ namespace SmartWord.Infrastructure.LlmClients
             ValidateRequest(messages, model, out var endpoint, out var apiKey);
             var capability = _options.GetModelCapability(model);
             var requestJson = BuildRequestJson(model, messages, null, capability);
+            var responseHeadersTimeout = ResolveStreamPhaseTimeout(_options.TimeoutSeconds);
+            var firstLineTimeout = ResolveStreamPhaseTimeout(_options.TimeoutSeconds);
+            var nextLineTimeout = ResolveStreamPhaseTimeout(_options.TimeoutSeconds);
 
             using (var responseHeadersTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             using (var request = new HttpRequestMessage(HttpMethod.Post, BuildChatCompletionsUri(endpoint)))
             {
-                responseHeadersTimeoutCts.CancelAfter(ResponseHeadersTimeout);
+                responseHeadersTimeoutCts.CancelAfter(responseHeadersTimeout);
 
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
                 request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
                 request.Content = BuildRequestContent(requestJson);
 
                 Log.Information(
-                    "开始调用 LLM 流式接口。Endpoint={Endpoint}, Model={Model}, SupportsToolCalling={SupportsToolCalling}, RequiresReasoningContentReplay={RequiresReasoningContentReplay}, MessageCount={MessageCount}, MessageSummary={MessageSummary}, RequestBodyLength={RequestBodyLength}",
+                    "开始调用 LLM 流式接口。Endpoint={Endpoint}, Model={Model}, SupportsToolCalling={SupportsToolCalling}, RequiresReasoningContentReplay={RequiresReasoningContentReplay}, MessageCount={MessageCount}, MessageSummary={MessageSummary}, ResponseHeadersTimeoutSeconds={ResponseHeadersTimeoutSeconds}, FirstLineTimeoutSeconds={FirstLineTimeoutSeconds}, NextLineTimeoutSeconds={NextLineTimeoutSeconds}, RequestBodyLength={RequestBodyLength}",
                     request.RequestUri,
                     model,
                     capability == null ? false : capability.SupportsToolCalling,
                     capability == null ? false : capability.RequiresReasoningContentReplay,
                     messages == null ? 0 : messages.Count,
                     BuildMessageSummary(messages),
+                    responseHeadersTimeout.TotalSeconds,
+                    firstLineTimeout.TotalSeconds,
+                    nextLineTimeout.TotalSeconds,
                     GetTextLength(requestJson));
 
-                using (var response = await SharedHttpClient
-                    .SendAsync(
-                        request,
-                        HttpCompletionOption.ResponseHeadersRead,
-                        responseHeadersTimeoutCts.Token)
-                    .ConfigureAwait(false))
+                HttpResponseMessage response = null;
+                try
+                {
+                    response = await SharedHttpClient
+                        .SendAsync(
+                            request,
+                            HttpCompletionOption.ResponseHeadersRead,
+                            responseHeadersTimeoutCts.Token)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException ex)
+                    when (!cancellationToken.IsCancellationRequested && responseHeadersTimeoutCts.IsCancellationRequested)
+                {
+                    Log.Warning(
+                        ex,
+                        "等待 LLM 流式接口响应头超时。Endpoint={Endpoint}, Model={Model}, TimeoutSeconds={TimeoutSeconds}, RequestBodyLength={RequestBodyLength}",
+                        request.RequestUri,
+                        model,
+                        responseHeadersTimeout.TotalSeconds,
+                        GetTextLength(requestJson));
+                    throw new TimeoutException(
+                        $"等待 LLM 响应超时，超过 {responseHeadersTimeout.TotalSeconds} 秒。",
+                        ex);
+                }
+
+                using (response)
                 {
                     if (!response.IsSuccessStatusCode)
                     {
@@ -110,7 +133,7 @@ namespace SmartWord.Infrastructure.LlmClients
 
                             var line = await ReadLineWithTimeoutAsync(
                                     reader,
-                                    hasSeenFirstDataLine ? NextLineTimeout : FirstLineTimeout,
+                                    hasSeenFirstDataLine ? nextLineTimeout : firstLineTimeout,
                                     cancellationToken)
                                 .ConfigureAwait(false);
                             if (line == null)
@@ -177,6 +200,9 @@ namespace SmartWord.Infrastructure.LlmClients
             ValidateRequest(messages, model, out var endpoint, out var apiKey);
             var capability = _options.GetModelCapability(model);
             var requestJson = BuildRequestJson(model, messages, tools, capability);
+            var responseHeadersTimeout = ResolveStreamPhaseTimeout(_options.TimeoutSeconds);
+            var firstLineTimeout = ResolveStreamPhaseTimeout(_options.TimeoutSeconds);
+            var nextLineTimeout = ResolveStreamPhaseTimeout(_options.TimeoutSeconds);
 
             var textBuilder = new StringBuilder();
             var reasoningBuilder = new StringBuilder();
@@ -185,14 +211,14 @@ namespace SmartWord.Infrastructure.LlmClients
             using (var responseHeadersTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             using (var request = new HttpRequestMessage(HttpMethod.Post, BuildChatCompletionsUri(endpoint)))
             {
-                responseHeadersTimeoutCts.CancelAfter(ResponseHeadersTimeout);
+                responseHeadersTimeoutCts.CancelAfter(responseHeadersTimeout);
 
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
                 request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
                 request.Content = BuildRequestContent(requestJson);
 
                 Log.Information(
-                    "开始调用 LLM 工具接口。Endpoint={Endpoint}, Model={Model}, SupportsToolCalling={SupportsToolCalling}, RequiresReasoningContentReplay={RequiresReasoningContentReplay}, ToolCount={ToolCount}, MessageCount={MessageCount}, MessageSummary={MessageSummary}, ToolSummary={ToolSummary}, RequestBodyLength={RequestBodyLength}",
+                    "开始调用 LLM 工具接口。Endpoint={Endpoint}, Model={Model}, SupportsToolCalling={SupportsToolCalling}, RequiresReasoningContentReplay={RequiresReasoningContentReplay}, ToolCount={ToolCount}, MessageCount={MessageCount}, MessageSummary={MessageSummary}, ToolSummary={ToolSummary}, ResponseHeadersTimeoutSeconds={ResponseHeadersTimeoutSeconds}, FirstLineTimeoutSeconds={FirstLineTimeoutSeconds}, NextLineTimeoutSeconds={NextLineTimeoutSeconds}, RequestBodyLength={RequestBodyLength}",
                     request.RequestUri,
                     model,
                     capability == null ? false : capability.SupportsToolCalling,
@@ -201,14 +227,38 @@ namespace SmartWord.Infrastructure.LlmClients
                     messages == null ? 0 : messages.Count,
                     BuildMessageSummary(messages),
                     BuildToolSummary(tools),
+                    responseHeadersTimeout.TotalSeconds,
+                    firstLineTimeout.TotalSeconds,
+                    nextLineTimeout.TotalSeconds,
                     GetTextLength(requestJson));
 
-                using (var response = await SharedHttpClient
-                    .SendAsync(
-                        request,
-                        HttpCompletionOption.ResponseHeadersRead,
-                        responseHeadersTimeoutCts.Token)
-                    .ConfigureAwait(false))
+                HttpResponseMessage response = null;
+                try
+                {
+                    response = await SharedHttpClient
+                        .SendAsync(
+                            request,
+                            HttpCompletionOption.ResponseHeadersRead,
+                            responseHeadersTimeoutCts.Token)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException ex)
+                    when (!cancellationToken.IsCancellationRequested && responseHeadersTimeoutCts.IsCancellationRequested)
+                {
+                    Log.Warning(
+                        ex,
+                        "等待 LLM 工具接口响应头超时。Endpoint={Endpoint}, Model={Model}, TimeoutSeconds={TimeoutSeconds}, ToolCount={ToolCount}, RequestBodyLength={RequestBodyLength}",
+                        request.RequestUri,
+                        model,
+                        responseHeadersTimeout.TotalSeconds,
+                        tools == null ? 0 : tools.Count,
+                        GetTextLength(requestJson));
+                    throw new TimeoutException(
+                        $"等待 LLM 响应超时，超过 {responseHeadersTimeout.TotalSeconds} 秒。",
+                        ex);
+                }
+
+                using (response)
                 {
                     if (!response.IsSuccessStatusCode)
                     {
@@ -245,7 +295,7 @@ namespace SmartWord.Infrastructure.LlmClients
 
                             var line = await ReadLineWithTimeoutAsync(
                                     reader,
-                                    hasSeenFirstDataLine ? NextLineTimeout : FirstLineTimeout,
+                                    hasSeenFirstDataLine ? nextLineTimeout : firstLineTimeout,
                                     cancellationToken)
                                 .ConfigureAwait(false);
                             if (line == null)
@@ -377,6 +427,17 @@ namespace SmartWord.Infrastructure.LlmClients
             {
                 Timeout = Timeout.InfiniteTimeSpan
             };
+        }
+
+        internal static TimeSpan ResolveStreamPhaseTimeout(int configuredTimeoutSeconds)
+        {
+            var effectiveSeconds = configuredTimeoutSeconds > 0 ? configuredTimeoutSeconds : 120;
+            if (effectiveSeconds < 15)
+            {
+                effectiveSeconds = 15;
+            }
+
+            return TimeSpan.FromSeconds(effectiveSeconds);
         }
 
         private static int GetTextLength(string text)

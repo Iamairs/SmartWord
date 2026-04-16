@@ -74,8 +74,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
 
                 try
                 {
-                    _wordApplication?.Undo();
-                    Log.Information("任务级 UndoRecord 已执行回滚。DocumentPath={DocumentPath}", currentDocumentPath);
+                    if (TryRollbackActiveDocument(currentDocumentPath))
+                    {
+                        Log.Information("任务级 UndoRecord 已执行回滚。DocumentPath={DocumentPath}", currentDocumentPath);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -177,6 +179,34 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                 _initialDocumentPath,
                 currentDocumentPath,
                 StringComparison.OrdinalIgnoreCase);
+        }
+
+        private bool TryRollbackActiveDocument(string currentDocumentPath)
+        {
+            dynamic activeDocument = null;
+            try
+            {
+                activeDocument = _wordApplication == null ? null : _wordApplication.ActiveDocument;
+                if (activeDocument == null)
+                {
+                    Log.Warning("任务级 UndoRecord 回滚被跳过，因为当前没有活动文档。DocumentPath={DocumentPath}", currentDocumentPath);
+                    return false;
+                }
+
+                var rollbackSucceeded = Convert.ToBoolean(activeDocument.Undo(1));
+                if (!rollbackSucceeded)
+                {
+                    Log.Warning(
+                        "任务级 UndoRecord 回滚未生效，Word 返回 Undo=False。DocumentPath={DocumentPath}",
+                        currentDocumentPath);
+                }
+
+                return rollbackSucceeded;
+            }
+            finally
+            {
+                WordApplicationWrapper.TryReleaseComObjectSilently(activeDocument);
+            }
         }
     }
 }
