@@ -215,7 +215,7 @@ export const hostBridge = {
         toolName: pendingMockConfirmation.toolName,
         affectedParagraphs: [2],
         operationDescription: pendingMockConfirmation.operationDescription,
-        message: '写入已执行，等待 verify_change 验证结果。'
+        message: '写入已执行，等待验证步骤返回结果。'
       });
       emitEvent({
         type: 'change_applied',
@@ -223,7 +223,7 @@ export const hostBridge = {
         toolName: pendingMockConfirmation.toolName,
         affectedParagraphs: [2],
         operationDescription: pendingMockConfirmation.operationDescription,
-        message: '已通过 verify_change 验证，改动已确认生效。'
+        message: '已通过验证步骤确认改动生效。'
       });
       emitEvent({
         type: 'task_completed',
