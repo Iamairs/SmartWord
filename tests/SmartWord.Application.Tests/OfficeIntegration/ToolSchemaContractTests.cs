@@ -36,17 +36,6 @@ namespace SmartWord.Application.Tests.OfficeIntegration
         }
 
         [Fact]
-        public void VerifyChangeTool_InputSchema_暴露Checks数组()
-        {
-            var tool = new VerifyChangeTool(null);
-
-            Assert.True(tool.InputSchema.TryGetProperty("properties", out var properties));
-            Assert.True(properties.TryGetProperty("checks", out var checks));
-            Assert.Equal(JsonValueKind.String, checks.GetProperty("type").ValueKind);
-            Assert.Equal("array", checks.GetProperty("type").GetString());
-        }
-
-        [Fact]
         public void PatchRangeTool_InputSchema_暴露Operations数组()
         {
             var tool = new PatchRangeTool(null);
@@ -60,26 +49,28 @@ namespace SmartWord.Application.Tests.OfficeIntegration
         }
 
         [Fact]
-        public void ExecuteScriptTool_InputSchema_描述可用脚本全局变量()
+        public void ExecuteScriptTool_InputSchema_暴露双脚本字段()
         {
             var tool = new ExecuteScriptTool(null, null, null);
 
             Assert.True(tool.InputSchema.TryGetProperty("properties", out var properties));
-            Assert.True(properties.TryGetProperty("code", out var code));
-            Assert.Contains("app/doc/WordApp/ActiveDoc", code.GetProperty("description").GetString());
-            Assert.Contains("1-based", code.GetProperty("description").GetString());
-            Assert.Contains("不要使用 foreach", code.GetProperty("description").GetString());
+            Assert.True(properties.TryGetProperty("write_code", out var writeCode));
+            Assert.True(properties.TryGetProperty("verify_code", out var verifyCode));
+            Assert.Contains("app/doc/WordApp/ActiveDoc", writeCode.GetProperty("description").GetString());
+            Assert.Contains("all_passed", verifyCode.GetProperty("description").GetString());
+            Assert.Contains("results", verifyCode.GetProperty("description").GetString());
         }
 
         [Fact]
-        public void VerifyChangeTool_InputSchema_强调ParagraphIndex为ZeroBased()
+        public void VerifyScriptTool_InputSchema_强调只读与结构化返回()
         {
-            var tool = new VerifyChangeTool(null);
+            var tool = new VerifyScriptTool(null, null, null);
 
             Assert.True(tool.InputSchema.TryGetProperty("properties", out var properties));
-            Assert.True(properties.TryGetProperty("checks", out var checks));
-            Assert.Contains("0-based", checks.GetProperty("description").GetString());
-            Assert.Contains("不要传字符串化后的 JSON", checks.GetProperty("description").GetString());
+            Assert.True(properties.TryGetProperty("code", out var code));
+            Assert.Contains("只读", code.GetProperty("description").GetString());
+            Assert.Contains("all_passed", code.GetProperty("description").GetString());
+            Assert.Contains("results", code.GetProperty("description").GetString());
         }
     }
 }

@@ -22,17 +22,15 @@ namespace SmartWord.Application.Tests.OfficeIntegration
         }
 
         [Fact]
-        public async System.Threading.Tasks.Task VerifyChangeTool_ChecksAsString_返回明确错误()
+        public async System.Threading.Tasks.Task VerifyScriptTool_CodeMissing_返回明确错误()
         {
-            using var document = JsonDocument.Parse(
-                "{\"checks\":\"[{\\\"type\\\":\\\"text_contains\\\",\\\"paragraph_index\\\":1,\\\"expected\\\":\\\"abc\\\"}]\"}");
-            var tool = new VerifyChangeTool(null);
+            using var document = JsonDocument.Parse("{\"description\":\"验证标题\"}");
+            var tool = new VerifyScriptTool(null, null, null);
 
             var result = await tool.ExecuteAsync(document.RootElement, null, System.Threading.CancellationToken.None);
 
             Assert.False(result.Success);
-            Assert.Contains("checks 必须是 JSON 数组", result.Output);
-            Assert.Contains("不要传字符串化后的 JSON", result.Output);
+            Assert.Contains("验证脚本不能为空", result.Output);
         }
 
         [Fact]
@@ -40,7 +38,7 @@ namespace SmartWord.Application.Tests.OfficeIntegration
         {
             var method = typeof(ExecuteScriptTool).GetMethod(
                 "BuildScriptRuntimeErrorMessage",
-                BindingFlags.Static | BindingFlags.NonPublic);
+                BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
 
             Assert.NotNull(method);
 
