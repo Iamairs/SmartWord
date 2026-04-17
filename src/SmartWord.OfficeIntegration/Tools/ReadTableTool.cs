@@ -39,6 +39,8 @@ namespace SmartWord.OfficeIntegration.Tools
 
         public ToolPermission RequiredPermission => ToolPermission.ReadOnly;
 
+        public bool IsVisibleToModel => true;
+
         public JsonElement InputSchema => _inputSchema;
 
         public async Task<ToolCallResult> ExecuteAsync(JsonElement input, IUndoScope undoScope, CancellationToken cancellationToken)

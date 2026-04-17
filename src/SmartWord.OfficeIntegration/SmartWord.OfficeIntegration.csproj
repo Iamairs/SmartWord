@@ -103,6 +103,7 @@
     <Compile Include="Tools\ProbeDocumentTool.cs" />
     <Compile Include="Tools\ReadAnnotationsTool.cs" />
     <Compile Include="Tools\ReadSectionTool.cs" />
+    <Compile Include="Tools\ReadScriptTool.cs" />
     <Compile Include="Tools\ReadTableTool.cs" />
     <Compile Include="Tools\VerifyScriptTool.cs" />
     <Compile Include="WordWrappers\DocumentWrapper.cs" />
