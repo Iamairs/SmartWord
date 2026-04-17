@@ -288,51 +288,9 @@ namespace SmartWord.Application.Orchestration
             {
                 if (pendingWriteStep != null)
                 {
-                    if (pendingWriteStep.State == PendingWriteState.AwaitingVerification)
-                    {
-                        var autoVerifyOutcome = await ExecuteAutoVerifyAsync(
-                                documentPath,
-                                messages,
-                                pendingWriteStep,
-                                undoScope,
-                                cancellationToken)
-                            .ConfigureAwait(false);
-
-                        if (autoVerifyOutcome.ToolCall != null)
-                        {
-                            yield return CreateToolStartedEvent(
-                                autoVerifyOutcome.ToolCall,
-                                autoVerifyOutcome.OperationDescription);
-                            yield return CreateToolCompletedEvent(autoVerifyOutcome.ToolCall, autoVerifyOutcome.Result);
-                        }
-
-                        if (!autoVerifyOutcome.Passed)
-                        {
-                            pendingWriteStep = pendingWriteStep.MarkRepairRequired(autoVerifyOutcome.FailureMessage);
-                            yield return CreateChangeEvent(
-                                AgentEventType.ChangeVerificationFailed,
-                                pendingWriteStep,
-                                pendingWriteStep.LastFailureMessage,
-                                autoVerifyOutcome.Result == null ? string.Empty : autoVerifyOutcome.Result.Output);
-                            yield return CreatePendingWriteErrorEvent(
-                                pendingWriteStep,
-                                autoVerifyOutcome.TerminationMessage);
-                            yield break;
-                        }
-
-                        yield return CreateChangeEvent(
-                            AgentEventType.ChangeApplied,
-                            pendingWriteStep,
-                            "模型未显式调用验证步骤，系统已自动补验证并确认改动生效。",
-                            autoVerifyOutcome.Result == null ? string.Empty : autoVerifyOutcome.Result.Output);
-                        pendingWriteStep = null;
-                    }
-                    else
-                    {
-                        yield return CreatePendingWriteStateEvent(pendingWriteStep);
-                        yield return CreatePendingWriteTerminationEvent(pendingWriteStep);
-                        yield break;
-                    }
+                    yield return CreatePendingWriteStateEvent(pendingWriteStep);
+                    yield return CreatePendingWriteTerminationEvent(pendingWriteStep);
+                    yield break;
                 }
 
                 break;
@@ -347,62 +305,78 @@ namespace SmartWord.Application.Orchestration
                     MaxToolCallsPerIteration);
             }
 
+            var shouldContinueWithNextAssistantTurn = false;
             foreach (var toolCall in toolCalls)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                if (pendingWriteStep != null
-                    && pendingWriteStep.State == PendingWriteState.AwaitingVerification
-                    && !IsVerificationTool(toolCall.Name))
+                if (IsVerificationTool(toolCall.Name))
                 {
-                    var autoVerifyOutcome = await ExecuteAutoVerifyAsync(
-                            documentPath,
-                            messages,
-                            pendingWriteStep,
-                            undoScope,
-                            cancellationToken)
+                    var internalOnlyResult = ToolCallResult.Denied(
+                        toolCall.Name,
+                        "verify_script 为系统内部验证工具，不对模型暴露。请改用写工具或 read_script。");
+                    await AppendToolResultAsync(documentPath, messages, toolCall, internalOnlyResult, cancellationToken)
                         .ConfigureAwait(false);
 
-                    if (autoVerifyOutcome.ToolCall != null)
+                    yield return new AgentEvent
                     {
-                        yield return CreateToolStartedEvent(
-                            autoVerifyOutcome.ToolCall,
-                            autoVerifyOutcome.OperationDescription);
-                        yield return CreateToolCompletedEvent(autoVerifyOutcome.ToolCall, autoVerifyOutcome.Result);
-                    }
+                        Type = AgentEventType.ToolCallDenied,
+                        ToolCallId = toolCall.Id,
+                        ToolName = toolCall.Name,
+                        ToolInput = toolCall.Input ?? string.Empty,
+                        ToolOutput = internalOnlyResult.Output,
+                        ToolSuccess = internalOnlyResult.Success,
+                        OperationDescription = "内部验证工具不可直接调用。"
+                    };
 
-                    if (!autoVerifyOutcome.Passed)
+                    consecutiveFailures++;
+                    if (consecutiveFailures >= ConsecutiveFailureThreshold)
                     {
-                        var verificationRequiredResult = ToolCallResult.Error(
-                            toolCall.Name,
-                            "上一条写操作已执行，但显式验证步骤缺失，系统自动补验证未通过。");
-
-                        await AppendToolResultAsync(documentPath, messages, toolCall, verificationRequiredResult, cancellationToken)
-                            .ConfigureAwait(false);
-
-                        pendingWriteStep = pendingWriteStep.MarkRepairRequired(autoVerifyOutcome.FailureMessage);
-                        yield return CreateToolCompletedEvent(toolCall, verificationRequiredResult);
-                        yield return CreateChangeEvent(
-                            AgentEventType.ChangeVerificationFailed,
-                            pendingWriteStep,
-                            pendingWriteStep.LastFailureMessage,
-                            autoVerifyOutcome.Result == null ? string.Empty : autoVerifyOutcome.Result.Output);
-                        yield return CreatePendingWriteErrorEvent(
-                            pendingWriteStep,
-                            autoVerifyOutcome.TerminationMessage);
+                        yield return CreateCircuitBreakerEvent();
                         yield break;
                     }
 
-                    yield return CreateChangeEvent(
-                        AgentEventType.ChangeApplied,
-                        pendingWriteStep,
-                        "模型未显式调用验证步骤，系统已自动补验证并确认改动生效。",
-                        autoVerifyOutcome.Result == null ? string.Empty : autoVerifyOutcome.Result.Output);
-                    pendingWriteStep = null;
+                    if (pendingWriteStep != null)
+                    {
+                        shouldContinueWithNextAssistantTurn = true;
+                        break;
+                    }
+
+                    continue;
                 }
 
                 var tool = _toolRegistry.GetTool(toolCall.Name);
                 var isWriteTool = IsWriteTool(tool);
+
+                if (pendingWriteStep != null && !isWriteTool)
+                {
+                    var repairOnlyResult = ToolCallResult.Denied(
+                        toolCall.Name,
+                        "当前仍有待修复的写步骤。请先使用 patch_range 或 execute_script 修复当前失败步骤，再继续其它工具操作。");
+                    await AppendToolResultAsync(documentPath, messages, toolCall, repairOnlyResult, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    yield return new AgentEvent
+                    {
+                        Type = AgentEventType.ToolCallDenied,
+                        ToolCallId = toolCall.Id,
+                        ToolName = toolCall.Name,
+                        ToolInput = toolCall.Input ?? string.Empty,
+                        ToolOutput = repairOnlyResult.Output,
+                        ToolSuccess = repairOnlyResult.Success,
+                        OperationDescription = pendingWriteStep.OperationDescription
+                    };
+
+                    consecutiveFailures++;
+                    if (consecutiveFailures >= ConsecutiveFailureThreshold)
+                    {
+                        yield return CreateCircuitBreakerEvent();
+                        yield break;
+                    }
+
+                    shouldContinueWithNextAssistantTurn = true;
+                    break;
+                }
 
                 JObject parsedInput = null;
                 ToolCallResult inputParseError = null;
@@ -449,21 +423,17 @@ namespace SmartWord.Application.Orchestration
                         OperationDescription = operationDescription
                     };
 
-                    if (pendingWriteStep != null
-                        && pendingWriteStep.State == PendingWriteState.AwaitingVerification
-                        && IsVerificationTool(toolCall.Name))
-                    {
-                        yield return CreateChangeEvent(
-                            AgentEventType.ChangeVerificationFailed,
-                            pendingWriteStep,
-                            "写入已执行，但验证步骤被权限策略拒绝，改动未被确认。");
-                    }
-
                     consecutiveFailures++;
                     if (consecutiveFailures >= ConsecutiveFailureThreshold)
                     {
                         yield return CreateCircuitBreakerEvent();
                         yield break;
+                    }
+
+                    if (pendingWriteStep != null)
+                    {
+                        shouldContinueWithNextAssistantTurn = true;
+                        break;
                     }
 
                     continue;
@@ -476,21 +446,17 @@ namespace SmartWord.Application.Orchestration
 
                     yield return CreateToolCompletedEvent(toolCall, inputParseError);
 
-                    if (pendingWriteStep != null
-                        && pendingWriteStep.State == PendingWriteState.AwaitingVerification
-                        && IsVerificationTool(toolCall.Name))
-                    {
-                        yield return CreateChangeEvent(
-                            AgentEventType.ChangeVerificationFailed,
-                            pendingWriteStep,
-                            "写入已执行，但验证步骤输入格式无效，改动未被确认。");
-                    }
-
                     consecutiveFailures++;
                     if (consecutiveFailures >= ConsecutiveFailureThreshold)
                     {
                         yield return CreateCircuitBreakerEvent();
                         yield break;
+                    }
+
+                    if (pendingWriteStep != null)
+                    {
+                        shouldContinueWithNextAssistantTurn = true;
+                        break;
                     }
 
                     continue;
@@ -524,6 +490,12 @@ namespace SmartWord.Application.Orchestration
                             yield break;
                         }
 
+                        if (pendingWriteStep != null)
+                        {
+                            shouldContinueWithNextAssistantTurn = true;
+                            break;
+                        }
+
                         continue;
                     }
 
@@ -548,6 +520,12 @@ namespace SmartWord.Application.Orchestration
                         };
 
                         consecutiveFailures = 0;
+                        if (pendingWriteStep != null)
+                        {
+                            shouldContinueWithNextAssistantTurn = true;
+                            break;
+                        }
+
                         continue;
                     }
                 }
@@ -630,39 +608,38 @@ namespace SmartWord.Application.Orchestration
                     {
                         consecutiveFailures = 0;
                         var autoVerifyPlan = BuildAutoVerifyPlan(toolCall.Name, parsedInput);
-                        pendingWriteStep = pendingWriteStep != null
+                        var executedWriteStep = pendingWriteStep != null
                             ? pendingWriteStep.MarkWriteExecuted(toolCall, executionResult, autoVerifyPlan)
                             : PendingWriteStep.CreateAwaitingVerification(toolCall, executionResult, autoVerifyPlan);
                         yield return CreateChangeEvent(
                             AgentEventType.ChangeExecuted,
-                            pendingWriteStep,
-                            "写入已执行，等待验证步骤返回结果。");
-                        continue;
-                    }
+                            executedWriteStep,
+                            "写入已执行，系统正在执行验证步骤。");
 
-                    if (pendingWriteStep != null
-                        && pendingWriteStep.State == PendingWriteState.AwaitingVerification
-                        && IsVerificationTool(toolCall.Name))
-                    {
-                        if (TryGetVerificationAllPassed(executionResult.Output, out var allPassed) && allPassed)
+                        var autoVerifyOutcome = await ExecuteAutoVerifyAsync(
+                                documentPath,
+                                messages,
+                                executedWriteStep,
+                                undoScope,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+
+                        if (autoVerifyOutcome.ToolCall != null)
                         {
-                            yield return CreateChangeEvent(
-                                AgentEventType.ChangeApplied,
-                                pendingWriteStep,
-                                "已通过验证步骤确认改动生效。",
-                                executionResult.Output);
-                            consecutiveFailures = 0;
-                            pendingWriteStep = null;
+                            yield return CreateToolStartedEvent(
+                                autoVerifyOutcome.ToolCall,
+                                autoVerifyOutcome.OperationDescription);
+                            yield return CreateToolCompletedEvent(autoVerifyOutcome.ToolCall, autoVerifyOutcome.Result);
                         }
-                        else
+
+                        if (!autoVerifyOutcome.Passed)
                         {
-                            pendingWriteStep = pendingWriteStep.MarkRepairRequired(
-                                BuildVerificationFailureMessage(executionResult));
+                            pendingWriteStep = executedWriteStep.MarkRepairRequired(autoVerifyOutcome.FailureMessage);
                             yield return CreateChangeEvent(
                                 AgentEventType.ChangeVerificationFailed,
                                 pendingWriteStep,
                                 pendingWriteStep.LastFailureMessage,
-                                executionResult.Output);
+                                autoVerifyOutcome.Result == null ? string.Empty : autoVerifyOutcome.Result.Output);
 
                             consecutiveFailures++;
                             if (consecutiveFailures >= ConsecutiveFailureThreshold)
@@ -671,11 +648,27 @@ namespace SmartWord.Application.Orchestration
                                 yield break;
                             }
                         }
+                        else
+                        {
+                            pendingWriteStep = null;
+                            yield return CreateChangeEvent(
+                                AgentEventType.ChangeApplied,
+                                executedWriteStep,
+                                "已通过验证步骤确认改动生效。",
+                                autoVerifyOutcome.Result == null ? string.Empty : autoVerifyOutcome.Result.Output);
+                            consecutiveFailures = 0;
+                        }
 
-                        continue;
+                        shouldContinueWithNextAssistantTurn = true;
+                        break;
                     }
 
                     consecutiveFailures = 0;
+                    if (pendingWriteStep != null)
+                    {
+                        shouldContinueWithNextAssistantTurn = true;
+                        break;
+                    }
                 }
                 else
                 {
@@ -706,20 +699,8 @@ namespace SmartWord.Application.Orchestration
                             yield break;
                         }
 
-                        continue;
-                    }
-
-                    if (pendingWriteStep != null
-                        && pendingWriteStep.State == PendingWriteState.AwaitingVerification
-                        && IsVerificationTool(toolCall.Name))
-                    {
-                        pendingWriteStep = pendingWriteStep.MarkRepairRequired(
-                            BuildVerificationFailureMessage(executionResult));
-                        yield return CreateChangeEvent(
-                            AgentEventType.ChangeVerificationFailed,
-                            pendingWriteStep,
-                            pendingWriteStep.LastFailureMessage,
-                            executionResult.Output);
+                        shouldContinueWithNextAssistantTurn = true;
+                        break;
                     }
 
                     consecutiveFailures++;
@@ -728,58 +709,26 @@ namespace SmartWord.Application.Orchestration
                         yield return CreateCircuitBreakerEvent();
                         yield break;
                     }
+
+                    if (pendingWriteStep != null)
+                    {
+                        shouldContinueWithNextAssistantTurn = true;
+                        break;
+                    }
                 }
             }
 
+            if (shouldContinueWithNextAssistantTurn)
+            {
+                continue;
+            }
         }
 
         if (pendingWriteStep != null)
         {
-            if (pendingWriteStep.State == PendingWriteState.AwaitingVerification)
-            {
-                var autoVerifyOutcome = await ExecuteAutoVerifyAsync(
-                        documentPath,
-                        messages,
-                        pendingWriteStep,
-                        undoScope,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (autoVerifyOutcome.ToolCall != null)
-                {
-                    yield return CreateToolStartedEvent(
-                        autoVerifyOutcome.ToolCall,
-                        autoVerifyOutcome.OperationDescription);
-                    yield return CreateToolCompletedEvent(autoVerifyOutcome.ToolCall, autoVerifyOutcome.Result);
-                }
-
-                if (!autoVerifyOutcome.Passed)
-                {
-                    pendingWriteStep = pendingWriteStep.MarkRepairRequired(autoVerifyOutcome.FailureMessage);
-                    yield return CreateChangeEvent(
-                        AgentEventType.ChangeVerificationFailed,
-                        pendingWriteStep,
-                        pendingWriteStep.LastFailureMessage,
-                        autoVerifyOutcome.Result == null ? string.Empty : autoVerifyOutcome.Result.Output);
-                    yield return CreatePendingWriteErrorEvent(
-                        pendingWriteStep,
-                        autoVerifyOutcome.TerminationMessage);
-                    yield break;
-                }
-
-                yield return CreateChangeEvent(
-                    AgentEventType.ChangeApplied,
-                    pendingWriteStep,
-                    "模型未显式调用验证步骤，系统已自动补验证并确认改动生效。",
-                    autoVerifyOutcome.Result == null ? string.Empty : autoVerifyOutcome.Result.Output);
-                pendingWriteStep = null;
-            }
-            else
-            {
-                yield return CreatePendingWriteStateEvent(pendingWriteStep);
-                yield return CreatePendingWriteTerminationEvent(pendingWriteStep);
-                yield break;
-            }
+            yield return CreatePendingWriteStateEvent(pendingWriteStep);
+            yield return CreatePendingWriteTerminationEvent(pendingWriteStep);
+            yield break;
         }
 
         shouldCommitUndo = true;
@@ -1224,7 +1173,7 @@ namespace SmartWord.Application.Orchestration
                 case "execute_script":
                     return BuildExecuteScriptAutoVerifyPlan(parsedInput);
                 default:
-                    return AutoVerifyPlan.Unsupported("当前工具类型不支持系统自动补验证。");
+                    return AutoVerifyPlan.Unsupported("当前工具类型不支持系统写后验证。");
             }
         }
 
@@ -1232,7 +1181,7 @@ namespace SmartWord.Application.Orchestration
         {
             if (parsedInput == null)
             {
-                return AutoVerifyPlan.Unsupported("patch_range 缺少结构化输入，无法自动补验证。");
+                return AutoVerifyPlan.Unsupported("patch_range 缺少结构化输入，无法生成写后验证步骤。");
             }
 
             PatchRangeRequest request;
@@ -1286,7 +1235,7 @@ namespace SmartWord.Application.Orchestration
                     case "set_paragraph_style":
                         if (string.IsNullOrWhiteSpace(operation.Style))
                         {
-                            return AutoVerifyPlan.Unsupported("set_paragraph_style 缺少 style，无法自动补验证。");
+                            return AutoVerifyPlan.Unsupported("set_paragraph_style 缺少 style，无法生成写后验证步骤。");
                         }
 
                         checks.Add(new JObject
@@ -1297,44 +1246,44 @@ namespace SmartWord.Application.Orchestration
                         });
                         break;
                     case "delete_paragraph":
-                        return AutoVerifyPlan.Unsupported("delete_paragraph 暂不支持可靠的系统自动补验证，请显式调用 verify_script。");
+                        return AutoVerifyPlan.Unsupported("delete_paragraph 暂不支持可靠的系统写后验证，请改用 execute_script 并显式提供 verify_code。");
                     default:
-                        return AutoVerifyPlan.Unsupported("存在当前版本不支持自动补验证的 patch_range 操作类型：" + operation.Type);
+                        return AutoVerifyPlan.Unsupported("存在当前版本不支持系统写后验证的 patch_range 操作类型：" + operation.Type);
                 }
             }
 
             if (checks.Count == 0)
             {
-                return AutoVerifyPlan.Unsupported("当前写步骤未生成任何可执行的自动验证脚本。");
+                return AutoVerifyPlan.Unsupported("当前写步骤未生成任何可执行的验证脚本。");
             }
 
             return AutoVerifyPlan.Supported(
                 "verify_script",
                 BuildPatchRangeAutoVerifyInput(checks),
-                "系统正在自动补验证上一写步骤。");
+                "系统正在执行当前写步骤的验证。");
         }
 
         private static AutoVerifyPlan BuildExecuteScriptAutoVerifyPlan(JObject parsedInput)
         {
             if (parsedInput == null)
             {
-                return AutoVerifyPlan.Unsupported("execute_script 缺少结构化输入，无法自动补验证。");
+                return AutoVerifyPlan.Unsupported("execute_script 缺少结构化输入，无法生成写后验证步骤。");
             }
 
             var verifyCode = parsedInput.Value<string>("verify_code");
             if (string.IsNullOrWhiteSpace(verifyCode))
             {
-                return AutoVerifyPlan.Unsupported("execute_script 未提供 verify_code，系统无法对脚本写入做可靠自动补验证。");
+                return AutoVerifyPlan.Unsupported("execute_script 未提供 verify_code，系统无法执行当前写步骤的验证。");
             }
 
             return AutoVerifyPlan.Supported(
                 "verify_script",
                 new JObject
                 {
-                    ["description"] = "验证上一脚本写步骤是否生效。",
+                    ["description"] = "验证当前脚本写步骤是否生效。",
                     ["code"] = verifyCode
                 }.ToString(Formatting.None),
-                "系统正在自动补验证上一脚本写步骤。");
+                "系统正在执行当前脚本写步骤的验证。");
         }
 
         private async Task<AutoVerifyOutcome> ExecuteAutoVerifyAsync(
@@ -1360,15 +1309,15 @@ namespace SmartWord.Application.Orchestration
             {
                 return AutoVerifyOutcome.CreateFailed(
                     pendingWriteStep.VerificationFailureReason,
-                    "上一写步骤缺少显式验证步骤，且系统无法自动补验证，任务已中止。");
+                    "当前写步骤缺少可执行的验证输入，当前步骤待修复。");
             }
 
             var verifyTool = _toolRegistry.GetTool(pendingWriteStep.VerificationToolName);
             if (verifyTool == null)
             {
                 return AutoVerifyOutcome.CreateFailed(
-                    "系统未找到验证工具实现，无法自动补验证。",
-                    "上一写步骤缺少显式验证步骤，且系统无法自动补验证，任务已中止。");
+                    "系统未找到内部验证工具实现，当前步骤待修复。",
+                    "系统内部验证工具不可用，当前步骤待修复。");
             }
 
             var autoVerifyCall = new ToolCall
@@ -1425,7 +1374,7 @@ namespace SmartWord.Application.Orchestration
 
             return AutoVerifyOutcome.CreateFailed(
                 BuildVerificationFailureMessage(executionResult),
-                "上一写步骤的系统自动补验证未通过，任务已中止。",
+                "当前写步骤的验证未通过，当前步骤待修复。",
                 autoVerifyCall,
                 executionResult,
                 pendingWriteStep.VerificationOperationDescription);
@@ -1458,7 +1407,7 @@ namespace SmartWord.Application.Orchestration
 
             return new JObject
             {
-                ["description"] = "验证上一 patch_range 写步骤是否生效。",
+                ["description"] = "验证当前 patch_range 写步骤是否生效。",
                 ["code"] = codeBuilder.ToString()
             }.ToString(Formatting.None);
         }
@@ -1702,6 +1651,8 @@ namespace SmartWord.Application.Orchestration
                     {
                         case "patch_range":
                             return "准备执行范围写入：" + operation.Trim();
+                        case "read_script":
+                            return "准备执行脚本查询：" + operation.Trim();
                         case "verify_script":
                             return "准备验证改动结果：" + operation.Trim();
                         case "execute_script":
@@ -1720,6 +1671,8 @@ namespace SmartWord.Application.Orchestration
             {
                 case "patch_range":
                     return "准备执行文档范围写入。";
+                case "read_script":
+                    return "准备执行脚本查询。";
                 case "verify_script":
                     return "准备验证本次改动结果。";
                 case "execute_script":
