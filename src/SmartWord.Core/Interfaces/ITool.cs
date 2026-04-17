@@ -17,6 +17,8 @@ namespace SmartWord.Core.Interfaces
 
         ToolPermission RequiredPermission { get; }
 
+        bool IsVisibleToModel { get; }
+
         JsonElement InputSchema { get; }
 
         Task<ToolCallResult> ExecuteAsync(

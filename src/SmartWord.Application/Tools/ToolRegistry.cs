@@ -27,7 +27,8 @@ namespace SmartWord.Application.Tools
 
         public IReadOnlyList<ToolDefinition> GetToolDefinitions(AgentMode mode)
         {
-            IEnumerable<ITool> visibleTools = _tools.Values;
+            IEnumerable<ITool> visibleTools = _tools.Values
+                .Where(item => item.IsVisibleToModel);
             if (mode == AgentMode.Ask || mode == AgentMode.Plan)
             {
                 visibleTools = visibleTools.Where(item => item.RequiredPermission == ToolPermission.ReadOnly);
