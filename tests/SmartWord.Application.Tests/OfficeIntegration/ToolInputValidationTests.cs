@@ -34,6 +34,18 @@ namespace SmartWord.Application.Tests.OfficeIntegration
         }
 
         [Fact]
+        public async System.Threading.Tasks.Task ReadScriptTool_CodeMissing_返回明确错误()
+        {
+            using var document = JsonDocument.Parse("{\"description\":\"查询标题\"}");
+            var tool = new ReadScriptTool(null, null, null);
+
+            var result = await tool.ExecuteAsync(document.RootElement, null, System.Threading.CancellationToken.None);
+
+            Assert.False(result.Success);
+            Assert.Contains("查询脚本不能为空", result.Output);
+        }
+
+        [Fact]
         public void ExecuteScriptTool_RuntimeHelper_对ForeachCom枚举错误给出明确提示()
         {
             var method = typeof(ExecuteScriptTool).GetMethod(

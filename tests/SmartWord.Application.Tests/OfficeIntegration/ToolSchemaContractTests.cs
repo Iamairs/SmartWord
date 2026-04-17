@@ -72,5 +72,16 @@ namespace SmartWord.Application.Tests.OfficeIntegration
             Assert.Contains("all_passed", code.GetProperty("description").GetString());
             Assert.Contains("results", code.GetProperty("description").GetString());
         }
+
+        [Fact]
+        public void ReadScriptTool_InputSchema_强调只读查询()
+        {
+            var tool = new ReadScriptTool(null, null, null);
+
+            Assert.True(tool.InputSchema.TryGetProperty("properties", out var properties));
+            Assert.True(properties.TryGetProperty("code", out var code));
+            Assert.Contains("只读", code.GetProperty("description").GetString());
+            Assert.Contains("Word COM", code.GetProperty("description").GetString());
+        }
     }
 }

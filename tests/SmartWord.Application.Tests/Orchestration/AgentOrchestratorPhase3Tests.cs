@@ -108,7 +108,7 @@ namespace SmartWord.Application.Tests.Orchestration
         }
 
         [Fact]
-        public async Task RunAsync_ConsecutiveToolFailures_TriggersCircuitBreakerAndRollback()
+        public async Task RunAsync_WriteToolFailed_StopsSameRoundAndTransitionsToRepairState()
         {
             var llmClient = new FakeLlmClient(new AgentMessage
             {
@@ -130,7 +130,7 @@ namespace SmartWord.Application.Tests.Orchestration
                 undoScopeFactory);
 
             var events = await CollectAsync(orchestrator.RunAsync(
-                "请执行多个写操作",
+                "run multiple writes",
                 new AgentRunOptions
                 {
                     Mode = AgentMode.Agent,
@@ -139,20 +139,20 @@ namespace SmartWord.Application.Tests.Orchestration
                 },
                 CancellationToken.None));
 
-            Assert.Contains(events, item => item.Type == AgentEventType.Error && item.Message.Contains("连续失败"));
+            Assert.Contains(events, item => item.Type == AgentEventType.ChangeRepairRequired);
+            Assert.Contains(events, item => item.Type == AgentEventType.Error);
             Assert.DoesNotContain(events, item => item.Type == AgentEventType.TaskCompleted);
-            Assert.Equal(3, tool.ExecutionCount);
+            Assert.Equal(1, tool.ExecutionCount);
             Assert.Equal(0, undoScopeFactory.LastScope.CommitCount);
             Assert.Equal(1, undoScopeFactory.LastScope.RollbackCount);
         }
 
         [Fact]
-        public async Task RunAsync_WriteToolSucceededAndVerifyPassed_EmitsExecutedAndVerifiedEvents()
+        public async Task RunAsync_WriteToolSucceeded_ImmediatelyVerifiesAndEmitsExecutedAndVerifiedEvents()
         {
             var llmClient = new FakeLlmClient(
                 CreateToolCallMessage(
-                    CreateToolCall("write-1", "patch_range", "{\"operations\":[{\"type\":\"replace_text\",\"paragraph_index\":1,\"text\":\"新的标题\"}]}"),
-                    CreateToolCall("verify-1", "verify_script", "{\"code\":\"return new { all_passed = true, results = new object[0] };\"}")),
+                    CreateToolCall("write-1", "patch_range", "{\"operations\":[{\"type\":\"replace_text\",\"paragraph_index\":1,\"text\":\"新的标题\"}]}")),
                 new AgentMessage
                 {
                     Role = "assistant",
@@ -198,19 +198,28 @@ namespace SmartWord.Application.Tests.Orchestration
             Assert.Equal("patch_range", changeApplied.ToolName);
             Assert.Equal("已修改第 1 段。", changeApplied.OperationDescription);
             Assert.Equal(new[] { 1 }, changeApplied.AffectedParagraphs);
-            Assert.DoesNotContain(events, item => item.Type == AgentEventType.ChangeUnverified);
+            Assert.Contains(events, item =>
+                item.Type == AgentEventType.ToolCallStarted
+                && item.ToolCallId == "write-1__auto_verify"
+                && item.ToolName == "verify_script");
+            Assert.Contains(events, item =>
+                item.Type == AgentEventType.ToolCallCompleted
+                && item.ToolCallId == "write-1__auto_verify"
+                && item.ToolSuccess);
             Assert.DoesNotContain(events, item => item.Type == AgentEventType.ChangeVerificationFailed);
             Assert.NotNull(writeTool.LastUndoScope);
+            Assert.Equal(1, verifyTool.ExecutionCount);
             Assert.Equal(1, undoScopeFactory.LastScope.CommitCount);
             Assert.Equal(0, undoScopeFactory.LastScope.RollbackCount);
         }
 
         [Fact]
-        public async Task RunAsync_WriteToolSucceededWithoutVerify_AutoVerifyPassed_CompletesTask()
+        public async Task RunAsync_WriteToolSucceededThenCalledNonVerifyTool_SkipsRemainingToolCallsInSameRound()
         {
             var llmClient = new FakeLlmClient(
                 CreateToolCallMessage(
-                    CreateToolCall("write-1", "patch_range", "{\"operations\":[{\"type\":\"replace_text\",\"paragraph_index\":1,\"text\":\"新的标题\"}]}")),
+                    CreateToolCall("write-1", "patch_range", "{\"operations\":[{\"type\":\"replace_text\",\"paragraph_index\":1,\"text\":\"新的标题\"}]}"),
+                    CreateToolCall("read-1", "read_section", "{\"heading\":\"第一章\"}")),
                 new AgentMessage
                 {
                     Role = "assistant",
@@ -230,11 +239,15 @@ namespace SmartWord.Application.Tests.Orchestration
                     "{\"all_passed\":true,\"results\":[]}",
                     new[] { 1 },
                     operationDescription: "已完成改动验证。"));
+            var readTool = new FakeTool(
+                "read_section",
+                ToolPermission.ReadOnly,
+                ToolCallResult.Ok("{\"heading\":\"第一章\"}"));
             var undoScopeFactory = new FakeUndoScopeFactory();
             var orchestrator = CreateOrchestrator(
                 llmClient,
                 CreateWritableHydrator(),
-                new ITool[] { writeTool, verifyTool },
+                new ITool[] { writeTool, verifyTool, readTool },
                 new FakeConfirmationChannel(true, true),
                 undoScopeFactory);
 
@@ -253,8 +266,6 @@ namespace SmartWord.Application.Tests.Orchestration
             Assert.Equal("patch_range", changeApplied.ToolName);
             Assert.Equal("已修改第 1 段。", changeApplied.OperationDescription);
             Assert.Equal(new[] { 1 }, changeApplied.AffectedParagraphs);
-            Assert.Contains("自动补验证", changeApplied.Message);
-            Assert.DoesNotContain(events, item => item.Type == AgentEventType.ChangeUnverified);
             Assert.DoesNotContain(events, item => item.Type == AgentEventType.ChangeVerificationFailed);
             Assert.Contains(events, item =>
                 item.Type == AgentEventType.ToolCallStarted
@@ -266,33 +277,22 @@ namespace SmartWord.Application.Tests.Orchestration
                 && item.ToolSuccess);
             Assert.Contains(events, item => item.Type == AgentEventType.TaskCompleted);
             Assert.Equal(1, verifyTool.ExecutionCount);
+            Assert.Equal(0, readTool.ExecutionCount);
             Assert.Equal(1, undoScopeFactory.LastScope.CommitCount);
             Assert.Equal(0, undoScopeFactory.LastScope.RollbackCount);
         }
 
         [Fact]
-        public async Task RunAsync_WriteToolSucceededThenCalledNonVerifyTool_AutoVerifyPassedAndContinues()
+        public async Task RunAsync_ModelExplicitlyCallsVerifyScript_DeniesInternalTool()
         {
             var llmClient = new FakeLlmClient(
                 CreateToolCallMessage(
-                    CreateToolCall("write-1", "patch_range", "{\"operations\":[{\"type\":\"replace_text\",\"paragraph_index\":1,\"text\":\"新的标题\"}]}"),
-                    CreateToolCall("read-1", "read_section", "{\"heading\":\"第一章\"}")),
+                    CreateToolCall("verify-1", "verify_script", "{\"code\":\"return new { all_passed = true, results = new object[0] };\"}")),
                 new AgentMessage
                 {
                     Role = "assistant",
                     Content = "已结束。"
                 });
-            var writeTool = new FakeTool(
-                "patch_range",
-                ToolPermission.Write,
-                ToolCallResult.Ok(
-                    "{\"success\":true}",
-                    new[] { 1 },
-                    operationDescription: "已修改第 1 段。"));
-            var readTool = new FakeTool(
-                "read_section",
-                ToolPermission.ReadOnly,
-                ToolCallResult.Ok("{\"heading\":\"第一章\"}"));
             var verifyTool = new FakeTool(
                 "verify_script",
                 ToolPermission.ReadOnly,
@@ -303,11 +303,11 @@ namespace SmartWord.Application.Tests.Orchestration
             var orchestrator = CreateOrchestrator(
                 llmClient,
                 CreateWritableHydrator(),
-                new ITool[] { writeTool, readTool, verifyTool },
+                new ITool[] { verifyTool },
                 new FakeConfirmationChannel(true, true));
 
             var events = await CollectAsync(orchestrator.RunAsync(
-                "请修改第二段后继续读取",
+                "请验证标题是否正确",
                 new AgentRunOptions
                 {
                     Mode = AgentMode.Agent,
@@ -316,23 +316,11 @@ namespace SmartWord.Application.Tests.Orchestration
                 },
                 CancellationToken.None));
 
-            Assert.Contains(events, item => item.Type == AgentEventType.ChangeExecuted);
             Assert.Contains(events, item =>
-                item.Type == AgentEventType.ChangeApplied
-                && item.Message.Contains("自动补验证"));
-            Assert.DoesNotContain(events, item => item.Type == AgentEventType.ChangeUnverified);
-            Assert.DoesNotContain(events, item => item.Type == AgentEventType.ChangeVerificationFailed);
-            Assert.Contains(events, item =>
-                item.Type == AgentEventType.ToolCallStarted
-                && item.ToolCallId == "write-1__auto_verify");
+                item.Type == AgentEventType.ToolCallDenied
+                && item.ToolName == "verify_script");
             Assert.Contains(events, item => item.Type == AgentEventType.TaskCompleted);
-            Assert.Equal(1, writeTool.ExecutionCount);
-            Assert.Equal(1, verifyTool.ExecutionCount);
-            Assert.Equal(1, readTool.ExecutionCount);
-            Assert.Contains(events, item =>
-                item.Type == AgentEventType.ToolCallCompleted
-                && item.ToolCallId == "read-1"
-                && item.ToolSuccess);
+            Assert.Equal(0, verifyTool.ExecutionCount);
         }
 
         [Fact]
@@ -340,8 +328,7 @@ namespace SmartWord.Application.Tests.Orchestration
         {
             var llmClient = new FakeLlmClient(
                 CreateToolCallMessage(
-                    CreateToolCall("write-1", "patch_range", "{\"operations\":[{\"type\":\"replace_text\",\"paragraph_index\":1,\"text\":\"新的标题\"}]}"),
-                    CreateToolCall("verify-1", "verify_script", "{\"code\":\"return new { all_passed = false, results = new object[] { new { check_key = \\\"title\\\", passed = false } } };\"}")),
+                    CreateToolCall("write-1", "patch_range", "{\"operations\":[{\"type\":\"replace_text\",\"paragraph_index\":1,\"text\":\"新的标题\"}]}")),
                 new AgentMessage
                 {
                     Role = "assistant",
@@ -378,6 +365,9 @@ namespace SmartWord.Application.Tests.Orchestration
                 CancellationToken.None));
 
             Assert.Contains(events, item => item.Type == AgentEventType.ChangeExecuted);
+            Assert.Contains(events, item =>
+                item.Type == AgentEventType.ToolCallStarted
+                && item.ToolCallId == "write-1__auto_verify");
             var verificationFailed = Assert.Single(events.FindAll(item => item.Type == AgentEventType.ChangeVerificationFailed));
             Assert.Equal("patch_range", verificationFailed.ToolName);
             Assert.Equal("已修改第 1 段。", verificationFailed.OperationDescription);
@@ -395,8 +385,6 @@ namespace SmartWord.Application.Tests.Orchestration
                     CreateToolCall("write-1", "execute_script", "{\"description\":\"调整标题\",\"write_code\":\"bad\",\"verify_code\":\"return new { all_passed = true, results = new object[0] };\"}")),
                 CreateToolCallMessage(
                     CreateToolCall("write-2", "execute_script", "{\"description\":\"调整标题\",\"write_code\":\"fixed\",\"verify_code\":\"return new { all_passed = true, results = new object[0] };\"}")),
-                CreateToolCallMessage(
-                    CreateToolCall("verify-1", "verify_script", "{\"code\":\"return new { all_passed = true, results = new object[0] };\"}")),
                 new AgentMessage
                 {
                     Role = "assistant",
@@ -438,6 +426,7 @@ namespace SmartWord.Application.Tests.Orchestration
             Assert.Contains(events, item => item.Type == AgentEventType.ChangeApplied);
             Assert.Contains(events, item => item.Type == AgentEventType.TaskCompleted);
             Assert.Equal(2, writeTool.ExecutionCount);
+            Assert.Equal(1, verifyTool.ExecutionCount);
         }
 
         [Fact]
@@ -479,15 +468,15 @@ namespace SmartWord.Application.Tests.Orchestration
         }
 
         [Fact]
-        public async Task RunAsync_ExecuteScriptSucceededWithoutVerifyCode_AutoVerifyUnavailable_FailsTask()
+        public async Task RunAsync_ExecuteScriptMissingVerifyCode_IsTreatedAsWriteFailure()
         {
             var llmClient = new FakeLlmClient(
                 CreateToolCallMessage(
-                    CreateToolCall("write-1", "execute_script", "{\"description\":\"调整标题\",\"write_code\":\"ok\",\"affected_paragraphs\":[0]}")),
+                    CreateToolCall("write-1", "execute_script", "{\"description\":\"fix title\",\"write_code\":\"ok\",\"affected_paragraphs\":[0]}")),
                 new AgentMessage
                 {
                     Role = "assistant",
-                    Content = "已完成脚本执行。"
+                    Content = "done"
                 });
             var writeTool = new FakeTool(
                 "execute_script",
@@ -495,7 +484,7 @@ namespace SmartWord.Application.Tests.Orchestration
                 ToolCallResult.Ok(
                     "{\"success\":true}",
                     new[] { 0 },
-                    operationDescription: "已调整标题。"));
+                    operationDescription: "updated title"));
             var undoScopeFactory = new FakeUndoScopeFactory();
             var orchestrator = CreateOrchestrator(
                 llmClient,
@@ -505,7 +494,7 @@ namespace SmartWord.Application.Tests.Orchestration
                 undoScopeFactory);
 
             var events = await CollectAsync(orchestrator.RunAsync(
-                "请调整标题格式",
+                "fix title format",
                 new AgentRunOptions
                 {
                     Mode = AgentMode.Agent,
@@ -518,10 +507,56 @@ namespace SmartWord.Application.Tests.Orchestration
             Assert.Contains(events, item =>
                 item.Type == AgentEventType.ChangeVerificationFailed
                 && item.Message.Contains("verify_code"));
-            Assert.Contains(events, item => item.Type == AgentEventType.Error && item.Message.Contains("无法自动补验证"));
+            Assert.Contains(events, item => item.Type == AgentEventType.Error);
             Assert.DoesNotContain(events, item => item.Type == AgentEventType.TaskCompleted);
             Assert.Equal(0, undoScopeFactory.LastScope.CommitCount);
             Assert.Equal(1, undoScopeFactory.LastScope.RollbackCount);
+        }
+
+        [Fact]
+        public async Task RunAsync_PendingWriteRepair_DeniesReadToolUntilWriteToolRepairs()
+        {
+            var llmClient = new FakeLlmClient(
+                CreateToolCallMessage(
+                    CreateToolCall("write-1", "execute_script", "{\"description\":\"fix title\",\"write_code\":\"bad\",\"verify_code\":\"return new { all_passed = true, results = new object[0] };\"}")),
+                CreateToolCallMessage(
+                    CreateToolCall("read-1", "read_section", "{\"heading\":\"Section 1\"}")),
+                new AgentMessage
+                {
+                    Role = "assistant",
+                    Content = "cannot continue"
+                });
+            var writeTool = new FakeTool(
+                "execute_script",
+                ToolPermission.Write,
+                ToolCallResult.Error("execute_script", "script failed"));
+            var readTool = new FakeTool(
+                "read_section",
+                ToolPermission.ReadOnly,
+                ToolCallResult.Ok("{\"heading\":\"Section 1\"}"));
+            var orchestrator = CreateOrchestrator(
+                llmClient,
+                CreateWritableHydrator(),
+                new ITool[] { writeTool, readTool },
+                new FakeConfirmationChannel(true, true));
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "repair current step",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Agent,
+                    EnableToolCalling = true,
+                    RequireConfirmationForScripts = true
+                },
+                CancellationToken.None));
+
+            Assert.Contains(events, item => item.Type == AgentEventType.ChangeRepairRequired);
+            Assert.Contains(events, item =>
+                item.Type == AgentEventType.ToolCallDenied
+                && item.ToolName == "read_section");
+            Assert.DoesNotContain(events, item => item.Type == AgentEventType.TaskCompleted);
+            Assert.Equal(1, writeTool.ExecutionCount);
+            Assert.Equal(0, readTool.ExecutionCount);
         }
 
         [Fact]
@@ -817,6 +852,8 @@ namespace SmartWord.Application.Tests.Orchestration
             public string Description => Name;
 
             public ToolPermission RequiredPermission { get; }
+
+            public bool IsVisibleToModel { get; set; } = true;
 
             public JsonElement InputSchema => _schema;
 

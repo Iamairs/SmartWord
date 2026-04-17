@@ -72,6 +72,8 @@ namespace SmartWord.Application.Tests.Tools
 
             public ToolPermission RequiredPermission { get; }
 
+            public bool IsVisibleToModel => true;
+
             public JsonElement InputSchema => _schema;
 
             public System.Threading.Tasks.Task<ToolCallResult> ExecuteAsync(

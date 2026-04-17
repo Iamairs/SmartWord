@@ -38,6 +38,20 @@ namespace SmartWord.Application.Tests.Tools
         }
 
         [Fact]
+        public void GetToolDefinitions_AgentModeHidesInternalTools()
+        {
+            var registry = new ToolRegistry();
+            registry.Register(new FakeTool("read_script", ToolPermission.ReadOnly));
+            registry.Register(new FakeTool("verify_script", ToolPermission.ReadOnly, isVisibleToModel: false));
+
+            var definitions = registry.GetToolDefinitions(AgentMode.Agent);
+
+            Assert.Single(definitions);
+            Assert.DoesNotContain(definitions, item => item.Name == "verify_script");
+            Assert.Contains(definitions, item => item.Name == "read_script");
+        }
+
+        [Fact]
         public void GetTool_RegisteredName_ReturnsTool()
         {
             var registry = new ToolRegistry();
@@ -66,11 +80,12 @@ namespace SmartWord.Application.Tests.Tools
         {
             private readonly JsonElement _schema = JsonDocument.Parse("{\"type\":\"object\"}").RootElement.Clone();
 
-            public FakeTool(string name, ToolPermission permission, string description = null)
+            public FakeTool(string name, ToolPermission permission, string description = null, bool isVisibleToModel = true)
             {
                 Name = name;
                 RequiredPermission = permission;
                 Description = description ?? name;
+                IsVisibleToModel = isVisibleToModel;
             }
 
             public string Name { get; }
@@ -78,6 +93,8 @@ namespace SmartWord.Application.Tests.Tools
             public string Description { get; }
 
             public ToolPermission RequiredPermission { get; }
+
+            public bool IsVisibleToModel { get; }
 
             public JsonElement InputSchema => _schema;
 
