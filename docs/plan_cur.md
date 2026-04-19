@@ -1,43 +1,45 @@
-# 当前实现计划
+Plan 模式卡住问题修复计划
 
-## Step 1：文档与协议收口
+## Step 1：补齐问题边界
 
-- 记录新执行协议：写工具成功后，编排层立即执行内部验证。
-- 明确 `verify_script` 仅供内部调用。
-- 明确 `read_script` 是新的模型可见只读脚本查询工具。
+- 阅读 `README.md`、`docs/已实现的功能.md`、`docs/instructions/Agent_核心引擎规格.md`
+- 确认当前 Plan 模式设计目标、提示词约束、前端问题面板能力和宿主问答通道实现
+- 根据日志把断点缩小到 `AgentOrchestrator` 收到 tool calls 之后的处理阶段
 
-## Step 2：工具层改造
+## Step 2：修复编排层协议一致性
 
-- 为工具增加“是否对模型可见”元数据。
-- 更新 `ToolRegistry.GetToolDefinitions(...)`，隐藏内部工具。
-- 新增 `ReadScriptTool`：
-  - 只读权限
-  - 使用 Roslyn 脚本执行
-  - 复用 `ScriptValidationMode.ReadOnly`
-  - 输出通用查询结果
-- 保留 `VerifyScriptTool` 内部契约不变，但默认隐藏给模型。
+- 在 `AgentOrchestrator` 中为缺失 `tool_call.id` 的调用生成稳定 ID
+- 当同一轮 assistant 返回多个 tool call，但当前轮因采访等待或状态切换而提前结束时：
+  - 将剩余 tool call 统一追加为 skipped tool result
+  - 避免下一轮请求携带“assistant 有 3 个 tool_calls，但只有 1 个 tool result”的非法消息序列
+- 为 `ask_user_question` 增加空问题文本保护，避免前端收到空问题后进入无反馈状态
+- 增加关键日志，标明：
+  - 本轮 tool call 摘要
+  - Plan 问题已发出
+  - 正在等待用户回答
+  - 已收到用户回答
 
-## Step 3：编排层状态机改造
+## Step 3：修复提示词与前端能力不一致
 
-- 删除“写成功后等待模型显式验证”的开放窗口。
-- 删除“下一工具不是验证工具时再自动补验证”的逻辑。
-- 删除“对话结束时还有 AwaitingVerification 再补验证”的逻辑。
-- 改为：
-  - 写成功
-  - 立刻执行验证子步骤
-  - 立即产出 `ChangeApplied` 或 `ChangeVerificationFailed`
-- 保留待修复状态，用于写失败或验证失败后的下一轮修复。
+- 更新 `src/SmartWord.AddIn/Resources/Prompts/PLAN.md`
+- 明确要求：
+  - 单轮最多调用一次 `ask_user_question`
+  - 如果还有其它必须澄清的问题，必须等待用户回答后再继续下一问
+  - 整个采访阶段最多 3 轮
 
-## Step 4：提示词与测试
+## Step 4：补充自动化测试
 
-- 更新 `AGENT.md`，移除模型显式调用 `verify_script` 的描述。
-- 加入 `read_script` 的使用约束。
-- 替换 `AgentOrchestratorPhase3Tests` 中所有显式 `verify_script` 流程为“系统立即验证”。
-- 增加 `read_script` 的 schema / 输入校验 / 只读校验测试。
-- 增加 `ToolRegistry` 的内部工具隐藏测试。
+- 在 `tests/SmartWord.Application.Tests/Orchestration` 增加 Plan 模式测试
+- 覆盖场景：
+  - 第一轮返回多个 `ask_user_question` 时，剩余 tool call 会被自动补齐为 skipped result
+  - 模型未提供 `tool_call.id` 时，`QuestionAsked` 事件仍能携带非空 ID
 
-## Step 5：收尾
+## Step 5：执行验证
 
-- 更新 `docs/已实现的功能.md` 中写后验证闭环与工具清单描述。
-- 跑测试与构建。
-- 完成后清空 `docs/project_cur.md` 与 `docs/plan_cur.md`。
+- 运行 `tests/SmartWord.Application.Tests` 中与编排器相关的测试
+- 如时间允许，运行完整应用层测试项目
+- 最终汇总：
+  - 根因
+  - 修改点
+  - 已验证范围
+  - 宿主侧仍需人工 E2E 验证的部分
