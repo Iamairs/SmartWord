@@ -232,6 +232,7 @@
       <SubType>UserControl</SubType>
     </Compile>
     <Compile Include="TaskPane\WebViewConfirmationChannel.cs" />
+    <Compile Include="TaskPane\WebViewQuestionChannel.cs" />
     <Compile Include="TaskPane\WebViewBridge.cs" />
     <None Include="SmartWord.AddIn_TemporaryKey.pfx" />
     <None Include="ThisAddIn.Designer.xml">

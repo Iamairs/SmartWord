@@ -27,6 +27,7 @@ namespace SmartWord.AddIn.DI
         private static readonly object SettingsSyncRoot = new object();
         private static ServiceProvider _serviceProvider;
         private static WebViewConfirmationChannel _confirmationChannel;
+        private static WebViewQuestionChannel _questionChannel;
 
         public static void Initialize(Microsoft.Office.Interop.Word.Application wordApplication)
         {
@@ -37,11 +38,14 @@ namespace SmartWord.AddIn.DI
             // 避免首次在后台线程解析单例时把错误线程记录为 Word COM 所属线程。
             var wordApplicationWrapper = new WordApplicationWrapper(wordApplication);
             _confirmationChannel = new WebViewConfirmationChannel();
+            _questionChannel = new WebViewQuestionChannel();
             services.AddSingleton(wordApplication);
             services.AddSingleton(wordApplicationWrapper);
             services.AddSingleton<IUndoScopeFactory>(wordApplicationWrapper);
             services.AddSingleton(_confirmationChannel);
             services.AddSingleton<IConfirmationChannel>(_confirmationChannel);
+            services.AddSingleton(_questionChannel);
+            services.AddSingleton<IQuestionChannel>(_questionChannel);
             services.AddSingleton<ScriptSecurityValidator>();
             services.AddSingleton<CSharpScriptExecutor>();
             services.AddSingleton(provider => LoadSmartWordSettings());
@@ -73,6 +77,7 @@ namespace SmartWord.AddIn.DI
                     wordWrapper,
                     provider.GetRequiredService<CSharpScriptExecutor>(),
                     provider.GetRequiredService<ScriptSecurityValidator>()));
+                registry.Register(new AskUserQuestionTool());
                 return registry;
             });
             services.AddSingleton<PermissionGuard>();
@@ -88,7 +93,8 @@ namespace SmartWord.AddIn.DI
                 provider.GetRequiredService<PermissionGuard>(),
                 provider.GetRequiredService<IConfirmationChannel>(),
                 provider.GetRequiredService<IUndoScopeFactory>(),
-                provider.GetRequiredService<ConversationCompressor>()));
+                provider.GetRequiredService<ConversationCompressor>(),
+                provider.GetRequiredService<IQuestionChannel>()));
             services.AddSingleton<StreamingResponseHandler>();
 
             _serviceProvider = services.BuildServiceProvider();
@@ -171,6 +177,8 @@ namespace SmartWord.AddIn.DI
         {
             _confirmationChannel?.DetachBridge();
             _confirmationChannel = null;
+            _questionChannel?.DetachBridge();
+            _questionChannel = null;
             _serviceProvider?.Dispose();
             _serviceProvider = null;
         }
@@ -178,6 +186,7 @@ namespace SmartWord.AddIn.DI
         public static void AttachTaskPaneBridge(SmartWordBridge bridge)
         {
             _confirmationChannel?.AttachBridge(bridge);
+            _questionChannel?.AttachBridge(bridge);
         }
 
         private static SmartWordSettings LoadSmartWordSettings()

@@ -128,6 +128,45 @@
         <div class="message-body" v-html="renderMessage(message)"></div>
       </article>
 
+      <!-- Plan 模式：采访问题面板 -->
+      <div v-if="chatStore.pendingQuestion" class="question-panel">
+        <p class="question-panel__text">{{ chatStore.pendingQuestion.question }}</p>
+        <div class="question-panel__options">
+          <button
+            v-for="(opt, idx) in chatStore.pendingQuestion.options"
+            :key="idx"
+            class="question-option-btn"
+            type="button"
+            @click="submitQuestionAnswer(opt)"
+          >{{ opt }}</button>
+        </div>
+        <div class="question-panel__custom">
+          <input
+            v-model="customQuestionAnswer"
+            type="text"
+            placeholder="或输入自定义回答..."
+            @keydown.enter="submitQuestionAnswer(customQuestionAnswer)"
+          />
+          <button type="button" class="send-button" @click="submitQuestionAnswer(customQuestionAnswer)">发送</button>
+        </div>
+      </div>
+
+      <!-- Plan 模式：执行计划面板 -->
+      <div v-if="chatStore.activePlan && !chatStore.pendingQuestion" class="plan-panel">
+        <p class="plan-panel__desc">{{ chatStore.activePlan.taskDescription }}</p>
+        <ul class="plan-panel__todo">
+          <li
+            v-for="(item, idx) in chatStore.activePlan.todoList"
+            :key="idx"
+            :class="['todo-item', `todo-item--${item.status || 'pending'}`]"
+          >{{ item.description || item }}</li>
+        </ul>
+        <div v-if="chatStore.activePlan.riskNotes && chatStore.activePlan.riskNotes.length" class="plan-panel__risks">
+          <span v-for="(r, i) in chatStore.activePlan.riskNotes" :key="i" class="risk-note">{{ r }}</span>
+        </div>
+        <button class="send-button send-button--full" type="button" @click="executePlan">开始执行</button>
+      </div>
+
       <div v-if="chatStore.isLoading" class="message-card message-card--assistant">
         <div class="message-meta">
           <span>SmartWord</span>
@@ -192,6 +231,7 @@ const chatStore = useChatStore();
 const settingsStore = useSettingsStore();
 const draft = ref('');
 const messageListRef = ref(null);
+const customQuestionAnswer = ref('');
 let unsubscribeAgentEvent = null;
 const modeOptions = [
   { value: 'ask', label: '对话交流' },
@@ -324,6 +364,35 @@ async function navigateToParagraph(paragraphIndex) {
   await hostBridge.navigateToParagraph(paragraphIndex);
 }
 
+async function submitQuestionAnswer(answer) {
+  const q = chatStore.pendingQuestion;
+  if (!q || !answer?.trim()) return;
+  chatStore.clearPendingQuestion();
+  customQuestionAnswer.value = '';
+  chatStore.appendUserMessage(answer.trim());
+  chatStore.startLoading();
+  await hostBridge.submitQuestionAnswer(q.questionId, answer.trim());
+}
+
+async function executePlan() {
+  const plan = chatStore.activePlan;
+  if (!plan) return;
+  const context = [
+    `## 任务说明\n${plan.taskDescription}`,
+    `## 待办清单\n${(plan.todoList || []).map((t, i) => `${i + 1}. ${t.description || t}`).join('\n')}`,
+    plan.riskNotes?.length ? `## 风险提示\n${plan.riskNotes.join('\n')}` : ''
+  ].filter(Boolean).join('\n\n');
+  chatStore.activePlan = null;
+  chatStore.messages = [];
+  chatStore.appendUserMessage('请按照以下计划执行任务：\n\n' + context);
+  chatStore.startLoading();
+  await hostBridge.sendMessage({
+    content: '请按照以下计划执行任务：\n\n' + context,
+    manualMode: 'agent',
+    maxIterations: 20
+  });
+}
+
 function handleAgentEvent(event) {
   switch (event.type) {
     case 'stream_chunk':
@@ -361,6 +430,21 @@ function handleAgentEvent(event) {
       break;
     case 'mode_detected':
       chatStore.setMode(event.detectedMode);
+      break;
+    case 'question_asked':
+      chatStore.setPendingQuestion({
+        questionId: event.toolCallId,
+        question: event.content || '',
+        options: Array.isArray(event.questionOptions) ? event.questionOptions : []
+      });
+      chatStore.finishLoading();
+      break;
+    case 'plan_ready':
+      chatStore.setPlan(event.planJson);
+      chatStore.finishLoading();
+      break;
+    case 'progress_update':
+      if (event.message) chatStore.updatePlanProgress(event.message);
       break;
     case 'task_completed':
       chatStore.setCitations(event.citations);
@@ -429,7 +513,13 @@ onUnmounted(() => {
 });
 
 watch(
-  () => [chatStore.messages.length, chatStore.activeToolCalls.length],
+  () => [
+    chatStore.messages.length,
+    chatStore.activeToolCalls.length,
+    chatStore.pendingQuestion ? chatStore.pendingQuestion.questionId : '',
+    chatStore.activePlan ? JSON.stringify(chatStore.activePlan) : '',
+    chatStore.isLoading
+  ],
   () => {
     scrollToBottom();
   }

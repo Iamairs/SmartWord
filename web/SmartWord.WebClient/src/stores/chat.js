@@ -35,6 +35,8 @@ export const useChatStore = defineStore('chat', {
     activeToolCalls: [],
     citations: [],
     pendingConfirmation: null,
+    pendingQuestion: null,
+    activePlan: null,
     currentTaskChanges: [],
     completedTaskChanges: []
   }),
@@ -171,11 +173,30 @@ export const useChatStore = defineStore('chat', {
     findCitation(ref) {
       return this.citations.find((item) => item.ref === ref) || null;
     },
+    setPendingQuestion(question) {
+      this.pendingQuestion = question;
+    },
+    clearPendingQuestion() {
+      this.pendingQuestion = null;
+    },
+    setPlan(planJson) {
+      try {
+        this.activePlan = typeof planJson === 'string' ? JSON.parse(planJson) : planJson;
+      } catch {
+        this.activePlan = null;
+      }
+    },
+    updatePlanProgress(planJson) {
+      try {
+        this.activePlan = typeof planJson === 'string' ? JSON.parse(planJson) : planJson;
+      } catch { /* 忽略解析失败 */ }
+    },
     startLoading() {
       this.isLoading = true;
       this.activeToolCalls = [];
       this.citations = [];
       this.pendingConfirmation = null;
+      this.pendingQuestion = null;
       this.currentTaskChanges = [];
       this.completedTaskChanges = [];
     },

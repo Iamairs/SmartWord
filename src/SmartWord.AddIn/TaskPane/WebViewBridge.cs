@@ -31,6 +31,10 @@ namespace SmartWord.AddIn.TaskPane
             new ConcurrentDictionary<string, TaskCompletionSource<bool>>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, bool> _earlyConfirmationResults =
             new ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, TaskCompletionSource<string>> _pendingQuestionAnswers =
+            new ConcurrentDictionary<string, TaskCompletionSource<string>>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, string> _earlyQuestionAnswers =
+            new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private CoreWebView2 _coreWebView2;
         private CancellationTokenSource _currentCts;
 
@@ -330,6 +334,57 @@ namespace SmartWord.AddIn.TaskPane
             }
         }
 
+        /// <summary>前端调用此方法提交采访问题的答案。</summary>
+        public string SubmitQuestionAnswer(string questionId, string answer)
+        {
+            if (string.IsNullOrWhiteSpace(questionId))
+                return JsonConvert.SerializeObject(new { success = false, message = "questionId 不能为空。" });
+
+            var safeAnswer = answer ?? string.Empty;
+            if (_pendingQuestionAnswers.TryRemove(questionId, out var tcs))
+            {
+                tcs.TrySetResult(safeAnswer);
+            }
+            else
+            {
+                _earlyQuestionAnswers[questionId] = safeAnswer;
+            }
+
+            return JsonConvert.SerializeObject(new { success = true });
+        }
+
+        internal async Task<string> WaitForQuestionAnswerAsync(string questionId, CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(questionId))
+                throw new ArgumentException("questionId 不能为空。", nameof(questionId));
+
+            if (_earlyQuestionAnswers.TryRemove(questionId, out var earlyAnswer))
+                return earlyAnswer;
+
+            var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!_pendingQuestionAnswers.TryAdd(questionId, tcs))
+            {
+                if (_pendingQuestionAnswers.TryGetValue(questionId, out var existing))
+                    return await existing.Task.ConfigureAwait(false);
+                return string.Empty;
+            }
+
+            var registration = cancellationToken.Register(() =>
+            {
+                if (_pendingQuestionAnswers.TryRemove(questionId, out var pending))
+                    pending.TrySetCanceled(cancellationToken);
+            });
+
+            try
+            {
+                return await tcs.Task.ConfigureAwait(false);
+            }
+            finally
+            {
+                registration.Dispose();
+            }
+        }
+
         private CancellationTokenSource ReplaceCurrentCancellationTokenSource()
         {
             lock (_ctsSyncRoot)
@@ -421,7 +476,9 @@ namespace SmartWord.AddIn.TaskPane
                 totalSteps = agentEvent.TotalSteps,
                 detectedMode = agentEvent.DetectedMode,
                 message = agentEvent.Message,
-                citations = agentEvent.Citations
+                citations = agentEvent.Citations,
+                questionOptions = agentEvent.QuestionOptions,
+                planJson = agentEvent.PlanJson
             };
         }
 
@@ -465,6 +522,10 @@ namespace SmartWord.AddIn.TaskPane
                     return "document_not_writable";
                 case AgentEventType.Cancelled:
                     return "cancelled";
+                case AgentEventType.QuestionAsked:
+                    return "question_asked";
+                case AgentEventType.PlanReady:
+                    return "plan_ready";
                 case AgentEventType.Error:
                 default:
                     return "error";

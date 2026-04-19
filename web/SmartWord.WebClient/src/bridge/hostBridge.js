@@ -253,5 +253,14 @@ export const hostBridge = {
     }
 
     await callBridge('NavigateToParagraph', paragraphIndex);
+  },
+
+  async submitQuestionAnswer(questionId, answer) {
+    if (this.isAvailable) {
+      await callBridge('SubmitQuestionAnswer', questionId, answer || '');
+      return;
+    }
+    // 浏览器降级模式：直接触发模拟事件
+    emitEvent({ type: 'question_answered', questionId, answer: answer || '' });
   }
 };
