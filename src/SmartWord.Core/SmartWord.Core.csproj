@@ -55,6 +55,7 @@
     <Compile Include="Enums\ToolPermission.cs" />
     <Compile Include="Interfaces\IAgentOrchestrator.cs" />
     <Compile Include="Interfaces\IConfirmationChannel.cs" />
+    <Compile Include="Interfaces\IQuestionChannel.cs" />
     <Compile Include="Interfaces\IContextHydrator.cs" />
     <Compile Include="Interfaces\IConversationStore.cs" />
     <Compile Include="Interfaces\ILlmClient.cs" />

@@ -70,6 +70,7 @@
     <Compile Include="Context\ContextHydrator.cs" />
     <Compile Include="Context\ConversationCompressor.cs" />
     <Compile Include="Orchestration\AgentOrchestrator.cs" />
+    <Compile Include="Orchestration\ExecutionPlanParser.cs" />
     <Compile Include="Orchestration\IntentRouter.cs" />
     <Compile Include="Pipeline\StreamingResponseHandler.cs" />
     <Compile Include="PromptBuilder\SystemPromptBuilder.cs" />

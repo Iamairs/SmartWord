@@ -26,7 +26,7 @@ namespace SmartWord.Application.Orchestration
     public sealed class AgentOrchestrator : IAgentOrchestrator
     {
         private const int AskModeMaxIterations = 5;
-        private const int MaxToolCallsPerIteration = 10;
+        private const int MaxToolCallsPerIteration = 20;
         private const int ConsecutiveFailureThreshold = 3;
         private const int WriteRepairAttemptLimit = 3;
         private static readonly TimeSpan ToolExecutionTimeout = TimeSpan.FromSeconds(30);
@@ -40,6 +40,7 @@ namespace SmartWord.Application.Orchestration
         private readonly IToolRegistry _toolRegistry;
         private readonly PermissionGuard _permissionGuard;
         private readonly IConfirmationChannel _confirmationChannel;
+        private readonly IQuestionChannel _questionChannel;
         private readonly IUndoScopeFactory _undoScopeFactory;
         private readonly ConversationCompressor _conversationCompressor;
 
@@ -52,7 +53,8 @@ namespace SmartWord.Application.Orchestration
             PermissionGuard permissionGuard,
             IConfirmationChannel confirmationChannel,
             IUndoScopeFactory undoScopeFactory,
-            ConversationCompressor conversationCompressor)
+            ConversationCompressor conversationCompressor,
+            IQuestionChannel questionChannel = null)
         {
             _llmClient = llmClient;
             _contextHydrator = contextHydrator;
@@ -61,6 +63,7 @@ namespace SmartWord.Application.Orchestration
             _toolRegistry = toolRegistry;
             _permissionGuard = permissionGuard;
             _confirmationChannel = confirmationChannel;
+            _questionChannel = questionChannel;
             _undoScopeFactory = undoScopeFactory;
             _conversationCompressor = conversationCompressor ?? throw new ArgumentNullException(nameof(conversationCompressor));
         }
@@ -145,6 +148,8 @@ namespace SmartWord.Application.Orchestration
     var shouldCommitUndo = false;
     var hasStartedWriteExecution = false;
     var hasCompactedContext = false;
+    var interviewRound = 0;
+    const int MaxInterviewRounds = 3;
     PendingWriteStep pendingWriteStep = null;
     AgentMessage finalAssistantMessage = null;
     IUndoScope undoScope = null;
@@ -278,6 +283,16 @@ namespace SmartWord.Application.Orchestration
                 };
             }
 
+            NormalizeToolCalls(assistantMessage.ToolCalls, safeOptions.Mode, iteration);
+            Log.Information(
+                "编排器收到模型响应。Mode={Mode}, Iteration={Iteration}, ToolCallCount={ToolCallCount}, ToolSummary={ToolSummary}",
+                safeOptions.Mode,
+                iteration + 1,
+                assistantMessage.ToolCalls == null ? 0 : assistantMessage.ToolCalls.Count,
+                assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0
+                    ? "none"
+                    : string.Join(", ", assistantMessage.ToolCalls.Select(item => $"{item.Name}#{item.Id}")));
+
             finalAssistantMessage = assistantMessage;
             await _conversationStore
                 .AppendAssistantMessageAsync(documentPath, assistantMessage, cancellationToken)
@@ -286,6 +301,19 @@ namespace SmartWord.Application.Orchestration
 
             if (assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0)
             {
+                if (safeOptions.Mode == AgentMode.Plan)
+                {
+                    if (ExecutionPlanParser.TryParse(assistantMessage.Content, out var plan))
+                    {
+                        yield return new AgentEvent
+                        {
+                            Type = AgentEventType.PlanReady,
+                            PlanJson = JsonConvert.SerializeObject(plan)
+                        };
+                    }
+                    break;
+                }
+
                 if (pendingWriteStep != null)
                 {
                     yield return CreatePendingWriteStateEvent(pendingWriteStep);
@@ -306,9 +334,108 @@ namespace SmartWord.Application.Orchestration
             }
 
             var shouldContinueWithNextAssistantTurn = false;
-            foreach (var toolCall in toolCalls)
+            var remainingToolCallsStartIndex = -1;
+            var remainingToolCallsReason = string.Empty;
+            for (var toolCallIndex = 0; toolCallIndex < toolCalls.Count; toolCallIndex++)
             {
+                var toolCall = toolCalls[toolCallIndex];
                 cancellationToken.ThrowIfCancellationRequested();
+
+                if (string.Equals(toolCall.Name, "ask_user_question", StringComparison.OrdinalIgnoreCase)
+                    && safeOptions.Mode == AgentMode.Plan)
+                {
+                    JObject aqInput = null;
+                    try { aqInput = string.IsNullOrWhiteSpace(toolCall.Input) ? new JObject() : JObject.Parse(toolCall.Input); }
+                    catch { /* 解析失败则 question/options 为空 */ }
+
+                    var question = aqInput?.Value<string>("question") ?? string.Empty;
+                    var optionsToken = aqInput?["options"] as JArray;
+                    var questionOptions = optionsToken != null
+                        ? optionsToken
+                            .Select(t => t.Value<string>() ?? string.Empty)
+                            .Where(option => !string.IsNullOrWhiteSpace(option))
+                            .ToArray()
+                        : new string[0];
+
+                    if (string.IsNullOrWhiteSpace(question))
+                    {
+                        var invalidQuestionResult = ToolCallResult.Error(
+                            toolCall.Name,
+                            "ask_user_question 缺少有效的 question 文本，系统已拒绝本次采访问题。");
+                        await AppendToolResultAsync(documentPath, messages, toolCall, invalidQuestionResult, cancellationToken)
+                            .ConfigureAwait(false);
+
+                        yield return CreateToolCompletedEvent(toolCall, invalidQuestionResult);
+
+                        consecutiveFailures++;
+                        if (consecutiveFailures >= ConsecutiveFailureThreshold)
+                        {
+                            yield return CreateCircuitBreakerEvent();
+                            yield break;
+                        }
+
+                        continue;
+                    }
+
+                    interviewRound++;
+                    Log.Information(
+                        "Plan 模式发起采访问题。Iteration={Iteration}, InterviewRound={InterviewRound}, ToolCallId={ToolCallId}, Question={Question}",
+                        iteration + 1,
+                        interviewRound,
+                        toolCall.Id,
+                        question);
+
+                    yield return new AgentEvent
+                    {
+                        Type = AgentEventType.QuestionAsked,
+                        ToolCallId = toolCall.Id,
+                        ToolName = toolCall.Name,
+                        ToolInput = toolCall.Input ?? string.Empty,
+                        Content = question,
+                        QuestionOptions = questionOptions,
+                        RequiresConfirmation = true
+                    };
+
+                    string answer;
+                    if (_questionChannel != null && _questionChannel.IsAvailable)
+                    {
+                        Log.Information(
+                            "Plan 模式等待用户回答。ToolCallId={ToolCallId}",
+                            toolCall.Id);
+                        answer = await _questionChannel.WaitForAnswerAsync(toolCall.Id, cancellationToken).ConfigureAwait(false);
+                        Log.Information(
+                            "Plan 模式已收到用户回答。ToolCallId={ToolCallId}, AnswerLength={AnswerLength}",
+                            toolCall.Id,
+                            answer == null ? 0 : answer.Length);
+                    }
+                    else
+                    {
+                        // 无问答通道时降级：将问题作为文本输出，等待下一轮用户消息
+                        answer = string.Empty;
+                    }
+
+                    if (interviewRound >= MaxInterviewRounds)
+                    {
+                        messages.Add(new AgentMessage
+                        {
+                            Role = "user",
+                            Content = string.IsNullOrWhiteSpace(answer)
+                                ? "[系统] 采访已达到最大轮次，请立即基于已收集信息输出执行计划，不得再提问。"
+                                : $"用户回答：{answer}\n\n[系统] 采访已达到最大轮次，请立即输出执行计划，不得再提问。"
+                        });
+                    }
+                    else
+                    {
+                        await AppendToolResultAsync(documentPath, messages, toolCall,
+                            ToolCallResult.Ok($"用户回答：{answer}"), cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+
+                    shouldContinueWithNextAssistantTurn = true;
+                    remainingToolCallsStartIndex = toolCallIndex + 1;
+                    remainingToolCallsReason = "本轮已进入 Plan 采访等待状态，剩余工具调用已跳过。请在收到用户回答后再继续。";
+                    break;
+                }
 
                 if (IsVerificationTool(toolCall.Name))
                 {
@@ -339,6 +466,8 @@ namespace SmartWord.Application.Orchestration
                     if (pendingWriteStep != null)
                     {
                         shouldContinueWithNextAssistantTurn = true;
+                        remainingToolCallsStartIndex = toolCallIndex + 1;
+                        remainingToolCallsReason = "当前轮次已停在待修复状态，剩余工具调用已跳过。";
                         break;
                     }
 
@@ -348,11 +477,11 @@ namespace SmartWord.Application.Orchestration
                 var tool = _toolRegistry.GetTool(toolCall.Name);
                 var isWriteTool = IsWriteTool(tool);
 
-                if (pendingWriteStep != null && !isWriteTool)
+                if (pendingWriteStep != null && !isWriteTool && !IsRepairProbeTool(toolCall.Name))
                 {
                     var repairOnlyResult = ToolCallResult.Denied(
                         toolCall.Name,
-                        "当前仍有待修复的写步骤。请先使用 patch_range 或 execute_script 修复当前失败步骤，再继续其它工具操作。");
+                        "当前仍有待修复的写步骤。此时仅允许使用 read_script 做只读探针，或直接使用 patch_range / execute_script 修复当前失败步骤。");
                     await AppendToolResultAsync(documentPath, messages, toolCall, repairOnlyResult, cancellationToken)
                         .ConfigureAwait(false);
 
@@ -375,6 +504,8 @@ namespace SmartWord.Application.Orchestration
                     }
 
                     shouldContinueWithNextAssistantTurn = true;
+                    remainingToolCallsStartIndex = toolCallIndex + 1;
+                    remainingToolCallsReason = "当前仍有待修复的写步骤，剩余工具调用已跳过。";
                     break;
                 }
 
@@ -433,6 +564,8 @@ namespace SmartWord.Application.Orchestration
                     if (pendingWriteStep != null)
                     {
                         shouldContinueWithNextAssistantTurn = true;
+                        remainingToolCallsStartIndex = toolCallIndex + 1;
+                        remainingToolCallsReason = "当前轮次已停在待修复状态，剩余工具调用已跳过。";
                         break;
                     }
 
@@ -456,6 +589,8 @@ namespace SmartWord.Application.Orchestration
                     if (pendingWriteStep != null)
                     {
                         shouldContinueWithNextAssistantTurn = true;
+                        remainingToolCallsStartIndex = toolCallIndex + 1;
+                        remainingToolCallsReason = "当前轮次已停在待修复状态，剩余工具调用已跳过。";
                         break;
                     }
 
@@ -493,6 +628,8 @@ namespace SmartWord.Application.Orchestration
                         if (pendingWriteStep != null)
                         {
                             shouldContinueWithNextAssistantTurn = true;
+                            remainingToolCallsStartIndex = toolCallIndex + 1;
+                            remainingToolCallsReason = "当前轮次已停在待修复状态，剩余工具调用已跳过。";
                             break;
                         }
 
@@ -523,6 +660,8 @@ namespace SmartWord.Application.Orchestration
                         if (pendingWriteStep != null)
                         {
                             shouldContinueWithNextAssistantTurn = true;
+                            remainingToolCallsStartIndex = toolCallIndex + 1;
+                            remainingToolCallsReason = "当前轮次已停在待修复状态，剩余工具调用已跳过。";
                             break;
                         }
 
@@ -660,6 +799,8 @@ namespace SmartWord.Application.Orchestration
                         }
 
                         shouldContinueWithNextAssistantTurn = true;
+                        remainingToolCallsStartIndex = toolCallIndex + 1;
+                        remainingToolCallsReason = "当前轮次已进入写后自动验证，剩余工具调用已跳过。";
                         break;
                     }
 
@@ -667,6 +808,8 @@ namespace SmartWord.Application.Orchestration
                     if (pendingWriteStep != null)
                     {
                         shouldContinueWithNextAssistantTurn = true;
+                        remainingToolCallsStartIndex = toolCallIndex + 1;
+                        remainingToolCallsReason = "当前轮次仍需先完成写步骤验证，剩余工具调用已跳过。";
                         break;
                     }
                 }
@@ -700,6 +843,8 @@ namespace SmartWord.Application.Orchestration
                         }
 
                         shouldContinueWithNextAssistantTurn = true;
+                        remainingToolCallsStartIndex = toolCallIndex + 1;
+                        remainingToolCallsReason = "当前写步骤执行失败，系统已进入修复状态，剩余工具调用已跳过。";
                         break;
                     }
 
@@ -713,6 +858,8 @@ namespace SmartWord.Application.Orchestration
                     if (pendingWriteStep != null)
                     {
                         shouldContinueWithNextAssistantTurn = true;
+                        remainingToolCallsStartIndex = toolCallIndex + 1;
+                        remainingToolCallsReason = "当前轮次已停在待修复状态，剩余工具调用已跳过。";
                         break;
                     }
                 }
@@ -720,6 +867,18 @@ namespace SmartWord.Application.Orchestration
 
             if (shouldContinueWithNextAssistantTurn)
             {
+                if (remainingToolCallsStartIndex >= 0 && remainingToolCallsStartIndex < toolCalls.Count)
+                {
+                    await AppendSkippedRemainingToolCallsAsync(
+                            documentPath,
+                            messages,
+                            toolCalls,
+                            remainingToolCallsStartIndex,
+                            remainingToolCallsReason,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
                 continue;
             }
         }
@@ -790,6 +949,44 @@ namespace SmartWord.Application.Orchestration
                 RawToolInput = toolCall.Input ?? string.Empty,
                 ToolSuccess = result.Success
             });
+        }
+
+        private async Task AppendSkippedRemainingToolCallsAsync(
+            string documentPath,
+            IList<AgentMessage> messages,
+            IReadOnlyList<ToolCall> toolCalls,
+            int startIndex,
+            string reason,
+            CancellationToken cancellationToken)
+        {
+            if (toolCalls == null || startIndex < 0 || startIndex >= toolCalls.Count)
+            {
+                return;
+            }
+
+            for (var index = startIndex; index < toolCalls.Count; index++)
+            {
+                var skippedToolCall = toolCalls[index];
+                var skippedResult = ToolCallResult.Skipped(
+                    skippedToolCall.Name,
+                    string.IsNullOrWhiteSpace(reason)
+                        ? "当前轮次已提前结束，剩余工具调用已跳过。"
+                        : reason);
+
+                await AppendToolResultAsync(
+                        documentPath,
+                        messages,
+                        skippedToolCall,
+                        skippedResult,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                Log.Information(
+                    "已为剩余工具调用补齐 skipped 结果。ToolCallId={ToolCallId}, ToolName={ToolName}, Reason={Reason}",
+                    skippedToolCall.Id,
+                    skippedToolCall.Name,
+                    reason);
+            }
         }
 
         private string BuildSystemPrompt(AgentRunOptions options, DocumentContext documentContext)
@@ -1162,6 +1359,11 @@ namespace SmartWord.Application.Orchestration
         private static bool IsVerificationTool(string toolName)
         {
             return string.Equals(toolName, "verify_script", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsRepairProbeTool(string toolName)
+        {
+            return string.Equals(toolName, "read_script", StringComparison.OrdinalIgnoreCase);
         }
 
         private static AutoVerifyPlan BuildAutoVerifyPlan(string toolName, JObject parsedInput)
@@ -1679,6 +1881,35 @@ namespace SmartWord.Application.Orchestration
                     return "准备执行脚本写入。";
                 default:
                     return "准备执行工具：" + (toolName ?? string.Empty);
+            }
+        }
+
+        private static void NormalizeToolCalls(
+            IReadOnlyList<ToolCall> toolCalls,
+            AgentMode mode,
+            int iteration)
+        {
+            if (toolCalls == null)
+            {
+                return;
+            }
+
+            for (var index = 0; index < toolCalls.Count; index++)
+            {
+                var toolCall = toolCalls[index];
+                if (toolCall == null)
+                {
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(toolCall.Id))
+                {
+                    toolCall.Id =
+                        $"autogen_{mode.ToString().ToLowerInvariant()}_{iteration + 1}_{index + 1}_{System.Guid.NewGuid():N}";
+                }
+
+                toolCall.Name = toolCall.Name ?? string.Empty;
+                toolCall.Input = toolCall.Input ?? string.Empty;
             }
         }
 

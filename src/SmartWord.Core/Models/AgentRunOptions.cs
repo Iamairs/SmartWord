@@ -22,5 +22,11 @@ namespace SmartWord.Core.Models
         public string ModelRoutingMessage { get; set; } = string.Empty;
 
         public string CustomSystemInstructions { get; set; } = string.Empty;
+
+        /// <summary>Plan→Agent 切换时传入的执行计划，用于进度追踪</summary>
+        public ExecutionPlan ActivePlan { get; set; }
+
+        /// <summary>当前已完成的 TodoItem 索引</summary>
+        public int CurrentTodoIndex { get; set; } = 0;
     }
 }

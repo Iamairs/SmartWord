@@ -96,6 +96,7 @@
     <Compile Include="Scripting\ScriptContext.cs" />
     <Compile Include="Scripting\ScriptGlobals.cs" />
     <Compile Include="Scripting\ScriptSecurityValidator.cs" />
+    <Compile Include="Tools\AskUserQuestionTool.cs" />
     <Compile Include="Tools\ExecuteScriptTool.cs" />
     <Compile Include="Tools\GetSelectionContextTool.cs" />
     <Compile Include="Tools\GrepDocumentTool.cs" />

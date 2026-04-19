@@ -25,7 +25,11 @@ namespace SmartWord.Core.Models
         DocumentMismatch = 15,
         DocumentNotWritable = 16,
         Error = 17,
-        Cancelled = 18
+        Cancelled = 18,
+        /// <summary>Plan 模式采访阶段：LLM 向用户提问</summary>
+        QuestionAsked = 19,
+        /// <summary>Plan 模式规划完成：ExecutionPlan 已生成</summary>
+        PlanReady = 20
     }
 
     /// <summary>
@@ -66,5 +70,11 @@ namespace SmartWord.Core.Models
         public string Message { get; set; } = string.Empty;
 
         public List<CitationEntry> Citations { get; set; } = new List<CitationEntry>();
+
+        /// <summary>QuestionAsked 事件携带的选项列表</summary>
+        public string[] QuestionOptions { get; set; }
+
+        /// <summary>PlanReady 事件携带的序列化 ExecutionPlan JSON</summary>
+        public string PlanJson { get; set; } = string.Empty;
     }
 }
