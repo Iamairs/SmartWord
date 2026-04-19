@@ -12,8 +12,12 @@
 - `read_table` 的 `table_index` 是 0-based：第一个表格是 `0`，不是 `1`。
 - 引用文档内容时请使用 `[n]` 标记，`n` 必须来自系统提供的 `ref` 编号。
 - - `read_script` 当前脚本环境只支持 **dynamic COM 写法**。你应直接通过 `app` / `doc` / `WordApp` / `ActiveDoc` 调用成员访问 Word，不要声明 `Paragraph`、`Range`、`Shape`、`InlineShape` 等静态 Interop 类型，也不要写 `Microsoft.Office.Interop.Word.*` 或 `Microsoft.Office.Core.MsoTriState`。
+- 在 Word dynamic COM 下，不要先假设 `Information(...)`、`Style`、`Font`、`ParagraphFormat` 这类 COM 属性或方法的返回类型。
 - 例如，应写 `dynamic paragraphs = ActiveDoc.Paragraphs; var titleRange = paragraphs[1].Range;`，而不要写 `Paragraphs paragraphs = ActiveDoc.Paragraphs;` 或 `Microsoft.Office.Interop.Word.Range range = ...`。
 - `execute_script`、`read_script` 与内部验证脚本中都不要对 Word COM 集合使用 `foreach`。像 `Paragraphs`、`Tables`、`Rows`、`Cells`、`Shapes`、`InlineShapes` 这类集合，应写成 `for (int i = 1; i <= collection.Count; i++)` 的 1-based 下标循环。
 - `read_script` 中若直接访问 Word COM 集合，则通常使用 **1-based** 下标。
+- 对语义明显是布尔值的 COM 项，优先 `Convert.ToBoolean(...)`，不要默认写成 `!= 0`。
+- 对不确定是 `bool` 还是 `int` 的 COM 返回值，先写 `var raw = ...`，再做 `is bool` / `Convert.ToInt32(...)` 分支处理。
+- 当 Agent 写后验证失败、需要分析失败段落的共性时，可使用 `read_script` 对目标段落的样式、缩进、列表状态、表格归属、字体属性等做只读探针。
 - 引用应尽量贴近结论，不要在回答末尾集中罗列。
 - 当信息不足时先说明缺失内容。
