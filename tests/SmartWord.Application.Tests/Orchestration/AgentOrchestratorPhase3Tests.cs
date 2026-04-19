@@ -1,5 +1,5 @@
-using System.Collections.Generic;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -68,6 +68,58 @@ namespace SmartWord.Application.Tests.Orchestration
             });
 
             Assert.Null(undoScopeFactory.LastScope);
+        }
+
+        [Fact]
+        public async Task RunAsync_PlanModeQuestionWithoutId_GeneratesStableIdAndSkipsRemainingToolCalls()
+        {
+            var conversationStore = new InMemoryConversationStore();
+            var questionChannel = new FakeQuestionChannel("保留原结构");
+            var orchestrator = CreateOrchestrator(
+                new FakeLlmClient(
+                    CreateToolCallMessage(
+                        CreateToolCall(
+                            string.Empty,
+                            "ask_user_question",
+                            "{\"question\":\"是否保留当前结构？\",\"options\":[\"保留原结构\",\"重新组织\"]}"),
+                        CreateToolCall(
+                            "plan-q-2",
+                            "ask_user_question",
+                            "{\"question\":\"语气偏正式还是简洁？\",\"options\":[\"正式\",\"简洁\"]}")),
+                    new AgentMessage
+                    {
+                        Role = "assistant",
+                        Content = "```json\n{\"task_description\":\"保留当前结构并优化表达。\",\"todo_list\":[\"梳理现有结构\",\"统一语言风格\"],\"risk_notes\":[\"第二个采访问题已延后到下一轮处理。\"]}\n```"
+                    }),
+                CreateWritableHydrator(),
+                new ITool[]
+                {
+                    new FakeTool("ask_user_question", ToolPermission.ReadOnly, ToolCallResult.Ok("{}"))
+                },
+                conversationStore: conversationStore,
+                questionChannel: questionChannel);
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "请先帮我规划怎么润色这篇文档",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Plan,
+                    EnableToolCalling = true
+                },
+                CancellationToken.None));
+
+            var questionEvent = Assert.Single(events.Where(item => item.Type == AgentEventType.QuestionAsked));
+            Assert.False(string.IsNullOrWhiteSpace(questionEvent.ToolCallId));
+            Assert.Equal(questionEvent.ToolCallId, questionChannel.LastQuestionId);
+            Assert.Contains(events, item => item.Type == AgentEventType.PlanReady);
+
+            var history = await conversationStore.GetHistoryAsync("doc1", CancellationToken.None);
+            var toolMessages = history.Where(item => string.Equals(item.Role, "tool", StringComparison.OrdinalIgnoreCase)).ToList();
+
+            Assert.Equal(2, toolMessages.Count);
+            Assert.Equal(questionEvent.ToolCallId, toolMessages[0].ToolCallId);
+            Assert.Equal("plan-q-2", toolMessages[1].ToolCallId);
+            Assert.Contains("剩余工具调用已跳过", toolMessages[1].Content);
         }
 
         [Fact]
@@ -514,7 +566,7 @@ namespace SmartWord.Application.Tests.Orchestration
         }
 
         [Fact]
-        public async Task RunAsync_PendingWriteRepair_DeniesReadToolUntilWriteToolRepairs()
+        public async Task RunAsync_PendingWriteRepair_DeniesNonProbeReadToolUntilWriteToolRepairs()
         {
             var llmClient = new FakeLlmClient(
                 CreateToolCallMessage(
@@ -560,9 +612,62 @@ namespace SmartWord.Application.Tests.Orchestration
         }
 
         [Fact]
-        public async Task RunAsync_MoreThanTenToolCalls_TruncatesAtTen()
+        public async Task RunAsync_PendingWriteRepair_AllowsReadScriptProbeBeforeNextRepairTurn()
         {
-            var toolCalls = Enumerable.Range(1, 11)
+            var llmClient = new FakeLlmClient(
+                CreateToolCallMessage(
+                    CreateToolCall("write-1", "execute_script", "{\"description\":\"fix title\",\"write_code\":\"bad\",\"verify_code\":\"return new { all_passed = true, results = new object[0] };\"}")),
+                CreateToolCallMessage(
+                    CreateToolCall("probe-1", "read_script", "{\"description\":\"probe failed paragraphs\",\"code\":\"return new { paragraph_count = 3 };\"}")),
+                new AgentMessage
+                {
+                    Role = "assistant",
+                    Content = "cannot continue"
+                });
+            var writeTool = new FakeTool(
+                "execute_script",
+                ToolPermission.Write,
+                ToolCallResult.Error("execute_script", "script failed"));
+            var probeTool = new FakeTool(
+                "read_script",
+                ToolPermission.ReadOnly,
+                ToolCallResult.Ok("{\"output\":\"{\\\"paragraph_count\\\":3}\",\"log_output\":\"\",\"return_value_type\":\"<>f__AnonymousType0\"}"));
+            var orchestrator = CreateOrchestrator(
+                llmClient,
+                CreateWritableHydrator(),
+                new ITool[] { writeTool, probeTool },
+                new FakeConfirmationChannel(true, true));
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "repair current step",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Agent,
+                    EnableToolCalling = true,
+                    RequireConfirmationForScripts = true
+                },
+                CancellationToken.None));
+
+            Assert.Contains(events, item => item.Type == AgentEventType.ChangeRepairRequired);
+            Assert.Contains(events, item =>
+                item.Type == AgentEventType.ToolCallStarted
+                && item.ToolName == "read_script");
+            Assert.Contains(events, item =>
+                item.Type == AgentEventType.ToolCallCompleted
+                && item.ToolName == "read_script"
+                && item.ToolSuccess);
+            Assert.DoesNotContain(events, item =>
+                item.Type == AgentEventType.ToolCallDenied
+                && item.ToolName == "read_script");
+            Assert.DoesNotContain(events, item => item.Type == AgentEventType.TaskCompleted);
+            Assert.Equal(1, writeTool.ExecutionCount);
+            Assert.Equal(1, probeTool.ExecutionCount);
+        }
+
+        [Fact]
+        public async Task RunAsync_MoreThanTwentyToolCalls_TruncatesAtTwenty()
+        {
+            var toolCalls = Enumerable.Range(1, 21)
                 .Select(index => CreateToolCall(index.ToString(), "read_section", "{\"heading\":\"第一章\"}"))
                 .ToArray();
             var llmClient = new FakeLlmClient(
@@ -590,8 +695,8 @@ namespace SmartWord.Application.Tests.Orchestration
                 },
                 CancellationToken.None));
 
-            Assert.Equal(10, readTool.ExecutionCount);
-            Assert.Equal(10, events.Count(item => item.Type == AgentEventType.ToolCallStarted));
+            Assert.Equal(20, readTool.ExecutionCount);
+            Assert.Equal(20, events.Count(item => item.Type == AgentEventType.ToolCallStarted));
             Assert.Contains(events, item => item.Type == AgentEventType.TaskCompleted);
         }
 
@@ -640,7 +745,8 @@ namespace SmartWord.Application.Tests.Orchestration
             IEnumerable<ITool> tools = null,
             IConfirmationChannel confirmationChannel = null,
             IUndoScopeFactory undoScopeFactory = null,
-            IConversationStore conversationStore = null)
+            IConversationStore conversationStore = null,
+            IQuestionChannel questionChannel = null)
         {
             var registry = new ToolRegistry();
             if (tools != null)
@@ -663,7 +769,8 @@ namespace SmartWord.Application.Tests.Orchestration
                 new PermissionGuard(registry),
                 confirmationChannel ?? new FakeConfirmationChannel(true, false),
                 undoScopeFactory ?? new FakeUndoScopeFactory(),
-                new ConversationCompressor());
+                new ConversationCompressor(),
+                questionChannel);
         }
 
         private static FakeContextHydrator CreateWritableHydrator()
@@ -893,6 +1000,28 @@ namespace SmartWord.Application.Tests.Orchestration
                 _ = toolCallId;
                 cancellationToken.ThrowIfCancellationRequested();
                 return Task.FromResult(_confirmationResult);
+            }
+        }
+
+        private sealed class FakeQuestionChannel : IQuestionChannel
+        {
+            private readonly string _answer;
+
+            public FakeQuestionChannel(string answer, bool isAvailable = true)
+            {
+                _answer = answer;
+                IsAvailable = isAvailable;
+            }
+
+            public bool IsAvailable { get; }
+
+            public string LastQuestionId { get; private set; }
+
+            public Task<string> WaitForAnswerAsync(string questionId, CancellationToken cancellationToken)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                LastQuestionId = questionId;
+                return Task.FromResult(_answer);
             }
         }
 
