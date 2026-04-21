@@ -168,7 +168,10 @@ namespace SmartWord.AddIn.TaskPane
                             ?? smartWordSettings.RequireConfirmationForScripts,
                         EnableToolCalling = modelRoute.EnableToolCalling,
                         ModelRoutingMessage = modelRoute.RoutingMessage ?? string.Empty,
-                        CustomSystemInstructions = customInstructions ?? string.Empty
+                        CustomSystemInstructions = customInstructions ?? string.Empty,
+                        ActivePlan = request["activePlan"] == null
+                            ? null
+                            : request["activePlan"].ToObject<ExecutionPlan>()
                     };
 
                     Log.Information(
@@ -478,7 +481,9 @@ namespace SmartWord.AddIn.TaskPane
                 message = agentEvent.Message,
                 citations = agentEvent.Citations,
                 questionOptions = agentEvent.QuestionOptions,
-                planJson = agentEvent.PlanJson
+                planJson = agentEvent.PlanJson,
+                boardJson = agentEvent.BoardJson,
+                currentTodoId = agentEvent.CurrentTodoId
             };
         }
 
@@ -526,6 +531,12 @@ namespace SmartWord.AddIn.TaskPane
                     return "question_asked";
                 case AgentEventType.PlanReady:
                     return "plan_ready";
+                case AgentEventType.TodoBoardReady:
+                    return "todo_board_ready";
+                case AgentEventType.TodoBoardUpdated:
+                    return "todo_board_updated";
+                case AgentEventType.TodoReminderInjected:
+                    return "todo_reminder_injected";
                 case AgentEventType.Error:
                 default:
                     return "error";

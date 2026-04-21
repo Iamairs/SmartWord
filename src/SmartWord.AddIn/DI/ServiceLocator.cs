@@ -7,6 +7,7 @@ using SmartWord.Application.Context;
 using SmartWord.Application.Orchestration;
 using SmartWord.Application.Pipeline;
 using SmartWord.Application.PromptBuilder;
+using SmartWord.Application.Todo;
 using SmartWord.Application.Tools;
 using SmartWord.AddIn.TaskPane;
 using SmartWord.Core.Interfaces;
@@ -53,7 +54,10 @@ namespace SmartWord.AddIn.DI
                 provider.GetRequiredService<SmartWordSettings>()));
             services.AddSingleton<ILlmClient, OpenAiCompatibleClient>();
             services.AddSingleton<IConversationStore, InMemoryConversationStore>();
+            services.AddSingleton<ITodoStore, JsonTodoStore>();
             services.AddSingleton<IContextHydrator, ContextHydrator>();
+            services.AddSingleton<TodoManager>();
+            services.AddSingleton<TodoReminderService>();
             services.AddSingleton<IToolRegistry>(provider =>
             {
                 var registry = new ToolRegistry();
@@ -78,6 +82,8 @@ namespace SmartWord.AddIn.DI
                     provider.GetRequiredService<CSharpScriptExecutor>(),
                     provider.GetRequiredService<ScriptSecurityValidator>()));
                 registry.Register(new AskUserQuestionTool());
+                registry.Register(new TodoReadTool(provider.GetRequiredService<TodoManager>()));
+                registry.Register(new TodoWriteTool(provider.GetRequiredService<TodoManager>()));
                 return registry;
             });
             services.AddSingleton<PermissionGuard>();
@@ -94,7 +100,9 @@ namespace SmartWord.AddIn.DI
                 provider.GetRequiredService<IConfirmationChannel>(),
                 provider.GetRequiredService<IUndoScopeFactory>(),
                 provider.GetRequiredService<ConversationCompressor>(),
-                provider.GetRequiredService<IQuestionChannel>()));
+                provider.GetRequiredService<IQuestionChannel>(),
+                provider.GetRequiredService<TodoManager>(),
+                provider.GetRequiredService<TodoReminderService>()));
             services.AddSingleton<StreamingResponseHandler>();
 
             _serviceProvider = services.BuildServiceProvider();
