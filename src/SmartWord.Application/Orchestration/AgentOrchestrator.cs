@@ -12,6 +12,7 @@ using Newtonsoft.Json.Linq;
 using Serilog;
 using SmartWord.Application.Context;
 using SmartWord.Application.PromptBuilder;
+using SmartWord.Application.Todo;
 using SmartWord.Application.Tools;
 using SmartWord.Core.Enums;
 using SmartWord.Core.Interfaces;
@@ -43,6 +44,8 @@ namespace SmartWord.Application.Orchestration
         private readonly IQuestionChannel _questionChannel;
         private readonly IUndoScopeFactory _undoScopeFactory;
         private readonly ConversationCompressor _conversationCompressor;
+        private readonly TodoManager _todoManager;
+        private readonly TodoReminderService _todoReminderService;
 
         public AgentOrchestrator(
             ILlmClient llmClient,
@@ -54,7 +57,9 @@ namespace SmartWord.Application.Orchestration
             IConfirmationChannel confirmationChannel,
             IUndoScopeFactory undoScopeFactory,
             ConversationCompressor conversationCompressor,
-            IQuestionChannel questionChannel = null)
+            IQuestionChannel questionChannel = null,
+            TodoManager todoManager = null,
+            TodoReminderService todoReminderService = null)
         {
             _llmClient = llmClient;
             _contextHydrator = contextHydrator;
@@ -66,6 +71,8 @@ namespace SmartWord.Application.Orchestration
             _questionChannel = questionChannel;
             _undoScopeFactory = undoScopeFactory;
             _conversationCompressor = conversationCompressor ?? throw new ArgumentNullException(nameof(conversationCompressor));
+            _todoManager = todoManager;
+            _todoReminderService = todoReminderService;
         }
 
         /// <summary>
@@ -85,6 +92,7 @@ namespace SmartWord.Application.Orchestration
     var documentPath = string.IsNullOrWhiteSpace(documentContext.DocumentPath)
         ? "__active_document__"
         : documentContext.DocumentPath;
+    _todoManager?.SetCurrentDocumentPath(documentPath);
 
     if (safeOptions.Mode == AgentMode.Agent
         && (documentContext.DocumentStatus == null || !documentContext.DocumentStatus.IsWritable))
@@ -110,12 +118,32 @@ namespace SmartWord.Application.Orchestration
         .AppendUserMessageAsync(documentPath, userMessage, cancellationToken)
         .ConfigureAwait(false);
 
+    TodoBoard currentTodoBoard = null;
+    if (_todoManager != null && safeOptions.Mode == AgentMode.Agent)
+    {
+        if (safeOptions.ActivePlan != null)
+        {
+            var initResult = await _todoManager
+                .InitializeFromExecutionPlanAsync(documentPath, safeOptions.ActivePlan, cancellationToken)
+                .ConfigureAwait(false);
+            currentTodoBoard = initResult.Board;
+            yield return CreateTodoBoardReadyEvent(currentTodoBoard, _todoManager, "已初始化当前执行任务板。");
+        }
+        else
+        {
+            currentTodoBoard = await _todoManager
+                .EnsureBoardAsync(documentPath, cancellationToken)
+                .ConfigureAwait(false);
+            yield return CreateTodoBoardReadyEvent(currentTodoBoard, _todoManager, "当前 Todo Board 已就绪。");
+        }
+    }
+
     var history = await _conversationStore
         .GetHistoryAsync(documentPath, cancellationToken)
         .ConfigureAwait(false);
 
     var messages = new List<AgentMessage>();
-    var systemPrompt = BuildSystemPrompt(safeOptions, documentContext);
+    var systemPrompt = BuildSystemPrompt(safeOptions, documentContext, currentTodoBoard);
     if (!string.IsNullOrWhiteSpace(systemPrompt))
     {
         messages.Add(new AgentMessage
@@ -147,6 +175,7 @@ namespace SmartWord.Application.Orchestration
     var consecutiveFailures = 0;
     var shouldCommitUndo = false;
     var hasStartedWriteExecution = false;
+    var hasSuccessfulDocumentWriteOccurredInRun = false;
     var hasCompactedContext = false;
     var interviewRound = 0;
     const int MaxInterviewRounds = 3;
@@ -308,7 +337,7 @@ namespace SmartWord.Application.Orchestration
                         yield return new AgentEvent
                         {
                             Type = AgentEventType.PlanReady,
-                            PlanJson = JsonConvert.SerializeObject(plan)
+                            PlanJson = SerializeCamelCase(plan)
                         };
                     }
                     break;
@@ -336,6 +365,10 @@ namespace SmartWord.Application.Orchestration
             var shouldContinueWithNextAssistantTurn = false;
             var remainingToolCallsStartIndex = -1;
             var remainingToolCallsReason = string.Empty;
+            var todoWriteThisIteration = false;
+            var hasEffectiveExecutionRoundThisIteration = false;
+            var successfulDocumentWriteThisIteration = false;
+            TodoReminderDecision reminderDecision = null;
             for (var toolCallIndex = 0; toolCallIndex < toolCalls.Count; toolCallIndex++)
             {
                 var toolCall = toolCalls[toolCallIndex];
@@ -475,9 +508,10 @@ namespace SmartWord.Application.Orchestration
                 }
 
                 var tool = _toolRegistry.GetTool(toolCall.Name);
-                var isWriteTool = IsWriteTool(tool);
+                // 只有真正修改 Word 文档的工具才进入写步骤修复与验证状态机。
+                var isDocumentWriteTool = IsDocumentWriteTool(toolCall.Name);
 
-                if (pendingWriteStep != null && !isWriteTool && !IsRepairProbeTool(toolCall.Name))
+                if (pendingWriteStep != null && !isDocumentWriteTool && !IsRepairProbeTool(toolCall.Name))
                 {
                     var repairOnlyResult = ToolCallResult.Denied(
                         toolCall.Name,
@@ -525,7 +559,7 @@ namespace SmartWord.Application.Orchestration
                 var operationDescription = BuildOperationDescription(toolCall.Name, parsedInput);
                 var requiresConfirmation = safeOptions.Mode == AgentMode.Agent
                     && safeOptions.RequireConfirmationForScripts
-                    && isWriteTool;
+                    && isDocumentWriteTool;
 
                 yield return new AgentEvent
                 {
@@ -678,7 +712,7 @@ namespace SmartWord.Application.Orchestration
                     }
                     else
                     {
-                        if (isWriteTool
+                        if (isDocumentWriteTool
                             && !hasStartedWriteExecution
                             && safeOptions.Mode == AgentMode.Agent
                             && _undoScopeFactory != null)
@@ -740,10 +774,24 @@ namespace SmartWord.Application.Orchestration
                     .ConfigureAwait(false);
 
                 yield return CreateToolCompletedEvent(toolCall, executionResult);
+                if (tool != null && !IsTodoToolName(toolCall.Name))
+                {
+                    hasEffectiveExecutionRoundThisIteration = true;
+                }
+
+                if (TryGetTodoToolMetadata(executionResult, out var todoToolMetadata))
+                {
+                    todoWriteThisIteration = todoWriteThisIteration || todoToolMetadata.IsWriteOperation;
+                    currentTodoBoard = DeserializeTodoBoard(todoToolMetadata.BoardJson);
+                    yield return CreateTodoBoardEvent(
+                        AgentEventType.TodoBoardUpdated,
+                        todoToolMetadata,
+                        todoToolMetadata.IsWriteOperation ? "Todo Board 已更新。" : "Todo Board 已同步。");
+                }
 
                 if (executionResult.Success)
                 {
-                    if (isWriteTool)
+                    if (isDocumentWriteTool)
                     {
                         consecutiveFailures = 0;
                         var autoVerifyPlan = BuildAutoVerifyPlan(toolCall.Name, parsedInput);
@@ -790,6 +838,12 @@ namespace SmartWord.Application.Orchestration
                         else
                         {
                             pendingWriteStep = null;
+                            if (IsDocumentWriteTool(toolCall.Name))
+                            {
+                                successfulDocumentWriteThisIteration = true;
+                                hasSuccessfulDocumentWriteOccurredInRun = true;
+                            }
+
                             yield return CreateChangeEvent(
                                 AgentEventType.ChangeApplied,
                                 executedWriteStep,
@@ -815,7 +869,7 @@ namespace SmartWord.Application.Orchestration
                 }
                 else
                 {
-                    if (isWriteTool)
+                    if (isDocumentWriteTool)
                     {
                         consecutiveFailures++;
                         pendingWriteStep = pendingWriteStep != null
@@ -865,6 +919,33 @@ namespace SmartWord.Application.Orchestration
                 }
             }
 
+            if (_todoManager != null && safeOptions.Mode == AgentMode.Agent && currentTodoBoard != null)
+            {
+                if (todoWriteThisIteration)
+                {
+                    currentTodoBoard = await _todoManager
+                        .GetBoardAsync(documentPath, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                else if (toolCalls.Count > 0)
+                {
+                    currentTodoBoard = await _todoManager
+                        .RecordRoundWithoutTodoWriteAsync(
+                            documentPath,
+                            hasEffectiveExecutionRoundThisIteration,
+                            successfulDocumentWriteThisIteration,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
+                    if (_todoReminderService != null)
+                    {
+                        reminderDecision = _todoReminderService.BuildDecision(
+                            currentTodoBoard,
+                            hasSuccessfulDocumentWriteOccurredInRun);
+                    }
+                }
+            }
+
             if (shouldContinueWithNextAssistantTurn)
             {
                 if (remainingToolCallsStartIndex >= 0 && remainingToolCallsStartIndex < toolCalls.Count)
@@ -879,7 +960,61 @@ namespace SmartWord.Application.Orchestration
                         .ConfigureAwait(false);
                 }
 
+                if (reminderDecision != null && reminderDecision.ShouldInject)
+                {
+                    messages.Add(new AgentMessage
+                    {
+                        Role = "user",
+                        Content = reminderDecision.Message
+                    });
+
+                    currentTodoBoard = await _todoManager
+                        .MarkReminderInjectedAsync(
+                            documentPath,
+                            reminderDecision.IsHighPriority,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
+                    var reminderStats = _todoManager.BuildStats(currentTodoBoard);
+                    yield return new AgentEvent
+                    {
+                        Type = AgentEventType.TodoReminderInjected,
+                        Message = reminderDecision.Message,
+                        BoardJson = _todoManager.SerializeBoard(currentTodoBoard),
+                        CurrentTodoId = reminderStats.CurrentTodoId,
+                        CompletedSteps = reminderStats.HandledCount,
+                        TotalSteps = reminderStats.TotalCount
+                    };
+                }
+
                 continue;
+            }
+
+            if (reminderDecision != null && reminderDecision.ShouldInject)
+            {
+                messages.Add(new AgentMessage
+                {
+                    Role = "user",
+                    Content = reminderDecision.Message
+                });
+
+                currentTodoBoard = await _todoManager
+                    .MarkReminderInjectedAsync(
+                        documentPath,
+                        reminderDecision.IsHighPriority,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                var reminderStats = _todoManager.BuildStats(currentTodoBoard);
+                yield return new AgentEvent
+                {
+                    Type = AgentEventType.TodoReminderInjected,
+                    Message = reminderDecision.Message,
+                    BoardJson = _todoManager.SerializeBoard(currentTodoBoard),
+                    CurrentTodoId = reminderStats.CurrentTodoId,
+                    CompletedSteps = reminderStats.HandledCount,
+                    TotalSteps = reminderStats.TotalCount
+                };
             }
         }
 
@@ -989,7 +1124,7 @@ namespace SmartWord.Application.Orchestration
             }
         }
 
-        private string BuildSystemPrompt(AgentRunOptions options, DocumentContext documentContext)
+        private string BuildSystemPrompt(AgentRunOptions options, DocumentContext documentContext, TodoBoard todoBoard)
         {
             var prompt = _systemPromptBuilder.Build(options.Mode);
             var contextBuilder = new StringBuilder();
@@ -1022,6 +1157,13 @@ namespace SmartWord.Application.Orchestration
                 }
             }
 
+            if (todoBoard != null && _todoManager != null)
+            {
+                contextBuilder.AppendLine();
+                contextBuilder.AppendLine(_todoManager.BuildPromptBlock(todoBoard));
+                contextBuilder.AppendLine("Notice: 复杂任务应持续维护 todo board。计划变化时，先更新任务板再继续执行。");
+            }
+
             var finalPrompt = string.IsNullOrWhiteSpace(prompt)
                 ? contextBuilder.ToString()
                 : prompt + Environment.NewLine + Environment.NewLine + contextBuilder;
@@ -1047,6 +1189,70 @@ namespace SmartWord.Application.Orchestration
             }
 
             return finalPrompt;
+        }
+
+        private static bool TryGetTodoToolMetadata(ToolCallResult result, out TodoToolMetadata metadata)
+        {
+            metadata = result == null ? null : result.Metadata as TodoToolMetadata;
+            return metadata != null && !string.IsNullOrWhiteSpace(metadata.BoardJson);
+        }
+
+        private static TodoBoard DeserializeTodoBoard(string boardJson)
+        {
+            if (string.IsNullOrWhiteSpace(boardJson))
+            {
+                return null;
+            }
+
+            try
+            {
+                return JsonConvert.DeserializeObject<TodoBoard>(boardJson);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string SerializeCamelCase(object value)
+        {
+            return JsonConvert.SerializeObject(
+                value,
+                new JsonSerializerSettings
+                {
+                    ContractResolver = new Newtonsoft.Json.Serialization.CamelCasePropertyNamesContractResolver(),
+                    NullValueHandling = NullValueHandling.Ignore
+                });
+        }
+
+        private static AgentEvent CreateTodoBoardEvent(
+            AgentEventType eventType,
+            TodoToolMetadata metadata,
+            string message)
+        {
+            return new AgentEvent
+            {
+                Type = eventType,
+                Message = message ?? string.Empty,
+                BoardJson = metadata == null ? string.Empty : metadata.BoardJson ?? string.Empty,
+                CurrentTodoId = metadata == null ? string.Empty : metadata.CurrentTodoId ?? string.Empty,
+                CompletedSteps = metadata == null ? 0 : metadata.CompletedSteps,
+                TotalSteps = metadata == null ? 0 : metadata.TotalSteps
+            };
+        }
+
+        private static AgentEvent CreateTodoBoardReadyEvent(TodoBoard board, TodoManager todoManager, string message)
+        {
+            var stats = todoManager == null ? new TodoBoardStats() : todoManager.BuildStats(board);
+            return new AgentEvent
+            {
+                Type = AgentEventType.TodoBoardReady,
+                Message = message ?? "当前 Todo Board 已就绪。",
+                BoardJson = todoManager == null ? string.Empty : todoManager.SerializeBoard(board),
+                CurrentTodoId = stats.CurrentTodoId,
+                CompletedSteps = stats.HandledCount,
+                TotalSteps = stats.TotalCount
+            };
         }
 
         private static AgentEvent CreateToolStartedEvent(ToolCall toolCall, string operationDescription)
@@ -1351,9 +1557,16 @@ namespace SmartWord.Application.Orchestration
             };
         }
 
-        private static bool IsWriteTool(ITool tool)
+        private static bool IsTodoToolName(string toolName)
         {
-            return tool != null && tool.RequiredPermission != ToolPermission.ReadOnly;
+            return string.Equals(toolName, "todo_read", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(toolName, "todo_write", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsDocumentWriteTool(string toolName)
+        {
+            return string.Equals(toolName, "patch_range", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(toolName, "execute_script", StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool IsVerificationTool(string toolName)
