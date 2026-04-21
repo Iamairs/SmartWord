@@ -2,7 +2,7 @@ using System.Collections.Generic;
 
 namespace SmartWord.Core.Models
 {
-    public enum TodoItemStatus { Pending, InProgress, Done, Failed }
+    public enum TodoItemStatus { Pending, InProgress, Completed, Failed, Skipped }
 
     public sealed class TodoItem
     {

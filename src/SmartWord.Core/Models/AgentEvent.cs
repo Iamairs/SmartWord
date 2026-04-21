@@ -29,7 +29,13 @@ namespace SmartWord.Core.Models
         /// <summary>Plan 模式采访阶段：LLM 向用户提问</summary>
         QuestionAsked = 19,
         /// <summary>Plan 模式规划完成：ExecutionPlan 已生成</summary>
-        PlanReady = 20
+        PlanReady = 20,
+        /// <summary>Todo Board 已就绪，可供前端首次渲染</summary>
+        TodoBoardReady = 21,
+        /// <summary>Todo Board 已更新，前端应以完整快照覆盖</summary>
+        TodoBoardUpdated = 22,
+        /// <summary>系统已注入 Todo reminder</summary>
+        TodoReminderInjected = 23
     }
 
     /// <summary>
@@ -76,5 +82,11 @@ namespace SmartWord.Core.Models
 
         /// <summary>PlanReady 事件携带的序列化 ExecutionPlan JSON</summary>
         public string PlanJson { get; set; } = string.Empty;
+
+        /// <summary>Todo 事件携带的序列化 TodoBoard JSON</summary>
+        public string BoardJson { get; set; } = string.Empty;
+
+        /// <summary>Todo 事件携带的当前激活任务 Id</summary>
+        public string CurrentTodoId { get; set; } = string.Empty;
     }
 }
