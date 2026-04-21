@@ -71,6 +71,7 @@
     <Compile Include="LlmClients\LlmClientOptions.cs" />
     <Compile Include="LlmClients\OpenAiCompatibleClient.cs" />
     <Compile Include="Persistence\InMemoryConversationStore.cs" />
+    <Compile Include="Persistence\JsonTodoStore.cs" />
     <Compile Include="Persistence\SqliteConversationStore.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -20,6 +22,8 @@ namespace SmartWord.Infrastructure.LlmClients
     /// </summary>
     public sealed class OpenAiCompatibleClient : ILlmClient, IDisposable
     {
+        private const int SendRetryCount = 2;
+        private static readonly TimeSpan SendRetryDelay = TimeSpan.FromMilliseconds(300);
         private static readonly HttpClient SharedHttpClient = CreateSharedHttpClient();
 
         private sealed class ToolCallAccumulator
@@ -75,11 +79,13 @@ namespace SmartWord.Infrastructure.LlmClients
                 HttpResponseMessage response = null;
                 try
                 {
-                    response = await SharedHttpClient
-                        .SendAsync(
-                            request,
-                            HttpCompletionOption.ResponseHeadersRead,
-                            responseHeadersTimeoutCts.Token)
+                    response = await SendStreamingRequestWithRetryAsync(
+                            request.RequestUri,
+                            apiKey,
+                            requestJson,
+                            responseHeadersTimeoutCts.Token,
+                            "流式接口",
+                            model)
                         .ConfigureAwait(false);
                 }
                 catch (OperationCanceledException ex)
@@ -236,11 +242,13 @@ namespace SmartWord.Infrastructure.LlmClients
                 HttpResponseMessage response = null;
                 try
                 {
-                    response = await SharedHttpClient
-                        .SendAsync(
-                            request,
-                            HttpCompletionOption.ResponseHeadersRead,
-                            responseHeadersTimeoutCts.Token)
+                    response = await SendStreamingRequestWithRetryAsync(
+                            request.RequestUri,
+                            apiKey,
+                            requestJson,
+                            responseHeadersTimeoutCts.Token,
+                            "工具接口",
+                            model)
                         .ConfigureAwait(false);
                 }
                 catch (OperationCanceledException ex)
@@ -422,12 +430,110 @@ namespace SmartWord.Infrastructure.LlmClients
         {
         }
 
+        private async Task<HttpResponseMessage> SendStreamingRequestWithRetryAsync(
+            Uri requestUri,
+            string apiKey,
+            string requestJson,
+            CancellationToken cancellationToken,
+            string requestKind,
+            string model)
+        {
+            Exception lastException = null;
+
+            for (var attempt = 1; attempt <= SendRetryCount; attempt++)
+            {
+                using (var request = CreateStreamingRequest(requestUri, apiKey, requestJson))
+                {
+                    try
+                    {
+                        return await SharedHttpClient
+                            .SendAsync(
+                                request,
+                                HttpCompletionOption.ResponseHeadersRead,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                        when (ShouldRetrySendException(ex, attempt, cancellationToken))
+                    {
+                        lastException = ex;
+                        Log.Warning(
+                            ex,
+                            "调用 LLM {RequestKind} 时遇到瞬时网络异常，准备重试。Endpoint={Endpoint}, Model={Model}, Attempt={Attempt}, MaxAttempt={MaxAttempt}, RequestBodyLength={RequestBodyLength}",
+                            requestKind,
+                            requestUri,
+                            model,
+                            attempt,
+                            SendRetryCount,
+                            GetTextLength(requestJson));
+                    }
+                }
+
+                await Task.Delay(SendRetryDelay, cancellationToken).ConfigureAwait(false);
+            }
+
+            throw lastException ?? new HttpRequestException("调用 LLM 接口失败，且未捕获到底层异常。");
+        }
+
         private static HttpClient CreateSharedHttpClient()
         {
             return new HttpClient
             {
                 Timeout = Timeout.InfiniteTimeSpan
             };
+        }
+
+        private static HttpRequestMessage CreateStreamingRequest(Uri requestUri, string apiKey, string requestJson)
+        {
+            var request = new HttpRequestMessage(HttpMethod.Post, requestUri);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+            // 兼容 .NET Framework 下的长连接复用问题，避免命中已被对端回收的 keep-alive 连接。
+            request.Headers.ConnectionClose = true;
+            request.Content = BuildRequestContent(requestJson);
+            return request;
+        }
+
+        private static bool ShouldRetrySendException(Exception exception, int attempt, CancellationToken cancellationToken)
+        {
+            return attempt < SendRetryCount
+                && !cancellationToken.IsCancellationRequested
+                && IsTransientSendException(exception);
+        }
+
+        private static bool IsTransientSendException(Exception exception)
+        {
+            for (var current = exception; current != null; current = current.InnerException)
+            {
+                if (current is OperationCanceledException)
+                {
+                    return false;
+                }
+
+                if (current is SocketException || current is IOException || current is HttpRequestException)
+                {
+                    return true;
+                }
+
+                var webException = current as WebException;
+                if (webException == null)
+                {
+                    continue;
+                }
+
+                switch (webException.Status)
+                {
+                    case WebExceptionStatus.ConnectFailure:
+                    case WebExceptionStatus.ConnectionClosed:
+                    case WebExceptionStatus.KeepAliveFailure:
+                    case WebExceptionStatus.ReceiveFailure:
+                    case WebExceptionStatus.SendFailure:
+                    case WebExceptionStatus.Timeout:
+                        return true;
+                }
+            }
+
+            return false;
         }
 
         internal static TimeSpan ResolveStreamPhaseTimeout(int configuredTimeoutSeconds)
@@ -534,7 +640,7 @@ namespace SmartWord.Infrastructure.LlmClients
             ModelCapability capability)
         {
             var payload = new JArray();
-            foreach (var message in messages)
+            foreach (var message in NormalizeMessagesForProvider(messages))
             {
                 if (message == null || string.IsNullOrWhiteSpace(message.Role))
                 {
@@ -607,6 +713,45 @@ namespace SmartWord.Infrastructure.LlmClients
             }
 
             return payload;
+        }
+
+        private static IReadOnlyList<AgentMessage> NormalizeMessagesForProvider(IReadOnlyList<AgentMessage> messages)
+        {
+            if (messages == null || messages.Count == 0)
+            {
+                return Array.Empty<AgentMessage>();
+            }
+
+            var systemMessages = messages
+                .Where(message => message != null
+                    && string.Equals(message.Role, "system", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            var nonSystemMessages = messages
+                .Where(message => message != null
+                    && !string.Equals(message.Role, "system", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (systemMessages.Count <= 1)
+            {
+                return messages;
+            }
+
+            var mergedSystemContent = string.Join(
+                Environment.NewLine + Environment.NewLine,
+                systemMessages
+                    .Select(message => string.IsNullOrWhiteSpace(message.Content) ? string.Empty : message.Content.Trim())
+                    .Where(content => !string.IsNullOrWhiteSpace(content)));
+
+            var mergedMessages = new List<AgentMessage>(nonSystemMessages.Count + 1)
+            {
+                new AgentMessage
+                {
+                    Role = "system",
+                    Content = mergedSystemContent
+                }
+            };
+            mergedMessages.AddRange(nonSystemMessages);
+            return mergedMessages;
         }
 
         private static JArray BuildToolsPayload(IReadOnlyList<ToolDefinition> tools)
