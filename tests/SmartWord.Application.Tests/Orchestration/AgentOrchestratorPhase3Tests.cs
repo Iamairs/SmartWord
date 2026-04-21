@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using SmartWord.Application.Todo;
 using SmartWord.Application.Orchestration;
 using SmartWord.Application.PromptBuilder;
 using SmartWord.Application.Tools;
@@ -120,6 +121,291 @@ namespace SmartWord.Application.Tests.Orchestration
             Assert.Equal(questionEvent.ToolCallId, toolMessages[0].ToolCallId);
             Assert.Equal("plan-q-2", toolMessages[1].ToolCallId);
             Assert.Contains("剩余工具调用已跳过", toolMessages[1].Content);
+        }
+
+        [Fact]
+        public async Task RunAsync_PlanModePlainJsonPlan_EmitsPlanReady()
+        {
+            var orchestrator = CreateOrchestrator(
+                new FakeLlmClient(
+                    new AgentMessage
+                    {
+                        Role = "assistant",
+                        Content = "{\n"
+                            + "  \"taskDescription\": \"统一段落间距并保留正文结构\",\n"
+                            + "  \"todoList\": [\n"
+                            + "    { \"description\": \"扫描正文段落\" },\n"
+                            + "    { \"content\": \"统一段前段后间距\", \"status\": \"in_progress\" },\n"
+                            + "    { \"title\": \"抽查关键页面\" }\n"
+                            + "  ],\n"
+                            + "  \"riskNotes\": [\"表格内段落不应受影响\"]\n"
+                            + "}"
+                    }),
+                CreateWritableHydrator(),
+                new ITool[]
+                {
+                    new FakeTool("probe_document", ToolPermission.ReadOnly, ToolCallResult.Ok("{\"ok\":true}"))
+                });
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "先规划如何统一段落间距",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Plan,
+                    EnableToolCalling = true
+                },
+                CancellationToken.None));
+
+            var planReadyEvent = Assert.Single(events.Where(item => item.Type == AgentEventType.PlanReady));
+            Assert.Contains("\"taskDescription\":\"统一段落间距并保留正文结构\"", planReadyEvent.PlanJson);
+            Assert.Contains("\"description\":\"统一段前段后间距\"", planReadyEvent.PlanJson);
+        }
+
+        [Fact]
+        public async Task RunAsync_AgentModeWithActivePlan_EmitsTodoBoardReady()
+        {
+            var orchestrator = CreateOrchestrator(
+                new FakeLlmClient(new AgentMessage
+                {
+                    Role = "assistant",
+                    Content = "任务已执行完成。"
+                }),
+                CreateWritableHydrator());
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "请执行当前计划",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Agent,
+                    EnableToolCalling = true,
+                    ActivePlan = new ExecutionPlan
+                    {
+                        TaskDescription = "测试计划",
+                        TodoList = new List<TodoItem>
+                        {
+                            new TodoItem { Description = "第一步" },
+                            new TodoItem { Description = "第二步" }
+                        }
+                    }
+                },
+                CancellationToken.None));
+
+            var readyEvent = Assert.Single(events.Where(item => item.Type == AgentEventType.TodoBoardReady));
+            Assert.Equal("T1", readyEvent.CurrentTodoId);
+            Assert.Contains("\"id\":\"T1\"", readyEvent.BoardJson);
+        }
+
+        [Fact]
+        public async Task RunAsync_AfterFiveEffectiveExecutionRounds_EmitsTodoReminderInjected()
+        {
+            var llmMessages = new List<AgentMessage>();
+            for (var index = 0; index < 5; index++)
+            {
+                llmMessages.Add(CreateToolCallMessage(
+                    CreateToolCall($"probe-{index + 1}", "probe_document", "{}")));
+            }
+
+            llmMessages.Add(new AgentMessage
+            {
+                Role = "assistant",
+                Content = "任务已结束。"
+            });
+
+            var llmClient = new FakeLlmClient(llmMessages.ToArray());
+            var orchestrator = CreateOrchestrator(
+                llmClient,
+                CreateWritableHydrator(),
+                new ITool[]
+                {
+                    new FakeTool("probe_document", ToolPermission.ReadOnly, ToolCallResult.Ok("{\"ok\":true}"))
+                });
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "请持续分析文档",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Agent,
+                    EnableToolCalling = true,
+                    MaxIterations = 12
+                },
+                CancellationToken.None));
+
+            Assert.Contains(events, item => item.Type == AgentEventType.TodoReminderInjected);
+            var lastRequestMessages = llmClient.RequestMessageSnapshots.LastOrDefault();
+            Assert.NotNull(lastRequestMessages);
+            Assert.NotEmpty(lastRequestMessages);
+            Assert.Equal("system", lastRequestMessages[0].Role);
+            Assert.DoesNotContain(
+                lastRequestMessages.Skip(1),
+                item => string.Equals(item.Role, "system", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(
+                lastRequestMessages.Skip(1),
+                item => string.Equals(item.Role, "user", StringComparison.OrdinalIgnoreCase)
+                    && (item.Content ?? string.Empty).Contains("请持续维护 todo board"));
+        }
+
+        [Fact]
+        public async Task RunAsync_TodoReadRound_DoesNotResetReminderCounter()
+        {
+            var llmClient = new FakeLlmClient(
+                CreateToolCallMessage(CreateToolCall("probe-1", "probe_document", "{}")),
+                CreateToolCallMessage(CreateToolCall("probe-2", "probe_document", "{}")),
+                CreateToolCallMessage(CreateToolCall("probe-3", "probe_document", "{}")),
+                CreateToolCallMessage(CreateToolCall("probe-4", "probe_document", "{}")),
+                CreateToolCallMessage(CreateToolCall("todo-read-1", "todo_read", "{}")),
+                CreateToolCallMessage(CreateToolCall("probe-5", "probe_document", "{}")),
+                new AgentMessage
+                {
+                    Role = "assistant",
+                    Content = "任务已结束。"
+                });
+
+            var orchestrator = CreateOrchestrator(
+                llmClient,
+                CreateWritableHydrator(),
+                new ITool[]
+                {
+                    new FakeTool("probe_document", ToolPermission.ReadOnly, ToolCallResult.Ok("{\"ok\":true}")),
+                    new FakeTool("todo_read", ToolPermission.ReadOnly, ToolCallResult.Ok("{\"ok\":true}"))
+                });
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "继续执行并偶尔读取任务板",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Agent,
+                    EnableToolCalling = true,
+                    MaxIterations = 8
+                },
+                CancellationToken.None));
+
+            Assert.Contains(events, item => item.Type == AgentEventType.TodoReminderInjected);
+        }
+
+        [Fact]
+        public async Task RunAsync_AfterVerifiedWriteWithoutTodoWriteNextRound_EmitsHighPriorityReminder()
+        {
+            var llmClient = new FakeLlmClient(
+                CreateToolCallMessage(
+                    CreateToolCall("write-1", "patch_range", "{\"operations\":[{\"type\":\"replace_text\",\"paragraph_index\":1,\"text\":\"新的标题\"}]}")),
+                CreateToolCallMessage(
+                    CreateToolCall("probe-1", "probe_document", "{}")),
+                new AgentMessage
+                {
+                    Role = "assistant",
+                    Content = "任务已结束。"
+                });
+            var writeTool = new FakeTool(
+                "patch_range",
+                ToolPermission.Write,
+                ToolCallResult.Ok(
+                    "{\"success\":true}",
+                    new[] { 1 },
+                    operationDescription: "已修改第 1 段。"));
+            var verifyTool = new FakeTool(
+                "verify_script",
+                ToolPermission.ReadOnly,
+                ToolCallResult.Ok(
+                    "{\"all_passed\":true,\"results\":[]}",
+                    new[] { 1 },
+                    operationDescription: "已完成改动验证。"));
+            var probeTool = new FakeTool(
+                "probe_document",
+                ToolPermission.ReadOnly,
+                ToolCallResult.Ok("{\"ok\":true}"));
+            var orchestrator = CreateOrchestrator(
+                llmClient,
+                CreateWritableHydrator(),
+                new ITool[] { writeTool, verifyTool, probeTool },
+                new FakeConfirmationChannel(true, true));
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "先写入，再继续读取",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Agent,
+                    EnableToolCalling = true,
+                    RequireConfirmationForScripts = true
+                },
+                CancellationToken.None));
+
+            var reminderEvent = Assert.Single(events.Where(item => item.Type == AgentEventType.TodoReminderInjected));
+            Assert.Contains("上一轮已经发生文档写入", reminderEvent.Message);
+            var lastRequestMessages = llmClient.RequestMessageSnapshots.LastOrDefault();
+            Assert.NotNull(lastRequestMessages);
+            Assert.Contains(
+                lastRequestMessages,
+                item => string.Equals(item.Role, "user", StringComparison.OrdinalIgnoreCase)
+                    && (item.Content ?? string.Empty).Contains("上一轮已经发生文档写入"));
+        }
+
+        [Fact]
+        public async Task RunAsync_ReminderIsInjectedAfterSkippedToolResults()
+        {
+            var llmClient = new FakeLlmClient(
+                CreateToolCallMessage(
+                    CreateToolCall("write-1", "patch_range", "{\"operations\":[{\"type\":\"replace_text\",\"paragraph_index\":1,\"text\":\"新的标题\"}]}")),
+                CreateToolCallMessage(
+                    CreateToolCall("probe-1", "probe_document", "{}"),
+                    CreateToolCall("write-2", "patch_range", "{\"operations\":[{\"type\":\"replace_text\",\"paragraph_index\":2,\"text\":\"失败写入\"}]}"),
+                    CreateToolCall("read-1", "read_section", "{\"heading\":\"第一章\"}")),
+                new AgentMessage
+                {
+                    Role = "assistant",
+                    Content = "任务已结束。"
+                });
+            var writeTool = new FakeTool(
+                "patch_range",
+                ToolPermission.Write,
+                ToolCallResult.Ok(
+                    "{\"success\":true}",
+                    new[] { 1 },
+                    operationDescription: "已修改第 1 段。"),
+                ToolCallResult.Error("patch_range", "写入失败"));
+            var verifyTool = new FakeTool(
+                "verify_script",
+                ToolPermission.ReadOnly,
+                ToolCallResult.Ok(
+                    "{\"all_passed\":true,\"results\":[]}",
+                    new[] { 1 },
+                    operationDescription: "已完成改动验证。"));
+            var probeTool = new FakeTool(
+                "probe_document",
+                ToolPermission.ReadOnly,
+                ToolCallResult.Ok("{\"ok\":true}"));
+            var readTool = new FakeTool(
+                "read_section",
+                ToolPermission.ReadOnly,
+                ToolCallResult.Ok("{\"ok\":true}"));
+            var orchestrator = CreateOrchestrator(
+                llmClient,
+                CreateWritableHydrator(),
+                new ITool[] { writeTool, verifyTool, probeTool, readTool },
+                new FakeConfirmationChannel(true, true));
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "写入后继续执行复杂流程",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Agent,
+                    EnableToolCalling = true,
+                    RequireConfirmationForScripts = true
+                },
+                CancellationToken.None));
+
+            Assert.Contains(events, item => item.Type == AgentEventType.TodoReminderInjected);
+            var lastRequestMessages = llmClient.RequestMessageSnapshots.LastOrDefault();
+            Assert.NotNull(lastRequestMessages);
+            var skippedIndex = lastRequestMessages.FindIndex(item =>
+                string.Equals(item.Role, "tool", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(item.ToolCallId, "read-1", StringComparison.OrdinalIgnoreCase)
+                && (item.Content ?? string.Empty).Contains("[SKIPPED]"));
+            var reminderIndex = lastRequestMessages.FindIndex(item =>
+                string.Equals(item.Role, "user", StringComparison.OrdinalIgnoreCase)
+                && (item.Content ?? string.Empty).Contains("上一轮已经发生文档写入"));
+
+            Assert.True(skippedIndex >= 0);
+            Assert.True(reminderIndex > skippedIndex);
         }
 
         [Fact]
@@ -332,6 +618,64 @@ namespace SmartWord.Application.Tests.Orchestration
             Assert.Equal(0, readTool.ExecutionCount);
             Assert.Equal(1, undoScopeFactory.LastScope.CommitCount);
             Assert.Equal(0, undoScopeFactory.LastScope.RollbackCount);
+        }
+
+        [Fact]
+        public async Task RunAsync_TodoWrite_DoesNotEnterDocumentWriteVerificationLifecycle()
+        {
+            var llmClient = new FakeLlmClient(
+                CreateToolCallMessage(
+                    CreateToolCall("todo-1", "todo_write", "{\"action\":\"set_status\",\"id\":\"T1\",\"status\":\"completed\"}")),
+                new AgentMessage
+                {
+                    Role = "assistant",
+                    Content = "任务板已同步。"
+                });
+            var todoWriteTool = new FakeTool(
+                "todo_write",
+                ToolPermission.Write,
+                ToolCallResult.Ok(
+                    "{\"success\":true}",
+                    metadata: new TodoToolMetadata
+                    {
+                        IsWriteOperation = true,
+                        Operation = "set_status",
+                        BoardJson = "{}",
+                        CurrentTodoId = "T1",
+                        CompletedSteps = 1,
+                        TotalSteps = 1
+                    },
+                    operationDescription: "更新当前 Todo Board。"));
+            var undoScopeFactory = new FakeUndoScopeFactory();
+            var orchestrator = CreateOrchestrator(
+                llmClient,
+                CreateWritableHydrator(),
+                new ITool[] { todoWriteTool },
+                new FakeConfirmationChannel(false, true),
+                undoScopeFactory);
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "请把当前步骤标记为已完成",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Agent,
+                    EnableToolCalling = true,
+                    RequireConfirmationForScripts = true
+                },
+                CancellationToken.None));
+
+            var startedEvent = Assert.Single(events.Where(item => item.ToolCallId == "todo-1" && item.Type == AgentEventType.ToolCallStarted));
+            Assert.False(startedEvent.RequiresConfirmation);
+            Assert.Contains(events, item => item.Type == AgentEventType.ToolCallCompleted && item.ToolCallId == "todo-1" && item.ToolSuccess);
+            Assert.Contains(events, item => item.Type == AgentEventType.TodoBoardUpdated);
+            Assert.DoesNotContain(events, item => item.Type == AgentEventType.ChangeExecuted);
+            Assert.DoesNotContain(events, item => item.Type == AgentEventType.ChangeVerificationFailed);
+            Assert.DoesNotContain(events, item => item.Type == AgentEventType.ChangeRepairRequired);
+            Assert.DoesNotContain(events, item => item.Type == AgentEventType.Error);
+            Assert.Contains(events, item => item.Type == AgentEventType.TaskCompleted);
+            Assert.Equal(1, todoWriteTool.ExecutionCount);
+            Assert.Null(todoWriteTool.LastUndoScope);
+            Assert.Null(undoScopeFactory.LastScope);
         }
 
         [Fact]
@@ -746,9 +1090,12 @@ namespace SmartWord.Application.Tests.Orchestration
             IConfirmationChannel confirmationChannel = null,
             IUndoScopeFactory undoScopeFactory = null,
             IConversationStore conversationStore = null,
-            IQuestionChannel questionChannel = null)
+            IQuestionChannel questionChannel = null,
+            ITodoStore todoStore = null)
         {
             var registry = new ToolRegistry();
+            var effectiveTodoStore = todoStore ?? new FakeTodoStore();
+            var todoManager = new TodoManager(effectiveTodoStore);
             if (tools != null)
             {
                 foreach (var tool in tools)
@@ -770,7 +1117,9 @@ namespace SmartWord.Application.Tests.Orchestration
                 confirmationChannel ?? new FakeConfirmationChannel(true, false),
                 undoScopeFactory ?? new FakeUndoScopeFactory(),
                 new ConversationCompressor(),
-                questionChannel);
+                questionChannel,
+                todoManager,
+                new TodoReminderService());
         }
 
         private static FakeContextHydrator CreateWritableHydrator()
@@ -826,9 +1175,43 @@ namespace SmartWord.Application.Tests.Orchestration
             return results;
         }
 
+        private sealed class FakeTodoStore : ITodoStore
+        {
+            private readonly Dictionary<string, TodoBoard> _boards =
+                new Dictionary<string, TodoBoard>(System.StringComparer.OrdinalIgnoreCase);
+
+            public Task<TodoBoard> GetBoardAsync(string documentPath, CancellationToken cancellationToken)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _boards.TryGetValue(documentPath ?? "__active_document__", out var board);
+                return Task.FromResult(board);
+            }
+
+            public Task SaveBoardAsync(TodoBoard board, CancellationToken cancellationToken)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _boards[board.DocumentPath ?? "__active_document__"] = board;
+                return Task.CompletedTask;
+            }
+
+            public Task DeleteBoardAsync(string documentPath, CancellationToken cancellationToken)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _boards.Remove(documentPath ?? "__active_document__");
+                return Task.CompletedTask;
+            }
+
+            public Task<bool> ExistsAsync(string documentPath, CancellationToken cancellationToken)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return Task.FromResult(_boards.ContainsKey(documentPath ?? "__active_document__"));
+            }
+        }
+
         private sealed class FakeLlmClient : ILlmClient
         {
             private readonly Queue<AgentMessage> _responses = new Queue<AgentMessage>();
+            public List<List<AgentMessage>> RequestMessageSnapshots { get; } = new List<List<AgentMessage>>();
 
             public FakeLlmClient(params AgentMessage[] responses)
             {
@@ -857,7 +1240,9 @@ namespace SmartWord.Application.Tests.Orchestration
                 System.Action<string> onStreamChunk,
                 CancellationToken cancellationToken)
             {
-                _ = messages;
+                RequestMessageSnapshots.Add(messages == null
+                    ? new List<AgentMessage>()
+                    : new List<AgentMessage>(messages.Select(CloneMessage)));
                 _ = model;
                 _ = tools;
                 cancellationToken.ThrowIfCancellationRequested();
@@ -875,6 +1260,25 @@ namespace SmartWord.Application.Tests.Orchestration
                 }
 
                 return Task.FromResult(response);
+            }
+
+            private static AgentMessage CloneMessage(AgentMessage message)
+            {
+                return new AgentMessage
+                {
+                    Role = message == null ? string.Empty : message.Role,
+                    Content = message == null ? string.Empty : message.Content,
+                    ReasoningContent = message == null ? string.Empty : message.ReasoningContent,
+                    ToolCallId = message == null ? string.Empty : message.ToolCallId,
+                    Name = message == null ? string.Empty : message.Name,
+                    IsCompressedSummary = message != null && message.IsCompressedSummary,
+                    ToolName = message == null ? string.Empty : message.ToolName,
+                    RawToolInput = message == null ? string.Empty : message.RawToolInput,
+                    ToolSuccess = message != null && message.ToolSuccess,
+                    ToolCalls = message == null || message.ToolCalls == null
+                        ? new List<ToolCall>()
+                        : new List<ToolCall>(message.ToolCalls)
+                };
             }
         }
 

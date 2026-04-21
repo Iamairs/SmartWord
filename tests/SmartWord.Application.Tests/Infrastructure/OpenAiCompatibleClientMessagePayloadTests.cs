@@ -87,6 +87,37 @@ namespace SmartWord.Application.Tests.Infrastructure
         }
 
         [Fact]
+        public void BuildMessagesPayload_MultipleSystemMessages_AreMergedIntoLeadingSystemMessage()
+        {
+            var messages = new List<AgentMessage>
+            {
+                new AgentMessage
+                {
+                    Role = "system",
+                    Content = "基础系统提示"
+                },
+                new AgentMessage
+                {
+                    Role = "user",
+                    Content = "继续执行"
+                },
+                new AgentMessage
+                {
+                    Role = "system",
+                    Content = "运行时提醒"
+                }
+            };
+
+            var payload = InvokeBuildMessagesPayload(messages);
+
+            Assert.Equal(2, payload.Count);
+            Assert.Equal("system", payload[0]?["role"]?.Value<string>());
+            Assert.Contains("基础系统提示", payload[0]?["content"]?.Value<string>());
+            Assert.Contains("运行时提醒", payload[0]?["content"]?.Value<string>());
+            Assert.Equal("user", payload[1]?["role"]?.Value<string>());
+        }
+
+        [Fact]
         public void SummarizeBody_LongBody_IsTruncated()
         {
             var method = typeof(OpenAiCompatibleClient).GetMethod(
