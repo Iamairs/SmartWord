@@ -114,6 +114,11 @@
         :changes="chatStore.completedTaskChanges"
         @navigate="navigateToParagraph"
       />
+      <TodoBoardPanel
+        v-if="chatStore.todoBoardVisible && chatStore.currentMode === 'agent' && chatStore.activeTodoBoard"
+        :board="chatStore.activeTodoBoard"
+        :current-todo-id="chatStore.currentTodoId"
+      />
 
       <article
         v-for="message in chatStore.messages"
@@ -226,6 +231,7 @@ import { hostBridge } from '../bridge/hostBridge';
 import ChangesSummaryPanel from './ChangesSummaryPanel.vue';
 import ContentPreviewPanel from './ContentPreviewPanel.vue';
 import ThoughtActionTrace from './ThoughtActionTrace.vue';
+import TodoBoardPanel from './TodoBoardPanel.vue';
 
 const chatStore = useChatStore();
 const settingsStore = useSettingsStore();
@@ -389,7 +395,8 @@ async function executePlan() {
   await hostBridge.sendMessage({
     content: '请按照以下计划执行任务：\n\n' + context,
     manualMode: 'agent',
-    maxIterations: 20
+    maxIterations: 20,
+    activePlan: plan
   });
 }
 
@@ -442,6 +449,16 @@ function handleAgentEvent(event) {
     case 'plan_ready':
       chatStore.setPlan(event.planJson);
       chatStore.finishLoading();
+      break;
+    case 'todo_board_ready':
+    case 'todo_board_updated':
+      chatStore.setTodoBoard(event.boardJson, event.currentTodoId || '');
+      break;
+    case 'todo_reminder_injected':
+      chatStore.setTodoBoard(event.boardJson, event.currentTodoId || '');
+      if (event.message) {
+        chatStore.appendAssistantMessage(event.message);
+      }
       break;
     case 'progress_update':
       if (event.message) chatStore.updatePlanProgress(event.message);

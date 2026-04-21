@@ -37,6 +37,9 @@ export const useChatStore = defineStore('chat', {
     pendingConfirmation: null,
     pendingQuestion: null,
     activePlan: null,
+    activeTodoBoard: null,
+    currentTodoId: '',
+    todoBoardVisible: false,
     currentTaskChanges: [],
     completedTaskChanges: []
   }),
@@ -191,6 +194,28 @@ export const useChatStore = defineStore('chat', {
         this.activePlan = typeof planJson === 'string' ? JSON.parse(planJson) : planJson;
       } catch { /* 忽略解析失败 */ }
     },
+    setTodoBoard(boardJson, currentTodoId = '') {
+      try {
+        this.activeTodoBoard = typeof boardJson === 'string' ? JSON.parse(boardJson) : boardJson;
+        this.currentTodoId =
+          currentTodoId ||
+          this.activeTodoBoard?.items?.find((item) => {
+            const status = typeof item.status === 'string' ? item.status.toLowerCase() : item.status;
+            return status === 'inprogress' || status === 'in_progress' || status === 1;
+          })?.id ||
+          '';
+        this.todoBoardVisible = true;
+      } catch {
+        this.activeTodoBoard = null;
+        this.currentTodoId = '';
+        this.todoBoardVisible = false;
+      }
+    },
+    clearTodoBoard() {
+      this.activeTodoBoard = null;
+      this.currentTodoId = '';
+      this.todoBoardVisible = false;
+    },
     startLoading() {
       this.isLoading = true;
       this.activeToolCalls = [];
@@ -199,6 +224,9 @@ export const useChatStore = defineStore('chat', {
       this.pendingQuestion = null;
       this.currentTaskChanges = [];
       this.completedTaskChanges = [];
+      this.activeTodoBoard = null;
+      this.currentTodoId = '';
+      this.todoBoardVisible = false;
     },
     finishLoading() {
       this.isLoading = false;
