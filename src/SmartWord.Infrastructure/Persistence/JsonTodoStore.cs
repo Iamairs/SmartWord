@@ -5,8 +5,8 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Serialization;
 using Newtonsoft.Json.Converters;
+using Newtonsoft.Json.Serialization;
 using SmartWord.Core.Interfaces;
 using SmartWord.Core.Models;
 
@@ -17,6 +17,7 @@ namespace SmartWord.Infrastructure.Persistence
     /// </summary>
     public sealed class JsonTodoStore : ITodoStore
     {
+        private const string CorruptedBoardMessage = "Todo Board 文件已损坏，无法读取。";
         private static readonly JsonSerializerSettings SerializerSettings = new JsonSerializerSettings
         {
             Formatting = Formatting.Indented,
@@ -51,14 +52,21 @@ namespace SmartWord.Infrastructure.Persistence
                 return Task.FromResult<TodoBoard>(null);
             }
 
-            var json = File.ReadAllText(boardPath, Encoding.UTF8);
-            var board = JsonConvert.DeserializeObject<TodoBoard>(json);
-            if (board == null)
+            try
             {
-                throw new InvalidOperationException("Todo Board 文件内容为空或无法反序列化。");
-            }
+                var json = File.ReadAllText(boardPath, Encoding.UTF8);
+                var board = JsonConvert.DeserializeObject<TodoBoard>(json, SerializerSettings);
+                if (board == null)
+                {
+                    throw new InvalidOperationException(CorruptedBoardMessage);
+                }
 
-            return Task.FromResult(board);
+                return Task.FromResult(board);
+            }
+            catch (JsonException ex)
+            {
+                throw new InvalidOperationException(CorruptedBoardMessage, ex);
+            }
         }
 
         public Task SaveBoardAsync(TodoBoard board, CancellationToken cancellationToken)
@@ -71,8 +79,29 @@ namespace SmartWord.Infrastructure.Persistence
             cancellationToken.ThrowIfCancellationRequested();
             Directory.CreateDirectory(_rootDirectory);
             var boardPath = ResolveBoardPath(board.DocumentPath);
+            var tempPath = boardPath + ".tmp." + Guid.NewGuid().ToString("N");
             var json = JsonConvert.SerializeObject(board, SerializerSettings);
-            File.WriteAllText(boardPath, json, Encoding.UTF8);
+
+            try
+            {
+                File.WriteAllText(tempPath, json, Encoding.UTF8);
+                if (File.Exists(boardPath))
+                {
+                    File.Replace(tempPath, boardPath, null, true);
+                }
+                else
+                {
+                    File.Move(tempPath, boardPath);
+                }
+            }
+            finally
+            {
+                if (File.Exists(tempPath))
+                {
+                    File.Delete(tempPath);
+                }
+            }
+
             return Task.CompletedTask;
         }
 
