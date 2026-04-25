@@ -196,6 +196,205 @@ namespace SmartWord.Application.Tests.Orchestration
         }
 
         [Fact]
+        public async Task RunAsync_AskModeHitsIterationBudget_EmitsMaxIterationsReachedAndDoesNotEmitTaskCompleted()
+        {
+            var llmClient = new LoopingToolLlmClient("probe_document", "{}");
+            var orchestrator = CreateOrchestrator(
+                llmClient,
+                CreateWritableHydrator(),
+                new ITool[]
+                {
+                    new FakeTool("probe_document", ToolPermission.ReadOnly, ToolCallResult.Ok("{\"ok\":true}"))
+                });
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "请持续读取文档并总结",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Ask,
+                    EnableToolCalling = true,
+                    MaxIterations = 1
+                },
+                CancellationToken.None));
+
+            Assert.Contains(events, item => item.Type == AgentEventType.MaxIterationsReached);
+            Assert.DoesNotContain(events, item => item.Type == AgentEventType.TaskCompleted);
+            Assert.Equal(1, llmClient.CallCount);
+        }
+
+        [Fact]
+        public async Task RunAsync_PlanModeHitsIterationBudget_EmitsMaxIterationsReachedAndDoesNotEmitTaskCompleted()
+        {
+            var llmClient = new LoopingToolLlmClient("probe_document", "{}");
+            var orchestrator = CreateOrchestrator(
+                llmClient,
+                CreateWritableHydrator(),
+                new ITool[]
+                {
+                    new FakeTool("probe_document", ToolPermission.ReadOnly, ToolCallResult.Ok("{\"ok\":true}"))
+                });
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "请规划后再执行",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Plan,
+                    EnableToolCalling = true,
+                    MaxIterations = 1
+                },
+                CancellationToken.None));
+
+            Assert.Contains(events, item => item.Type == AgentEventType.MaxIterationsReached);
+            Assert.DoesNotContain(events, item => item.Type == AgentEventType.TaskCompleted);
+            Assert.Equal(1, llmClient.CallCount);
+        }
+
+        [Fact]
+        public async Task RunAsync_AgentModeHitsIterationBudget_PausesTodoBoardAndUsesFixedBudget100()
+        {
+            var todoStore = new FakeTodoStore();
+            var llmClient = new LoopingToolLlmClient("probe_document", "{}");
+            var orchestrator = CreateOrchestrator(
+                llmClient,
+                CreateWritableHydrator(),
+                new ITool[]
+                {
+                    new FakeTool("probe_document", ToolPermission.ReadOnly, ToolCallResult.Ok("{\"ok\":true}"))
+                },
+                todoStore: todoStore);
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "请长时间持续分析文档",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Agent,
+                    EnableToolCalling = true,
+                    MaxIterations = 200
+                },
+                CancellationToken.None));
+
+            var maxIterationsEvent = Assert.Single(events.Where(item => item.Type == AgentEventType.MaxIterationsReached));
+            Assert.Contains("100", maxIterationsEvent.Message);
+            Assert.Contains(events, item => item.Type == AgentEventType.TodoBoardPaused);
+            Assert.DoesNotContain(events, item => item.Type == AgentEventType.TaskCompleted);
+            Assert.Equal(100, llmClient.CallCount);
+
+            var board = todoStore.PeekBoard("doc1");
+            Assert.NotNull(board);
+            Assert.Equal(TodoBoardExecutionState.Paused, board.ExecutionState);
+            Assert.Equal(TodoBoardRunOutcome.PausedByBudget, board.LastRunOutcome);
+        }
+
+        [Fact]
+        public async Task RunAsync_RecoveryRequiredBoard_EmitsRecoveryEventBeforeTodoBoardReady()
+        {
+            var todoStore = new FakeTodoStore();
+            await todoStore.SaveBoardAsync(
+                new TodoBoard
+                {
+                    SchemaVersion = TodoBoard.CurrentSchemaVersion,
+                    BoardId = "board-1",
+                    DocumentPath = "doc1",
+                    ExecutionState = TodoBoardExecutionState.RecoveryRequired,
+                    LastRunOutcome = TodoBoardRunOutcome.Failed,
+                    RecoveryReason = "上一次任务异常中断，请先选择恢复方式。",
+                    LastErrorSummary = "模拟异常",
+                    Items = new List<TodoBoardItem>
+                    {
+                        new TodoBoardItem { Id = "T1", Content = "第一步", Status = TodoItemStatus.InProgress, Order = 1 }
+                    }
+                },
+                CancellationToken.None);
+
+            var recoveryChannel = new FakeTodoRecoveryChannel(TodoBoardRecoveryDecision.RecoverExisting);
+            var llmClient = new FakeLlmClient(new AgentMessage
+            {
+                Role = "assistant",
+                Content = "已恢复并继续执行。"
+            });
+            var orchestrator = CreateOrchestrator(
+                llmClient,
+                CreateWritableHydrator(),
+                todoRecoveryChannel: recoveryChannel,
+                todoStore: todoStore);
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "继续执行上次任务",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Agent,
+                    EnableToolCalling = true
+                },
+                CancellationToken.None));
+
+            var recoveryIndex = events.FindIndex(item => item.Type == AgentEventType.TodoBoardRecoveryRequired);
+            var readyIndex = events.FindIndex(item => item.Type == AgentEventType.TodoBoardReady);
+
+            Assert.True(recoveryIndex >= 0);
+            Assert.True(readyIndex > recoveryIndex);
+            Assert.Equal(1, recoveryChannel.WaitCount);
+            Assert.Contains(events, item => item.Type == AgentEventType.TaskCompleted);
+        }
+
+        [Fact]
+        public async Task RunAsync_AgentModeCompleted_SucceedsAndDeletesTodoBoard()
+        {
+            var todoStore = new FakeTodoStore();
+            var orchestrator = CreateOrchestrator(
+                new FakeLlmClient(new AgentMessage
+                {
+                    Role = "assistant",
+                    Content = "任务已执行完成。"
+                }),
+                CreateWritableHydrator(),
+                todoStore: todoStore);
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "请执行当前任务",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Agent,
+                    EnableToolCalling = true
+                },
+                CancellationToken.None));
+
+            Assert.Contains(events, item => item.Type == AgentEventType.TaskCompleted);
+            Assert.False(todoStore.Exists("doc1"));
+        }
+
+        [Fact]
+        public async Task RunAsync_ModelThrowsAfterRunStarted_MarksTodoBoardAsRecoveryRequired()
+        {
+            var todoStore = new FakeTodoStore();
+            var orchestrator = CreateOrchestrator(
+                new ThrowingLlmClient(new InvalidOperationException("模拟 LLM 故障")),
+                CreateWritableHydrator(),
+                new ITool[]
+                {
+                    new FakeTool("probe_document", ToolPermission.ReadOnly, ToolCallResult.Ok("{\"ok\":true}"))
+                },
+                todoStore: todoStore);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            {
+                await CollectAsync(orchestrator.RunAsync(
+                    "继续执行任务",
+                    new AgentRunOptions
+                    {
+                        Mode = AgentMode.Agent,
+                        EnableToolCalling = true
+                    },
+                    CancellationToken.None));
+            });
+
+            var board = todoStore.PeekBoard("doc1");
+            Assert.NotNull(board);
+            Assert.Equal(TodoBoardExecutionState.RecoveryRequired, board.ExecutionState);
+            Assert.Equal(TodoBoardRunOutcome.Failed, board.LastRunOutcome);
+            Assert.Contains("模拟 LLM 故障", board.LastErrorSummary);
+        }
+
+        [Fact]
         public async Task RunAsync_AfterFiveEffectiveExecutionRounds_EmitsTodoReminderInjected()
         {
             var llmMessages = new List<AgentMessage>();
@@ -1091,6 +1290,7 @@ namespace SmartWord.Application.Tests.Orchestration
             IUndoScopeFactory undoScopeFactory = null,
             IConversationStore conversationStore = null,
             IQuestionChannel questionChannel = null,
+            ITodoRecoveryChannel todoRecoveryChannel = null,
             ITodoStore todoStore = null)
         {
             var registry = new ToolRegistry();
@@ -1118,6 +1318,7 @@ namespace SmartWord.Application.Tests.Orchestration
                 undoScopeFactory ?? new FakeUndoScopeFactory(),
                 new ConversationCompressor(),
                 questionChannel,
+                todoRecoveryChannel ?? new FakeTodoRecoveryChannel(TodoBoardRecoveryDecision.RecoverExisting),
                 todoManager,
                 new TodoReminderService());
         }
@@ -1206,12 +1407,49 @@ namespace SmartWord.Application.Tests.Orchestration
                 cancellationToken.ThrowIfCancellationRequested();
                 return Task.FromResult(_boards.ContainsKey(documentPath ?? "__active_document__"));
             }
+
+            public TodoBoard PeekBoard(string documentPath)
+            {
+                _boards.TryGetValue(documentPath ?? "__active_document__", out var board);
+                return board;
+            }
+
+            public bool Exists(string documentPath)
+            {
+                return _boards.ContainsKey(documentPath ?? "__active_document__");
+            }
+        }
+
+        private sealed class FakeTodoRecoveryChannel : ITodoRecoveryChannel
+        {
+            private readonly TodoBoardRecoveryDecision _decision;
+
+            public FakeTodoRecoveryChannel(TodoBoardRecoveryDecision decision, bool isAvailable = true)
+            {
+                _decision = decision;
+                IsAvailable = isAvailable;
+            }
+
+            public bool IsAvailable { get; }
+
+            public string LastRecoveryRequestId { get; private set; }
+
+            public int WaitCount { get; private set; }
+
+            public Task<TodoBoardRecoveryDecision> WaitForDecisionAsync(string recoveryRequestId, CancellationToken cancellationToken)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                LastRecoveryRequestId = recoveryRequestId;
+                WaitCount++;
+                return Task.FromResult(_decision);
+            }
         }
 
         private sealed class FakeLlmClient : ILlmClient
         {
             private readonly Queue<AgentMessage> _responses = new Queue<AgentMessage>();
             public List<List<AgentMessage>> RequestMessageSnapshots { get; } = new List<List<AgentMessage>>();
+            public int CallCount { get; private set; }
 
             public FakeLlmClient(params AgentMessage[] responses)
             {
@@ -1243,6 +1481,7 @@ namespace SmartWord.Application.Tests.Orchestration
                 RequestMessageSnapshots.Add(messages == null
                     ? new List<AgentMessage>()
                     : new List<AgentMessage>(messages.Select(CloneMessage)));
+                CallCount++;
                 _ = model;
                 _ = tools;
                 cancellationToken.ThrowIfCancellationRequested();
@@ -1279,6 +1518,49 @@ namespace SmartWord.Application.Tests.Orchestration
                         ? new List<ToolCall>()
                         : new List<ToolCall>(message.ToolCalls)
                 };
+            }
+        }
+
+        private sealed class LoopingToolLlmClient : ILlmClient
+        {
+            private readonly string _toolName;
+            private readonly string _toolInput;
+
+            public LoopingToolLlmClient(string toolName, string toolInput)
+            {
+                _toolName = toolName;
+                _toolInput = toolInput;
+            }
+
+            public int CallCount { get; private set; }
+
+            public async IAsyncEnumerable<string> ChatCompletionStreamAsync(
+                IReadOnlyList<AgentMessage> messages,
+                string model,
+                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+            {
+                _ = messages;
+                _ = model;
+                cancellationToken.ThrowIfCancellationRequested();
+                await Task.CompletedTask;
+                yield break;
+            }
+
+            public Task<AgentMessage> ChatCompletionWithToolsAsync(
+                IReadOnlyList<AgentMessage> messages,
+                string model,
+                IReadOnlyList<ToolDefinition> tools,
+                System.Action<string> onStreamChunk,
+                CancellationToken cancellationToken)
+            {
+                _ = messages;
+                _ = model;
+                _ = tools;
+                cancellationToken.ThrowIfCancellationRequested();
+                CallCount++;
+
+                return Task.FromResult(CreateToolCallMessage(
+                    CreateToolCall($"loop-{CallCount}", _toolName, _toolInput)));
             }
         }
 
