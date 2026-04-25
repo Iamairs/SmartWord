@@ -29,6 +29,7 @@ namespace SmartWord.AddIn.DI
         private static ServiceProvider _serviceProvider;
         private static WebViewConfirmationChannel _confirmationChannel;
         private static WebViewQuestionChannel _questionChannel;
+        private static WebViewTodoRecoveryChannel _todoRecoveryChannel;
 
         public static void Initialize(Microsoft.Office.Interop.Word.Application wordApplication)
         {
@@ -40,6 +41,7 @@ namespace SmartWord.AddIn.DI
             var wordApplicationWrapper = new WordApplicationWrapper(wordApplication);
             _confirmationChannel = new WebViewConfirmationChannel();
             _questionChannel = new WebViewQuestionChannel();
+            _todoRecoveryChannel = new WebViewTodoRecoveryChannel();
             services.AddSingleton(wordApplication);
             services.AddSingleton(wordApplicationWrapper);
             services.AddSingleton<IUndoScopeFactory>(wordApplicationWrapper);
@@ -47,6 +49,8 @@ namespace SmartWord.AddIn.DI
             services.AddSingleton<IConfirmationChannel>(_confirmationChannel);
             services.AddSingleton(_questionChannel);
             services.AddSingleton<IQuestionChannel>(_questionChannel);
+            services.AddSingleton(_todoRecoveryChannel);
+            services.AddSingleton<ITodoRecoveryChannel>(_todoRecoveryChannel);
             services.AddSingleton<ScriptSecurityValidator>();
             services.AddSingleton<CSharpScriptExecutor>();
             services.AddSingleton(provider => LoadSmartWordSettings());
@@ -101,6 +105,7 @@ namespace SmartWord.AddIn.DI
                 provider.GetRequiredService<IUndoScopeFactory>(),
                 provider.GetRequiredService<ConversationCompressor>(),
                 provider.GetRequiredService<IQuestionChannel>(),
+                provider.GetRequiredService<ITodoRecoveryChannel>(),
                 provider.GetRequiredService<TodoManager>(),
                 provider.GetRequiredService<TodoReminderService>()));
             services.AddSingleton<StreamingResponseHandler>();
@@ -187,6 +192,8 @@ namespace SmartWord.AddIn.DI
             _confirmationChannel = null;
             _questionChannel?.DetachBridge();
             _questionChannel = null;
+            _todoRecoveryChannel?.DetachBridge();
+            _todoRecoveryChannel = null;
             _serviceProvider?.Dispose();
             _serviceProvider = null;
         }
@@ -195,6 +202,7 @@ namespace SmartWord.AddIn.DI
         {
             _confirmationChannel?.AttachBridge(bridge);
             _questionChannel?.AttachBridge(bridge);
+            _todoRecoveryChannel?.AttachBridge(bridge);
         }
 
         private static SmartWordSettings LoadSmartWordSettings()

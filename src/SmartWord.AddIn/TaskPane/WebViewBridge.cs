@@ -35,6 +35,10 @@ namespace SmartWord.AddIn.TaskPane
             new ConcurrentDictionary<string, TaskCompletionSource<string>>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, string> _earlyQuestionAnswers =
             new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, TaskCompletionSource<TodoBoardRecoveryDecision>> _pendingTodoRecoveryDecisions =
+            new ConcurrentDictionary<string, TaskCompletionSource<TodoBoardRecoveryDecision>>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, TodoBoardRecoveryDecision> _earlyTodoRecoveryDecisions =
+            new ConcurrentDictionary<string, TodoBoardRecoveryDecision>(StringComparer.OrdinalIgnoreCase);
         private CoreWebView2 _coreWebView2;
         private CancellationTokenSource _currentCts;
 
@@ -261,6 +265,43 @@ namespace SmartWord.AddIn.TaskPane
             });
         }
 
+        public string SubmitTodoBoardRecoveryDecision(string recoveryRequestId, string decision)
+        {
+            if (string.IsNullOrWhiteSpace(recoveryRequestId))
+            {
+                return JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    message = "recoveryRequestId 不能为空。"
+                });
+            }
+
+            if (!TryParseTodoRecoveryDecision(decision, out var parsedDecision))
+            {
+                return JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    message = "恢复决策非法。允许值：recover_existing、rebuild_from_active_plan、discard_and_create_empty。"
+                });
+            }
+
+            if (_pendingTodoRecoveryDecisions.TryRemove(recoveryRequestId, out var pendingDecision))
+            {
+                pendingDecision.TrySetResult(parsedDecision);
+            }
+            else
+            {
+                _earlyTodoRecoveryDecisions[recoveryRequestId] = parsedDecision;
+            }
+
+            return JsonConvert.SerializeObject(new
+            {
+                success = true,
+                recoveryRequestId,
+                decision = decision ?? string.Empty
+            });
+        }
+
         public void PostEventToJs(object agentEvent)
         {
             if (_coreWebView2 == null || !IsOwnerControlAvailable())
@@ -388,6 +429,50 @@ namespace SmartWord.AddIn.TaskPane
             }
         }
 
+        internal async Task<TodoBoardRecoveryDecision> WaitForTodoBoardRecoveryDecisionAsync(
+            string recoveryRequestId,
+            CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(recoveryRequestId))
+            {
+                throw new ArgumentException("recoveryRequestId 不能为空。", nameof(recoveryRequestId));
+            }
+
+            if (_earlyTodoRecoveryDecisions.TryRemove(recoveryRequestId, out var earlyDecision))
+            {
+                return earlyDecision;
+            }
+
+            var taskCompletionSource =
+                new TaskCompletionSource<TodoBoardRecoveryDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!_pendingTodoRecoveryDecisions.TryAdd(recoveryRequestId, taskCompletionSource))
+            {
+                if (_pendingTodoRecoveryDecisions.TryGetValue(recoveryRequestId, out var existing))
+                {
+                    return await existing.Task.ConfigureAwait(false);
+                }
+
+                return TodoBoardRecoveryDecision.RecoverExisting;
+            }
+
+            var registration = cancellationToken.Register(() =>
+            {
+                if (_pendingTodoRecoveryDecisions.TryRemove(recoveryRequestId, out var pending))
+                {
+                    pending.TrySetCanceled(cancellationToken);
+                }
+            });
+
+            try
+            {
+                return await taskCompletionSource.Task.ConfigureAwait(false);
+            }
+            finally
+            {
+                registration.Dispose();
+            }
+        }
+
         private CancellationTokenSource ReplaceCurrentCancellationTokenSource()
         {
             lock (_ctsSyncRoot)
@@ -483,7 +568,13 @@ namespace SmartWord.AddIn.TaskPane
                 questionOptions = agentEvent.QuestionOptions,
                 planJson = agentEvent.PlanJson,
                 boardJson = agentEvent.BoardJson,
-                currentTodoId = agentEvent.CurrentTodoId
+                currentTodoId = agentEvent.CurrentTodoId,
+                recoveryRequestId = agentEvent.RecoveryRequestId,
+                recoveryReason = agentEvent.RecoveryReason,
+                lastRunOutcome = agentEvent.LastRunOutcome,
+                lastErrorSummary = agentEvent.LastErrorSummary,
+                hasActivePlan = agentEvent.HasActivePlan,
+                canRecoverExisting = agentEvent.CanRecoverExisting
             };
         }
 
@@ -537,9 +628,35 @@ namespace SmartWord.AddIn.TaskPane
                     return "todo_board_updated";
                 case AgentEventType.TodoReminderInjected:
                     return "todo_reminder_injected";
+                case AgentEventType.TodoBoardRecoveryRequired:
+                    return "todo_board_recovery_required";
                 case AgentEventType.Error:
                 default:
                     return "error";
+            }
+        }
+
+        private static bool TryParseTodoRecoveryDecision(string rawDecision, out TodoBoardRecoveryDecision decision)
+        {
+            decision = TodoBoardRecoveryDecision.RecoverExisting;
+            if (string.IsNullOrWhiteSpace(rawDecision))
+            {
+                return false;
+            }
+
+            switch (rawDecision.Trim().ToLowerInvariant())
+            {
+                case "recover_existing":
+                    decision = TodoBoardRecoveryDecision.RecoverExisting;
+                    return true;
+                case "rebuild_from_active_plan":
+                    decision = TodoBoardRecoveryDecision.RebuildFromActivePlan;
+                    return true;
+                case "discard_and_create_empty":
+                    decision = TodoBoardRecoveryDecision.DiscardAndCreateEmpty;
+                    return true;
+                default:
+                    return false;
             }
         }
 
