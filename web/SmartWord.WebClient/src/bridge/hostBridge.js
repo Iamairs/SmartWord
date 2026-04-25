@@ -2,6 +2,7 @@ const SETTINGS_STORAGE_KEY = 'smartword-settings';
 const VALID_MODES = new Set(['ask', 'plan', 'agent']);
 
 let pendingMockConfirmation = null;
+let pendingMockTodoRecovery = null;
 
 function hasWebView2Bridge() {
   return Boolean(
@@ -245,6 +246,28 @@ export const hostBridge = {
     }
 
     pendingMockConfirmation = null;
+  },
+
+  async submitTodoBoardRecoveryDecision(recoveryRequestId, decision) {
+    if (this.isAvailable) {
+      await callBridge('SubmitTodoBoardRecoveryDecision', recoveryRequestId, decision || '');
+      return;
+    }
+
+    if (!pendingMockTodoRecovery || pendingMockTodoRecovery.recoveryRequestId !== recoveryRequestId) {
+      return;
+    }
+
+    emitEvent({
+      type: 'todo_board_ready',
+      boardJson: pendingMockTodoRecovery.boardJson || '{"items":[]}',
+      currentTodoId: ''
+    });
+    emitEvent({
+      type: 'task_completed',
+      message: `当前为浏览器降级模式，已模拟提交恢复决策：${decision || 'recover_existing'}。`
+    });
+    pendingMockTodoRecovery = null;
   },
 
   async navigateToParagraph(paragraphIndex) {

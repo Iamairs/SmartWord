@@ -114,6 +114,11 @@
         :changes="chatStore.completedTaskChanges"
         @navigate="navigateToParagraph"
       />
+      <TodoBoardRecoveryPanel
+        v-if="chatStore.pendingTodoRecovery"
+        :recovery="chatStore.pendingTodoRecovery"
+        @recover="submitTodoRecoveryDecision"
+      />
       <TodoBoardPanel
         v-if="chatStore.todoBoardVisible && chatStore.currentMode === 'agent' && chatStore.activeTodoBoard"
         :board="chatStore.activeTodoBoard"
@@ -232,6 +237,7 @@ import ChangesSummaryPanel from './ChangesSummaryPanel.vue';
 import ContentPreviewPanel from './ContentPreviewPanel.vue';
 import ThoughtActionTrace from './ThoughtActionTrace.vue';
 import TodoBoardPanel from './TodoBoardPanel.vue';
+import TodoBoardRecoveryPanel from './TodoBoardRecoveryPanel.vue';
 
 const chatStore = useChatStore();
 const settingsStore = useSettingsStore();
@@ -370,6 +376,22 @@ async function navigateToParagraph(paragraphIndex) {
   await hostBridge.navigateToParagraph(paragraphIndex);
 }
 
+async function submitTodoRecoveryDecision(decision) {
+  const recovery = chatStore.pendingTodoRecovery;
+  if (!recovery) {
+    return;
+  }
+
+  chatStore.setPendingTodoRecoverySubmitting(true);
+  try {
+    await hostBridge.submitTodoBoardRecoveryDecision(recovery.recoveryRequestId, decision);
+    chatStore.resumeLoadingAfterTodoRecovery();
+  } catch (error) {
+    chatStore.setPendingTodoRecoverySubmitting(false);
+    chatStore.appendAssistantMessage(`提交恢复决策失败：${error.message || '未知错误'}`);
+  }
+}
+
 async function submitQuestionAnswer(answer) {
   const q = chatStore.pendingQuestion;
   if (!q || !answer?.trim()) return;
@@ -450,7 +472,22 @@ function handleAgentEvent(event) {
       chatStore.setPlan(event.planJson);
       chatStore.finishLoading();
       break;
+    case 'todo_board_recovery_required':
+      chatStore.setTodoRecovery({
+        recoveryRequestId: event.recoveryRequestId,
+        boardJson: event.boardJson,
+        recoveryReason: event.recoveryReason,
+        lastRunOutcome: event.lastRunOutcome,
+        lastErrorSummary: event.lastErrorSummary,
+        hasActivePlan: event.hasActivePlan === true,
+        canRecoverExisting: event.canRecoverExisting !== false
+      });
+      chatStore.finishLoading();
+      break;
     case 'todo_board_ready':
+      chatStore.clearPendingTodoRecovery();
+      chatStore.setTodoBoard(event.boardJson, event.currentTodoId || '');
+      break;
     case 'todo_board_updated':
       chatStore.setTodoBoard(event.boardJson, event.currentTodoId || '');
       break;
@@ -465,6 +502,7 @@ function handleAgentEvent(event) {
       break;
     case 'task_completed':
       chatStore.setCitations(event.citations);
+      chatStore.clearPendingTodoRecovery();
       chatStore.finishLoading();
       chatStore.finalizeTaskChanges();
       if (event.message) {
@@ -476,6 +514,7 @@ function handleAgentEvent(event) {
     case 'error':
     case 'cancelled':
       chatStore.setCitations(event.citations);
+      chatStore.clearPendingTodoRecovery();
       chatStore.finishLoading();
       chatStore.finalizeTaskChanges();
       if (event.message) {
@@ -534,6 +573,7 @@ watch(
     chatStore.messages.length,
     chatStore.activeToolCalls.length,
     chatStore.pendingQuestion ? chatStore.pendingQuestion.questionId : '',
+    chatStore.pendingTodoRecovery ? chatStore.pendingTodoRecovery.recoveryRequestId : '',
     chatStore.activePlan ? JSON.stringify(chatStore.activePlan) : '',
     chatStore.isLoading
   ],

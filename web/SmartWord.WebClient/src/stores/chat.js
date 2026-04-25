@@ -38,6 +38,7 @@ export const useChatStore = defineStore('chat', {
     pendingQuestion: null,
     activePlan: null,
     activeTodoBoard: null,
+    pendingTodoRecovery: null,
     currentTodoId: '',
     todoBoardVisible: false,
     currentTaskChanges: [],
@@ -205,11 +206,55 @@ export const useChatStore = defineStore('chat', {
           })?.id ||
           '';
         this.todoBoardVisible = true;
+        this.pendingTodoRecovery = null;
       } catch {
         this.activeTodoBoard = null;
         this.currentTodoId = '';
         this.todoBoardVisible = false;
       }
+    },
+    setTodoRecovery(recovery) {
+      let board = null;
+      try {
+        board = recovery?.boardJson
+          ? typeof recovery.boardJson === 'string'
+            ? JSON.parse(recovery.boardJson)
+            : recovery.boardJson
+          : null;
+      } catch {
+        board = null;
+      }
+
+      this.pendingTodoRecovery = {
+        recoveryRequestId: recovery?.recoveryRequestId || '',
+        recoveryReason: recovery?.recoveryReason || '',
+        lastRunOutcome: recovery?.lastRunOutcome || '',
+        lastErrorSummary: recovery?.lastErrorSummary || '',
+        hasActivePlan: recovery?.hasActivePlan === true,
+        canRecoverExisting: recovery?.canRecoverExisting !== false && Boolean(board),
+        board,
+        isSubmitting: false
+      };
+      this.activeTodoBoard = null;
+      this.currentTodoId = '';
+      this.todoBoardVisible = false;
+    },
+    setPendingTodoRecoverySubmitting(isSubmitting) {
+      if (!this.pendingTodoRecovery) {
+        return;
+      }
+
+      this.pendingTodoRecovery = {
+        ...this.pendingTodoRecovery,
+        isSubmitting: isSubmitting === true
+      };
+    },
+    clearPendingTodoRecovery() {
+      this.pendingTodoRecovery = null;
+    },
+    resumeLoadingAfterTodoRecovery() {
+      this.isLoading = true;
+      this.pendingTodoRecovery = null;
     },
     clearTodoBoard() {
       this.activeTodoBoard = null;
@@ -222,6 +267,7 @@ export const useChatStore = defineStore('chat', {
       this.citations = [];
       this.pendingConfirmation = null;
       this.pendingQuestion = null;
+      this.pendingTodoRecovery = null;
       this.currentTaskChanges = [];
       this.completedTaskChanges = [];
       this.activeTodoBoard = null;
