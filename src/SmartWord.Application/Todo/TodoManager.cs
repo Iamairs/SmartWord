@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -14,11 +15,13 @@ using SmartWord.Core.Models;
 namespace SmartWord.Application.Todo
 {
     /// <summary>
-    /// 统一维护 Todo Board 的业务规则、统计计算和展示视图。
+    /// 统一维护 Todo Board 的生命周期、业务规则、统计计算和展示视图。
     /// </summary>
     public sealed class TodoManager
     {
         private const int MaxItems = 20;
+        private const string ActiveDocumentFallback = "__active_document__";
+        private const string CorruptedBoardMessage = "Todo Board 文件已损坏，无法读取。";
         private static readonly Regex TodoIdRegex = new Regex("^[A-Za-z][A-Za-z0-9_-]{0,31}$", RegexOptions.Compiled);
         private static readonly JsonSerializerSettings BoardJsonSettings = new JsonSerializerSettings
         {
@@ -37,35 +40,235 @@ namespace SmartWord.Application.Todo
 
         public void SetCurrentDocumentPath(string documentPath)
         {
-            _currentDocumentPath.Value = string.IsNullOrWhiteSpace(documentPath)
-                ? "__active_document__"
-                : documentPath;
+            _currentDocumentPath.Value = NormalizeDocumentPath(documentPath);
         }
 
         public string GetCurrentDocumentPathOrDefault()
         {
-            return string.IsNullOrWhiteSpace(_currentDocumentPath.Value)
-                ? "__active_document__"
-                : _currentDocumentPath.Value;
+            return NormalizeDocumentPath(_currentDocumentPath.Value);
+        }
+
+        public async Task<TodoBoardPreparationResult> PrepareBoardForRunAsync(
+            string documentPath,
+            ExecutionPlan activePlan,
+            CancellationToken cancellationToken)
+        {
+            var normalizedDocumentPath = NormalizeDocumentPath(documentPath);
+            var planFingerprint = ComputePlanFingerprint(activePlan);
+            TodoBoard board = null;
+
+            try
+            {
+                board = await _todoStore.GetBoardAsync(normalizedDocumentPath, cancellationToken).ConfigureAwait(false);
+            }
+            catch (InvalidOperationException ex) when (IsCorruptedBoardException(ex))
+            {
+                return new TodoBoardPreparationResult
+                {
+                    Status = TodoBoardPreparationStatus.RecoveryRequired,
+                    RecoveryReason = "检测到 Todo Board 文件已损坏，建议按当前计划重建，或丢弃后新建空任务板。",
+                    LastRunOutcome = TodoBoardRunOutcome.Failed,
+                    LastErrorSummary = ex.Message,
+                    HasActivePlan = activePlan != null,
+                    ActivePlanFingerprint = planFingerprint,
+                    CanRecoverExisting = false
+                };
+            }
+
+            if (board == null)
+            {
+                board = activePlan != null
+                    ? CreateBoardFromExecutionPlan(normalizedDocumentPath, activePlan)
+                    : CreateEmptyBoard(normalizedDocumentPath);
+                board.SourcePlanFingerprint = string.IsNullOrWhiteSpace(planFingerprint)
+                    ? board.SourcePlanFingerprint
+                    : planFingerprint;
+                await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
+                return CreateReadyPreparationResult(board, activePlan, planFingerprint);
+            }
+
+            NormalizeBoard(board);
+            if (ShouldTreatLegacyBoardAsDirty(board))
+            {
+                MarkBoardRecoveryRequired(
+                    board,
+                    TodoBoardRunOutcome.CrashedLike,
+                    "检测到旧版本 Todo Board，无法确认其与当前文档是否一致，请先选择恢复旧板、按计划重建或丢弃后新建。",
+                    "检测到旧版本 Todo Board，缺少运行态元数据。");
+                await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
+                return CreateRecoveryPreparationResult(board, activePlan, planFingerprint, canRecoverExisting: true);
+            }
+
+            if (board.ExecutionState == TodoBoardExecutionState.Running)
+            {
+                MarkBoardRecoveryRequired(
+                    board,
+                    TodoBoardRunOutcome.CrashedLike,
+                    "检测到上一次 Agent 运行疑似在异常退出前停留在运行中状态，请先选择恢复方式。",
+                    string.IsNullOrWhiteSpace(board.LastErrorSummary)
+                        ? "上一次运行未正常完成收尾。"
+                        : board.LastErrorSummary);
+                await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
+                return CreateRecoveryPreparationResult(board, activePlan, planFingerprint, canRecoverExisting: true);
+            }
+
+            if (board.ExecutionState == TodoBoardExecutionState.RecoveryRequired)
+            {
+                if (string.IsNullOrWhiteSpace(board.RecoveryReason))
+                {
+                    board.RecoveryReason = "检测到上一轮执行未正常结束，请先确认是否恢复旧任务板。";
+                    await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
+                }
+
+                return CreateRecoveryPreparationResult(board, activePlan, planFingerprint, canRecoverExisting: true);
+            }
+
+            if (board.SchemaVersion < TodoBoard.CurrentSchemaVersion && board.Items.Count == 0)
+            {
+                board.SchemaVersion = TodoBoard.CurrentSchemaVersion;
+                await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
+            }
+
+            return CreateReadyPreparationResult(board, activePlan, planFingerprint);
+        }
+
+        public async Task<TodoBoard> MarkRunStartedAsync(
+            string documentPath,
+            string runId,
+            string activePlanFingerprint,
+            CancellationToken cancellationToken)
+        {
+            var board = await EnsureBoardAsync(documentPath, cancellationToken).ConfigureAwait(false);
+            board.SchemaVersion = TodoBoard.CurrentSchemaVersion;
+            board.ExecutionState = TodoBoardExecutionState.Running;
+            board.LastRunId = string.IsNullOrWhiteSpace(runId) ? Guid.NewGuid().ToString("N") : runId.Trim();
+            board.LastRunStartedAtUtc = DateTime.UtcNow;
+            board.LastRunFinishedAtUtc = null;
+            board.LastRunOutcome = TodoBoardRunOutcome.None;
+            board.LastErrorSummary = string.Empty;
+            board.RecoveryReason = string.Empty;
+            if (!string.IsNullOrWhiteSpace(activePlanFingerprint))
+            {
+                board.SourcePlanFingerprint = activePlanFingerprint;
+            }
+
+            await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
+            return board;
+        }
+
+        public Task MarkRunSucceededAndDeleteAsync(string documentPath, CancellationToken cancellationToken)
+        {
+            return _todoStore.DeleteBoardAsync(NormalizeDocumentPath(documentPath), cancellationToken);
+        }
+
+        public async Task<TodoBoard> MarkRunInterruptedAsync(
+            string documentPath,
+            TodoBoardRunOutcome outcome,
+            string reason,
+            CancellationToken cancellationToken)
+        {
+            var normalizedDocumentPath = NormalizeDocumentPath(documentPath);
+            TodoBoard board;
+
+            try
+            {
+                board = await _todoStore.GetBoardAsync(normalizedDocumentPath, cancellationToken).ConfigureAwait(false);
+            }
+            catch (InvalidOperationException ex) when (IsCorruptedBoardException(ex))
+            {
+                board = CreateEmptyBoard(normalizedDocumentPath);
+                board.LastErrorSummary = ex.Message;
+            }
+
+            board = board ?? CreateEmptyBoard(normalizedDocumentPath);
+            NormalizeBoard(board);
+            MarkBoardRecoveryRequired(
+                board,
+                outcome,
+                BuildRecoveryReason(outcome, reason),
+                reason);
+            await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
+            return board;
+        }
+
+        public async Task<TodoBoard> ResolveRecoveryAsync(
+            string documentPath,
+            TodoBoardRecoveryDecision decision,
+            ExecutionPlan activePlan,
+            CancellationToken cancellationToken)
+        {
+            var normalizedDocumentPath = NormalizeDocumentPath(documentPath);
+            var activePlanFingerprint = ComputePlanFingerprint(activePlan);
+
+            switch (decision)
+            {
+                case TodoBoardRecoveryDecision.RecoverExisting:
+                {
+                    var board = await GetBoardAsync(normalizedDocumentPath, cancellationToken).ConfigureAwait(false);
+                    if (board == null)
+                    {
+                        throw new InvalidOperationException("当前不存在可恢复的 Todo Board。");
+                    }
+
+                    board.ExecutionState = TodoBoardExecutionState.Idle;
+                    board.RecoveryReason = string.Empty;
+                    if (!string.IsNullOrWhiteSpace(activePlanFingerprint))
+                    {
+                        board.SourcePlanFingerprint = activePlanFingerprint;
+                    }
+
+                    await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
+                    return board;
+                }
+                case TodoBoardRecoveryDecision.RebuildFromActivePlan:
+                {
+                    if (activePlan == null)
+                    {
+                        throw new InvalidOperationException("当前没有可用于重建 Todo Board 的 ActivePlan。");
+                    }
+
+                    var board = CreateBoardFromExecutionPlan(normalizedDocumentPath, activePlan);
+                    board.SourcePlanFingerprint = activePlanFingerprint;
+                    await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
+                    return board;
+                }
+                case TodoBoardRecoveryDecision.DiscardAndCreateEmpty:
+                {
+                    await _todoStore.DeleteBoardAsync(normalizedDocumentPath, cancellationToken).ConfigureAwait(false);
+                    var board = CreateEmptyBoard(normalizedDocumentPath);
+                    board.SourcePlanFingerprint = activePlanFingerprint;
+                    await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
+                    return board;
+                }
+                default:
+                    throw new InvalidOperationException("未知的 Todo Board 恢复决策。");
+            }
+        }
+
+        public Task DiscardBoardAsync(string documentPath, CancellationToken cancellationToken)
+        {
+            return _todoStore.DeleteBoardAsync(NormalizeDocumentPath(documentPath), cancellationToken);
         }
 
         public async Task<TodoBoard> EnsureBoardAsync(string documentPath, CancellationToken cancellationToken)
         {
-            var board = await _todoStore.GetBoardAsync(documentPath, cancellationToken).ConfigureAwait(false);
+            var normalizedDocumentPath = NormalizeDocumentPath(documentPath);
+            var board = await GetBoardAsync(normalizedDocumentPath, cancellationToken).ConfigureAwait(false);
             if (board != null)
             {
-                NormalizeBoard(board);
                 return board;
             }
 
-            var created = CreateEmptyBoard(documentPath);
+            var created = CreateEmptyBoard(normalizedDocumentPath);
             await _todoStore.SaveBoardAsync(created, cancellationToken).ConfigureAwait(false);
             return created;
         }
 
         public async Task<TodoBoard> GetBoardAsync(string documentPath, CancellationToken cancellationToken)
         {
-            var board = await _todoStore.GetBoardAsync(documentPath, cancellationToken).ConfigureAwait(false);
+            var board = await _todoStore
+                .GetBoardAsync(NormalizeDocumentPath(documentPath), cancellationToken)
+                .ConfigureAwait(false);
             if (board != null)
             {
                 NormalizeBoard(board);
@@ -84,28 +287,7 @@ namespace SmartWord.Application.Todo
                 throw new ArgumentNullException(nameof(plan));
             }
 
-            var board = CreateEmptyBoard(documentPath);
-            board.Items = new List<TodoBoardItem>();
-
-            for (var index = 0; index < plan.TodoList.Count; index++)
-            {
-                var planItem = plan.TodoList[index] ?? new TodoItem();
-                board.Items.Add(new TodoBoardItem
-                {
-                    Id = $"T{index + 1}",
-                    Content = string.IsNullOrWhiteSpace(planItem.Description) ? $"步骤 {index + 1}" : planItem.Description.Trim(),
-                    Status = planItem.Status,
-                    Order = index + 1,
-                    Notes = string.Empty,
-                    CreatedAt = DateTime.UtcNow,
-                    UpdatedAt = DateTime.UtcNow,
-                    CompletedAt = planItem.Status == TodoItemStatus.Completed ? (DateTime?)DateTime.UtcNow : null
-                });
-            }
-
-            ValidateBoard(board.Items);
-            EnsureSingleActiveItem(board.Items, true);
-            StampBoard(board);
+            var board = CreateBoardFromExecutionPlan(documentPath, plan);
             await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
             return CreateResult(board, "replace_board", "已根据当前执行计划初始化 Todo Board。", string.Empty);
         }
@@ -309,6 +491,28 @@ namespace SmartWord.Application.Todo
             return JsonConvert.SerializeObject(board, BoardJsonSettings);
         }
 
+        public string ComputePlanFingerprint(ExecutionPlan plan)
+        {
+            if (plan == null)
+            {
+                return string.Empty;
+            }
+
+            var payload = JsonConvert.SerializeObject(plan, Formatting.None);
+            using (var sha = SHA256.Create())
+            {
+                var bytes = Encoding.UTF8.GetBytes(payload);
+                var hash = sha.ComputeHash(bytes);
+                var builder = new StringBuilder(hash.Length * 2);
+                foreach (var item in hash)
+                {
+                    builder.Append(item.ToString("x2"));
+                }
+
+                return builder.ToString();
+            }
+        }
+
         private TodoWriteResult CreateResult(TodoBoard board, string operation, string message, string updatedItemId)
         {
             var stats = BuildStats(board);
@@ -326,17 +530,92 @@ namespace SmartWord.Application.Todo
             };
         }
 
+        private static TodoBoardPreparationResult CreateReadyPreparationResult(
+            TodoBoard board,
+            ExecutionPlan activePlan,
+            string activePlanFingerprint)
+        {
+            return new TodoBoardPreparationResult
+            {
+                Status = TodoBoardPreparationStatus.Ready,
+                Board = board,
+                HasActivePlan = activePlan != null,
+                ActivePlanFingerprint = activePlanFingerprint
+            };
+        }
+
+        private static TodoBoardPreparationResult CreateRecoveryPreparationResult(
+            TodoBoard board,
+            ExecutionPlan activePlan,
+            string activePlanFingerprint,
+            bool canRecoverExisting)
+        {
+            return new TodoBoardPreparationResult
+            {
+                Status = TodoBoardPreparationStatus.RecoveryRequired,
+                Board = board,
+                RecoveryReason = board == null ? string.Empty : board.RecoveryReason,
+                LastRunOutcome = board == null ? TodoBoardRunOutcome.None : board.LastRunOutcome,
+                LastErrorSummary = board == null ? string.Empty : board.LastErrorSummary,
+                HasActivePlan = activePlan != null,
+                ActivePlanFingerprint = activePlanFingerprint,
+                CanRecoverExisting = canRecoverExisting
+            };
+        }
+
         private static TodoBoard CreateEmptyBoard(string documentPath)
         {
             var now = DateTime.UtcNow;
             return new TodoBoard
             {
+                SchemaVersion = TodoBoard.CurrentSchemaVersion,
                 BoardId = Guid.NewGuid().ToString("N"),
-                DocumentPath = string.IsNullOrWhiteSpace(documentPath) ? "__active_document__" : documentPath,
+                DocumentPath = NormalizeDocumentPath(documentPath),
                 Version = 1,
                 UpdatedAt = now,
+                ExecutionState = TodoBoardExecutionState.Idle,
                 Items = new List<TodoBoardItem>()
             };
+        }
+
+        private static TodoBoard CreateBoardFromExecutionPlan(string documentPath, ExecutionPlan plan)
+        {
+            if (plan == null)
+            {
+                throw new ArgumentNullException(nameof(plan));
+            }
+
+            var board = CreateEmptyBoard(documentPath);
+            board.Items = new List<TodoBoardItem>();
+            var now = DateTime.UtcNow;
+
+            for (var index = 0; index < plan.TodoList.Count; index++)
+            {
+                var planItem = plan.TodoList[index] ?? new TodoItem();
+                board.Items.Add(new TodoBoardItem
+                {
+                    Id = $"T{index + 1}",
+                    Content = string.IsNullOrWhiteSpace(planItem.Description) ? $"步骤 {index + 1}" : planItem.Description.Trim(),
+                    Status = planItem.Status,
+                    Order = index + 1,
+                    Notes = string.Empty,
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                    CompletedAt = planItem.Status == TodoItemStatus.Completed ? (DateTime?)now : null
+                });
+            }
+
+            ValidateBoard(board.Items);
+            EnsureSingleActiveItem(board.Items, true);
+            StampBoard(board);
+            board.ExecutionState = TodoBoardExecutionState.Idle;
+            board.LastRunOutcome = TodoBoardRunOutcome.None;
+            board.LastRunStartedAtUtc = null;
+            board.LastRunFinishedAtUtc = null;
+            board.LastRunId = string.Empty;
+            board.RecoveryReason = string.Empty;
+            board.LastErrorSummary = string.Empty;
+            return board;
         }
 
         private string AddItem(TodoBoard board, TodoWriteRequest request)
@@ -603,9 +882,12 @@ namespace SmartWord.Application.Todo
                 return;
             }
 
-            board.DocumentPath = string.IsNullOrWhiteSpace(board.DocumentPath)
-                ? "__active_document__"
-                : board.DocumentPath;
+            board.DocumentPath = NormalizeDocumentPath(board.DocumentPath);
+            board.BoardId = board.BoardId ?? string.Empty;
+            board.LastRunId = board.LastRunId ?? string.Empty;
+            board.LastErrorSummary = board.LastErrorSummary ?? string.Empty;
+            board.RecoveryReason = board.RecoveryReason ?? string.Empty;
+            board.SourcePlanFingerprint = board.SourcePlanFingerprint ?? string.Empty;
             board.Items = (board.Items ?? new List<TodoBoardItem>())
                 .OrderBy(item => item == null ? int.MaxValue : item.Order)
                 .ThenBy(item => item == null ? string.Empty : item.Id)
@@ -613,11 +895,15 @@ namespace SmartWord.Application.Todo
             for (var index = 0; index < board.Items.Count; index++)
             {
                 board.Items[index].Order = index + 1;
+                board.Items[index].Id = board.Items[index].Id ?? string.Empty;
+                board.Items[index].Content = board.Items[index].Content ?? string.Empty;
+                board.Items[index].Notes = board.Items[index].Notes ?? string.Empty;
             }
         }
 
         private static void StampBoard(TodoBoard board)
         {
+            board.SchemaVersion = TodoBoard.CurrentSchemaVersion;
             board.Version = board.Version <= 0 ? 1 : board.Version + 1;
             board.UpdatedAt = DateTime.UtcNow;
             board.RoundsSinceLastTodoUpdate = 0;
@@ -674,6 +960,69 @@ namespace SmartWord.Application.Todo
                 default:
                     return "[ ]";
             }
+        }
+
+        private static bool ShouldTreatLegacyBoardAsDirty(TodoBoard board)
+        {
+            return board != null
+                && board.SchemaVersion < TodoBoard.CurrentSchemaVersion
+                && board.Items != null
+                && board.Items.Count > 0;
+        }
+
+        private static void MarkBoardRecoveryRequired(
+            TodoBoard board,
+            TodoBoardRunOutcome outcome,
+            string recoveryReason,
+            string errorSummary)
+        {
+            if (board == null)
+            {
+                return;
+            }
+
+            board.SchemaVersion = TodoBoard.CurrentSchemaVersion;
+            board.ExecutionState = TodoBoardExecutionState.RecoveryRequired;
+            board.LastRunFinishedAtUtc = DateTime.UtcNow;
+            board.LastRunOutcome = outcome;
+            board.RecoveryReason = string.IsNullOrWhiteSpace(recoveryReason) ? string.Empty : recoveryReason.Trim();
+            if (!string.IsNullOrWhiteSpace(errorSummary))
+            {
+                board.LastErrorSummary = errorSummary.Trim();
+            }
+
+            board.UpdatedAt = DateTime.UtcNow;
+        }
+
+        private static string BuildRecoveryReason(TodoBoardRunOutcome outcome, string reason)
+        {
+            var detail = string.IsNullOrWhiteSpace(reason) ? string.Empty : " 原因：" + reason.Trim();
+            switch (outcome)
+            {
+                case TodoBoardRunOutcome.Cancelled:
+                    return "上一次 Agent 运行已被取消，任务板已保留，请确认是继续恢复还是重建。" + detail;
+                case TodoBoardRunOutcome.RolledBack:
+                    return "上一次 Agent 运行在写入后进入回滚/待修复终止，Todo Board 可能早于文档现状，请先选择恢复方式。" + detail;
+                case TodoBoardRunOutcome.CrashedLike:
+                    return "检测到上一次 Agent 运行疑似异常退出，请先确认是否恢复旧任务板。" + detail;
+                case TodoBoardRunOutcome.Failed:
+                default:
+                    return "上一次 Agent 运行发生异常并提前结束，请先确认是否恢复旧任务板。" + detail;
+            }
+        }
+
+        private static bool IsCorruptedBoardException(Exception ex)
+        {
+            return ex != null
+                && !string.IsNullOrWhiteSpace(ex.Message)
+                && ex.Message.IndexOf(CorruptedBoardMessage, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static string NormalizeDocumentPath(string documentPath)
+        {
+            return string.IsNullOrWhiteSpace(documentPath)
+                ? ActiveDocumentFallback
+                : documentPath.Trim();
         }
     }
 }

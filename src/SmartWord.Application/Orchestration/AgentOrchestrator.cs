@@ -44,6 +44,7 @@ namespace SmartWord.Application.Orchestration
         private readonly IQuestionChannel _questionChannel;
         private readonly IUndoScopeFactory _undoScopeFactory;
         private readonly ConversationCompressor _conversationCompressor;
+        private readonly ITodoRecoveryChannel _todoRecoveryChannel;
         private readonly TodoManager _todoManager;
         private readonly TodoReminderService _todoReminderService;
 
@@ -58,6 +59,7 @@ namespace SmartWord.Application.Orchestration
             IUndoScopeFactory undoScopeFactory,
             ConversationCompressor conversationCompressor,
             IQuestionChannel questionChannel = null,
+            ITodoRecoveryChannel todoRecoveryChannel = null,
             TodoManager todoManager = null,
             TodoReminderService todoReminderService = null)
         {
@@ -71,6 +73,7 @@ namespace SmartWord.Application.Orchestration
             _questionChannel = questionChannel;
             _undoScopeFactory = undoScopeFactory;
             _conversationCompressor = conversationCompressor ?? throw new ArgumentNullException(nameof(conversationCompressor));
+            _todoRecoveryChannel = todoRecoveryChannel;
             _todoManager = todoManager;
             _todoReminderService = todoReminderService;
         }
@@ -119,23 +122,58 @@ namespace SmartWord.Application.Orchestration
         .ConfigureAwait(false);
 
     TodoBoard currentTodoBoard = null;
+    var activePlanFingerprint = _todoManager == null
+        ? string.Empty
+        : _todoManager.ComputePlanFingerprint(safeOptions.ActivePlan);
+    var runId = Guid.NewGuid().ToString("N");
+    var runStarted = false;
     if (_todoManager != null && safeOptions.Mode == AgentMode.Agent)
     {
-        if (safeOptions.ActivePlan != null)
+        var prepareResult = await _todoManager
+            .PrepareBoardForRunAsync(documentPath, safeOptions.ActivePlan, cancellationToken)
+            .ConfigureAwait(false);
+        currentTodoBoard = prepareResult.Board;
+        activePlanFingerprint = string.IsNullOrWhiteSpace(prepareResult.ActivePlanFingerprint)
+            ? activePlanFingerprint
+            : prepareResult.ActivePlanFingerprint;
+
+        if (prepareResult.Status == TodoBoardPreparationStatus.RecoveryRequired)
         {
-            var initResult = await _todoManager
-                .InitializeFromExecutionPlanAsync(documentPath, safeOptions.ActivePlan, cancellationToken)
+            if (_todoRecoveryChannel == null || !_todoRecoveryChannel.IsAvailable)
+            {
+                yield return new AgentEvent
+                {
+                    Type = AgentEventType.Error,
+                    Message = "检测到待恢复的 Todo Board，但当前前端未连接恢复决策通道，系统已停止执行。"
+                };
+
+                yield break;
+            }
+
+            var recoveryRequestId = Guid.NewGuid().ToString("N");
+            yield return CreateTodoBoardRecoveryRequiredEvent(
+                prepareResult,
+                _todoManager,
+                recoveryRequestId);
+
+            var recoveryDecision = await _todoRecoveryChannel
+                .WaitForDecisionAsync(recoveryRequestId, cancellationToken)
                 .ConfigureAwait(false);
-            currentTodoBoard = initResult.Board;
-            yield return CreateTodoBoardReadyEvent(currentTodoBoard, _todoManager, "已初始化当前执行任务板。");
-        }
-        else
-        {
             currentTodoBoard = await _todoManager
-                .EnsureBoardAsync(documentPath, cancellationToken)
+                .ResolveRecoveryAsync(documentPath, recoveryDecision, safeOptions.ActivePlan, cancellationToken)
                 .ConfigureAwait(false);
-            yield return CreateTodoBoardReadyEvent(currentTodoBoard, _todoManager, "当前 Todo Board 已就绪。");
         }
+
+        currentTodoBoard = await _todoManager
+            .MarkRunStartedAsync(documentPath, runId, activePlanFingerprint, cancellationToken)
+            .ConfigureAwait(false);
+        runStarted = true;
+        yield return CreateTodoBoardReadyEvent(
+            currentTodoBoard,
+            _todoManager,
+            prepareResult.Status == TodoBoardPreparationStatus.RecoveryRequired
+                ? "Todo Board 已按恢复决策准备完毕。"
+                : "当前 Todo Board 已就绪。");
     }
 
     var history = await _conversationStore
@@ -182,6 +220,8 @@ namespace SmartWord.Application.Orchestration
     PendingWriteStep pendingWriteStep = null;
     AgentMessage finalAssistantMessage = null;
     IUndoScope undoScope = null;
+    var interruptedOutcome = TodoBoardRunOutcome.None;
+    var interruptedReason = string.Empty;
 
     try
     {
@@ -201,6 +241,8 @@ namespace SmartWord.Application.Orchestration
                     Message = "检测到活动文档已切换，任务已停止。当前回滚仅能做最佳努力处理，请确认文档内容。"
                 };
 
+                interruptedOutcome = TodoBoardRunOutcome.Cancelled;
+                interruptedReason = "检测到活动文档已切换，当前运行已停止。";
                 yield break;
             }
 
@@ -284,7 +326,26 @@ namespace SmartWord.Application.Orchestration
                         };
                     }
 
-                    assistantMessage = await assistantTask.ConfigureAwait(false);
+                    if (assistantTask.IsCanceled)
+                    {
+                        interruptedOutcome = TodoBoardRunOutcome.Cancelled;
+                        interruptedReason = "当前 Agent 运行已被取消。";
+                        throw new OperationCanceledException(cancellationToken);
+                    }
+
+                    if (assistantTask.IsFaulted)
+                    {
+                        var assistantException = assistantTask.Exception == null
+                            ? null
+                            : assistantTask.Exception.GetBaseException();
+                        interruptedOutcome = TodoBoardRunOutcome.Failed;
+                        interruptedReason = assistantException == null || string.IsNullOrWhiteSpace(assistantException.Message)
+                            ? "当前 Agent 运行发生未预期异常。"
+                            : assistantException.Message;
+                        throw assistantException ?? new InvalidOperationException("当前 Agent 运行发生未预期异常。");
+                    }
+
+                    assistantMessage = assistantTask.Result;
                 }
             }
             else
@@ -347,6 +408,8 @@ namespace SmartWord.Application.Orchestration
                 {
                     yield return CreatePendingWriteStateEvent(pendingWriteStep);
                     yield return CreatePendingWriteTerminationEvent(pendingWriteStep);
+                    interruptedOutcome = TodoBoardRunOutcome.RolledBack;
+                    interruptedReason = "模型在存在待修复写步骤时提前停止输出。";
                     yield break;
                 }
 
@@ -403,6 +466,8 @@ namespace SmartWord.Application.Orchestration
                         consecutiveFailures++;
                         if (consecutiveFailures >= ConsecutiveFailureThreshold)
                         {
+                            interruptedOutcome = TodoBoardRunOutcome.Failed;
+                            interruptedReason = "连续多次工具调用失败，系统已触发熔断停止。";
                             yield return CreateCircuitBreakerEvent();
                             yield break;
                         }
@@ -492,6 +557,8 @@ namespace SmartWord.Application.Orchestration
                     consecutiveFailures++;
                     if (consecutiveFailures >= ConsecutiveFailureThreshold)
                     {
+                        interruptedOutcome = TodoBoardRunOutcome.Failed;
+                        interruptedReason = "连续多次工具调用失败，系统已触发熔断停止。";
                         yield return CreateCircuitBreakerEvent();
                         yield break;
                     }
@@ -533,6 +600,8 @@ namespace SmartWord.Application.Orchestration
                     consecutiveFailures++;
                     if (consecutiveFailures >= ConsecutiveFailureThreshold)
                     {
+                        interruptedOutcome = TodoBoardRunOutcome.Failed;
+                        interruptedReason = "连续多次工具调用失败，系统已触发熔断停止。";
                         yield return CreateCircuitBreakerEvent();
                         yield break;
                     }
@@ -591,6 +660,8 @@ namespace SmartWord.Application.Orchestration
                     consecutiveFailures++;
                     if (consecutiveFailures >= ConsecutiveFailureThreshold)
                     {
+                        interruptedOutcome = TodoBoardRunOutcome.Failed;
+                        interruptedReason = "连续多次工具调用失败，系统已触发熔断停止。";
                         yield return CreateCircuitBreakerEvent();
                         yield break;
                     }
@@ -616,6 +687,8 @@ namespace SmartWord.Application.Orchestration
                     consecutiveFailures++;
                     if (consecutiveFailures >= ConsecutiveFailureThreshold)
                     {
+                        interruptedOutcome = TodoBoardRunOutcome.Failed;
+                        interruptedReason = "连续多次工具调用失败，系统已触发熔断停止。";
                         yield return CreateCircuitBreakerEvent();
                         yield break;
                     }
@@ -831,6 +904,8 @@ namespace SmartWord.Application.Orchestration
                             consecutiveFailures++;
                             if (consecutiveFailures >= ConsecutiveFailureThreshold)
                             {
+                                interruptedOutcome = TodoBoardRunOutcome.RolledBack;
+                                interruptedReason = "写后验证连续失败，系统已停止当前任务。";
                                 yield return CreateCircuitBreakerEvent();
                                 yield break;
                             }
@@ -887,11 +962,15 @@ namespace SmartWord.Application.Orchestration
                             yield return CreatePendingWriteErrorEvent(
                                 pendingWriteStep,
                                 "当前写步骤已连续失败 3 次，系统已停止任务并保留失败信息供人工处理。");
+                            interruptedOutcome = TodoBoardRunOutcome.RolledBack;
+                            interruptedReason = "写步骤连续失败达到上限，系统已停止任务。";
                             yield break;
                         }
 
                         if (consecutiveFailures >= ConsecutiveFailureThreshold)
                         {
+                            interruptedOutcome = TodoBoardRunOutcome.RolledBack;
+                            interruptedReason = "写步骤连续失败，系统已触发熔断停止。";
                             yield return CreateCircuitBreakerEvent();
                             yield break;
                         }
@@ -905,6 +984,8 @@ namespace SmartWord.Application.Orchestration
                     consecutiveFailures++;
                     if (consecutiveFailures >= ConsecutiveFailureThreshold)
                     {
+                        interruptedOutcome = TodoBoardRunOutcome.Failed;
+                        interruptedReason = "连续多次工具调用失败，系统已触发熔断停止。";
                         yield return CreateCircuitBreakerEvent();
                         yield break;
                     }
@@ -1022,6 +1103,8 @@ namespace SmartWord.Application.Orchestration
         {
             yield return CreatePendingWriteStateEvent(pendingWriteStep);
             yield return CreatePendingWriteTerminationEvent(pendingWriteStep);
+            interruptedOutcome = TodoBoardRunOutcome.RolledBack;
+            interruptedReason = "当前任务在待修复写步骤未解决的情况下结束，系统已保留恢复信息。";
             yield break;
         }
 
@@ -1047,6 +1130,24 @@ namespace SmartWord.Application.Orchestration
                 undoScope.Dispose();
             }
         }
+
+        if (runStarted
+            && !shouldCommitUndo
+            && interruptedOutcome != TodoBoardRunOutcome.None
+            && _todoManager != null
+            && safeOptions.Mode == AgentMode.Agent)
+        {
+            await _todoManager
+                .MarkRunInterruptedAsync(documentPath, interruptedOutcome, interruptedReason, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+    }
+
+    if (runStarted && shouldCommitUndo && _todoManager != null && safeOptions.Mode == AgentMode.Agent)
+    {
+        await _todoManager
+            .MarkRunSucceededAndDeleteAsync(documentPath, CancellationToken.None)
+            .ConfigureAwait(false);
     }
 
     yield return new AgentEvent
@@ -1252,6 +1353,29 @@ namespace SmartWord.Application.Orchestration
                 CurrentTodoId = stats.CurrentTodoId,
                 CompletedSteps = stats.HandledCount,
                 TotalSteps = stats.TotalCount
+            };
+        }
+
+        private static AgentEvent CreateTodoBoardRecoveryRequiredEvent(
+            TodoBoardPreparationResult prepareResult,
+            TodoManager todoManager,
+            string recoveryRequestId)
+        {
+            var board = prepareResult == null ? null : prepareResult.Board;
+            var stats = todoManager == null ? new TodoBoardStats() : todoManager.BuildStats(board);
+            return new AgentEvent
+            {
+                Type = AgentEventType.TodoBoardRecoveryRequired,
+                BoardJson = board == null || todoManager == null ? string.Empty : todoManager.SerializeBoard(board),
+                CurrentTodoId = stats.CurrentTodoId,
+                CompletedSteps = stats.HandledCount,
+                TotalSteps = stats.TotalCount,
+                RecoveryRequestId = recoveryRequestId ?? string.Empty,
+                RecoveryReason = prepareResult == null ? string.Empty : prepareResult.RecoveryReason,
+                LastRunOutcome = prepareResult == null ? string.Empty : prepareResult.LastRunOutcome.ToString(),
+                LastErrorSummary = prepareResult == null ? string.Empty : prepareResult.LastErrorSummary,
+                HasActivePlan = prepareResult != null && prepareResult.HasActivePlan,
+                CanRecoverExisting = prepareResult == null || prepareResult.CanRecoverExisting
             };
         }
 
