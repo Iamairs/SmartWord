@@ -123,6 +123,17 @@ namespace SmartWord.Application.Todo
                 return CreateRecoveryPreparationResult(board, activePlan, planFingerprint, canRecoverExisting: true);
             }
 
+            if (board.ExecutionState == TodoBoardExecutionState.Paused)
+            {
+                if (string.IsNullOrWhiteSpace(board.PauseReason))
+                {
+                    board.PauseReason = "上一次 Agent 运行达到本轮预算上限，任务已暂停，可选择继续、重建或丢弃后重来。";
+                    await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
+                }
+
+                return CreatePausedPreparationResult(board, activePlan, planFingerprint, canRecoverExisting: true);
+            }
+
             if (board.SchemaVersion < TodoBoard.CurrentSchemaVersion && board.Items.Count == 0)
             {
                 board.SchemaVersion = TodoBoard.CurrentSchemaVersion;
@@ -147,11 +158,37 @@ namespace SmartWord.Application.Todo
             board.LastRunOutcome = TodoBoardRunOutcome.None;
             board.LastErrorSummary = string.Empty;
             board.RecoveryReason = string.Empty;
+            board.PauseReason = string.Empty;
             if (!string.IsNullOrWhiteSpace(activePlanFingerprint))
             {
                 board.SourcePlanFingerprint = activePlanFingerprint;
             }
 
+            await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
+            return board;
+        }
+
+        public async Task<TodoBoard> MarkRunPausedAsync(
+            string documentPath,
+            string reason,
+            CancellationToken cancellationToken)
+        {
+            var normalizedDocumentPath = NormalizeDocumentPath(documentPath);
+            TodoBoard board;
+
+            try
+            {
+                board = await _todoStore.GetBoardAsync(normalizedDocumentPath, cancellationToken).ConfigureAwait(false);
+            }
+            catch (InvalidOperationException ex) when (IsCorruptedBoardException(ex))
+            {
+                board = CreateEmptyBoard(normalizedDocumentPath);
+                board.LastErrorSummary = ex.Message;
+            }
+
+            board = board ?? CreateEmptyBoard(normalizedDocumentPath);
+            NormalizeBoard(board);
+            MarkBoardPaused(board, reason);
             await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
             return board;
         }
@@ -212,6 +249,7 @@ namespace SmartWord.Application.Todo
 
                     board.ExecutionState = TodoBoardExecutionState.Idle;
                     board.RecoveryReason = string.Empty;
+                    board.PauseReason = string.Empty;
                     if (!string.IsNullOrWhiteSpace(activePlanFingerprint))
                     {
                         board.SourcePlanFingerprint = activePlanFingerprint;
@@ -555,6 +593,27 @@ namespace SmartWord.Application.Todo
                 Status = TodoBoardPreparationStatus.RecoveryRequired,
                 Board = board,
                 RecoveryReason = board == null ? string.Empty : board.RecoveryReason,
+                PauseReason = board == null ? string.Empty : board.PauseReason,
+                LastRunOutcome = board == null ? TodoBoardRunOutcome.None : board.LastRunOutcome,
+                LastErrorSummary = board == null ? string.Empty : board.LastErrorSummary,
+                HasActivePlan = activePlan != null,
+                ActivePlanFingerprint = activePlanFingerprint,
+                CanRecoverExisting = canRecoverExisting
+            };
+        }
+
+        private static TodoBoardPreparationResult CreatePausedPreparationResult(
+            TodoBoard board,
+            ExecutionPlan activePlan,
+            string activePlanFingerprint,
+            bool canRecoverExisting)
+        {
+            return new TodoBoardPreparationResult
+            {
+                Status = TodoBoardPreparationStatus.Paused,
+                Board = board,
+                RecoveryReason = board == null ? string.Empty : board.RecoveryReason,
+                PauseReason = board == null ? string.Empty : board.PauseReason,
                 LastRunOutcome = board == null ? TodoBoardRunOutcome.None : board.LastRunOutcome,
                 LastErrorSummary = board == null ? string.Empty : board.LastErrorSummary,
                 HasActivePlan = activePlan != null,
@@ -614,6 +673,7 @@ namespace SmartWord.Application.Todo
             board.LastRunFinishedAtUtc = null;
             board.LastRunId = string.Empty;
             board.RecoveryReason = string.Empty;
+            board.PauseReason = string.Empty;
             board.LastErrorSummary = string.Empty;
             return board;
         }
@@ -887,6 +947,7 @@ namespace SmartWord.Application.Todo
             board.LastRunId = board.LastRunId ?? string.Empty;
             board.LastErrorSummary = board.LastErrorSummary ?? string.Empty;
             board.RecoveryReason = board.RecoveryReason ?? string.Empty;
+            board.PauseReason = board.PauseReason ?? string.Empty;
             board.SourcePlanFingerprint = board.SourcePlanFingerprint ?? string.Empty;
             board.Items = (board.Items ?? new List<TodoBoardItem>())
                 .OrderBy(item => item == null ? int.MaxValue : item.Order)
@@ -986,11 +1047,31 @@ namespace SmartWord.Application.Todo
             board.LastRunFinishedAtUtc = DateTime.UtcNow;
             board.LastRunOutcome = outcome;
             board.RecoveryReason = string.IsNullOrWhiteSpace(recoveryReason) ? string.Empty : recoveryReason.Trim();
+            board.PauseReason = string.Empty;
             if (!string.IsNullOrWhiteSpace(errorSummary))
             {
                 board.LastErrorSummary = errorSummary.Trim();
             }
 
+            board.UpdatedAt = DateTime.UtcNow;
+        }
+
+        private static void MarkBoardPaused(TodoBoard board, string pauseReason)
+        {
+            if (board == null)
+            {
+                return;
+            }
+
+            board.SchemaVersion = TodoBoard.CurrentSchemaVersion;
+            board.ExecutionState = TodoBoardExecutionState.Paused;
+            board.LastRunFinishedAtUtc = DateTime.UtcNow;
+            board.LastRunOutcome = TodoBoardRunOutcome.PausedByBudget;
+            board.RecoveryReason = string.Empty;
+            board.PauseReason = string.IsNullOrWhiteSpace(pauseReason)
+                ? "当前任务达到本轮预算上限，任务板已暂停，可在确认后继续。"
+                : pauseReason.Trim();
+            board.LastErrorSummary = string.Empty;
             board.UpdatedAt = DateTime.UtcNow;
         }
 

@@ -26,7 +26,8 @@ namespace SmartWord.Application.Orchestration
     /// </summary>
     public sealed class AgentOrchestrator : IAgentOrchestrator
     {
-        private const int AskModeMaxIterations = 5;
+        private const int FixedIterationBudget = 100;
+        private const int AskModeMaxIterations = FixedIterationBudget;
         private const int MaxToolCallsPerIteration = 20;
         private const int ConsecutiveFailureThreshold = 3;
         private const int WriteRepairAttemptLimit = 3;
@@ -125,7 +126,6 @@ namespace SmartWord.Application.Orchestration
     var activePlanFingerprint = _todoManager == null
         ? string.Empty
         : _todoManager.ComputePlanFingerprint(safeOptions.ActivePlan);
-    var runId = Guid.NewGuid().ToString("N");
     var runStarted = false;
     if (_todoManager != null && safeOptions.Mode == AgentMode.Agent)
     {
@@ -137,33 +137,59 @@ namespace SmartWord.Application.Orchestration
             ? activePlanFingerprint
             : prepareResult.ActivePlanFingerprint;
 
-        if (prepareResult.Status == TodoBoardPreparationStatus.RecoveryRequired)
+        if (prepareResult.Status == TodoBoardPreparationStatus.RecoveryRequired
+            || prepareResult.Status == TodoBoardPreparationStatus.Paused)
         {
-            if (_todoRecoveryChannel == null || !_todoRecoveryChannel.IsAvailable)
+            if (safeOptions.StartupTodoBoardDecision.HasValue)
+            {
+                currentTodoBoard = await _todoManager
+                    .ResolveRecoveryAsync(
+                        documentPath,
+                        safeOptions.StartupTodoBoardDecision.Value,
+                        safeOptions.ActivePlan,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else if (_todoRecoveryChannel == null || !_todoRecoveryChannel.IsAvailable)
             {
                 yield return new AgentEvent
                 {
                     Type = AgentEventType.Error,
-                    Message = "检测到待恢复的 Todo Board，但当前前端未连接恢复决策通道，系统已停止执行。"
+                    Message = prepareResult.Status == TodoBoardPreparationStatus.Paused
+                        ? "检测到已暂停的 Todo Board，但当前前端未连接继续决策通道，系统已停止执行。"
+                        : "检测到待恢复的 Todo Board，但当前前端未连接恢复决策通道，系统已停止执行。"
                 };
 
                 yield break;
             }
+            else
+            {
+                var recoveryRequestId = Guid.NewGuid().ToString("N");
+                if (prepareResult.Status == TodoBoardPreparationStatus.Paused)
+                {
+                    yield return CreateTodoBoardPausedEvent(
+                        prepareResult,
+                        _todoManager,
+                        recoveryRequestId);
+                }
+                else
+                {
+                    yield return CreateTodoBoardRecoveryRequiredEvent(
+                        prepareResult,
+                        _todoManager,
+                        recoveryRequestId);
+                }
 
-            var recoveryRequestId = Guid.NewGuid().ToString("N");
-            yield return CreateTodoBoardRecoveryRequiredEvent(
-                prepareResult,
-                _todoManager,
-                recoveryRequestId);
-
-            var recoveryDecision = await _todoRecoveryChannel
-                .WaitForDecisionAsync(recoveryRequestId, cancellationToken)
-                .ConfigureAwait(false);
-            currentTodoBoard = await _todoManager
-                .ResolveRecoveryAsync(documentPath, recoveryDecision, safeOptions.ActivePlan, cancellationToken)
-                .ConfigureAwait(false);
+                var recoveryDecision = await _todoRecoveryChannel
+                    .WaitForDecisionAsync(recoveryRequestId, cancellationToken)
+                    .ConfigureAwait(false);
+                currentTodoBoard = await _todoManager
+                    .ResolveRecoveryAsync(documentPath, recoveryDecision, safeOptions.ActivePlan, cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
 
+        var runId = Guid.NewGuid().ToString("N");
         currentTodoBoard = await _todoManager
             .MarkRunStartedAsync(documentPath, runId, activePlanFingerprint, cancellationToken)
             .ConfigureAwait(false);
@@ -173,6 +199,8 @@ namespace SmartWord.Application.Orchestration
             _todoManager,
             prepareResult.Status == TodoBoardPreparationStatus.RecoveryRequired
                 ? "Todo Board 已按恢复决策准备完毕。"
+                : prepareResult.Status == TodoBoardPreparationStatus.Paused
+                    ? "Todo Board 已按继续决策准备完毕。"
                 : "当前 Todo Board 已就绪。");
     }
 
@@ -212,6 +240,7 @@ namespace SmartWord.Application.Orchestration
     var maxIterations = ResolveMaxIterations(safeOptions);
     var consecutiveFailures = 0;
     var shouldCommitUndo = false;
+    var completedSuccessfully = false;
     var hasStartedWriteExecution = false;
     var hasSuccessfulDocumentWriteOccurredInRun = false;
     var hasCompactedContext = false;
@@ -225,7 +254,8 @@ namespace SmartWord.Application.Orchestration
 
     try
     {
-        for (var iteration = 0; iteration < maxIterations; iteration++)
+        var iteration = 0;
+        for (; iteration < maxIterations; iteration++)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -268,7 +298,18 @@ namespace SmartWord.Application.Orchestration
 
                 if (!canContinueWithCompactedContext || hasCompactedContext)
                 {
-                    break;
+                    if (safeOptions.Mode == AgentMode.Agent)
+                    {
+                        interruptedOutcome = TodoBoardRunOutcome.Failed;
+                        interruptedReason = "对话压缩后仍无法继续执行，系统已停止当前任务。";
+                    }
+
+                    yield return new AgentEvent
+                    {
+                        Type = AgentEventType.Error,
+                        Message = "对话压缩后仍无法继续执行，本轮任务已停止。请缩小范围或拆分任务后再继续。"
+                    };
+                    yield break;
                 }
 
                 messages = compactedMessages.ToList();
@@ -400,6 +441,16 @@ namespace SmartWord.Application.Orchestration
                             Type = AgentEventType.PlanReady,
                             PlanJson = SerializeCamelCase(plan)
                         };
+                        completedSuccessfully = true;
+                    }
+                    else
+                    {
+                        yield return new AgentEvent
+                        {
+                            Type = AgentEventType.Error,
+                            Message = "当前规划输出未能解析为可执行计划，本轮任务已停止。请补充要求后继续规划。"
+                        };
+                        yield break;
                     }
                     break;
                 }
@@ -1108,7 +1159,28 @@ namespace SmartWord.Application.Orchestration
             yield break;
         }
 
+        if (iteration >= maxIterations)
+        {
+            var maxIterationsMessage = BuildMaxIterationsMessage(safeOptions.Mode, maxIterations);
+            yield return CreateMaxIterationsReachedEvent(safeOptions.Mode, maxIterations, maxIterationsMessage);
+
+            if (safeOptions.Mode == AgentMode.Agent && runStarted && _todoManager != null)
+            {
+                currentTodoBoard = await _todoManager
+                    .MarkRunPausedAsync(documentPath, maxIterationsMessage, CancellationToken.None)
+                    .ConfigureAwait(false);
+                shouldCommitUndo = true;
+                yield return CreateTodoBoardPausedEvent(
+                    currentTodoBoard,
+                    _todoManager,
+                    maxIterationsMessage);
+            }
+
+            yield break;
+        }
+
         shouldCommitUndo = true;
+        completedSuccessfully = true;
     }
     finally
     {
@@ -1143,11 +1215,16 @@ namespace SmartWord.Application.Orchestration
         }
     }
 
-    if (runStarted && shouldCommitUndo && _todoManager != null && safeOptions.Mode == AgentMode.Agent)
+    if (runStarted && completedSuccessfully && _todoManager != null && safeOptions.Mode == AgentMode.Agent)
     {
         await _todoManager
             .MarkRunSucceededAndDeleteAsync(documentPath, CancellationToken.None)
             .ConfigureAwait(false);
+    }
+
+    if (!completedSuccessfully)
+    {
+        yield break;
     }
 
     yield return new AgentEvent
@@ -1377,6 +1454,80 @@ namespace SmartWord.Application.Orchestration
                 HasActivePlan = prepareResult != null && prepareResult.HasActivePlan,
                 CanRecoverExisting = prepareResult == null || prepareResult.CanRecoverExisting
             };
+        }
+
+        private static AgentEvent CreateTodoBoardPausedEvent(
+            TodoBoardPreparationResult prepareResult,
+            TodoManager todoManager,
+            string recoveryRequestId)
+        {
+            var board = prepareResult == null ? null : prepareResult.Board;
+            var stats = todoManager == null ? new TodoBoardStats() : todoManager.BuildStats(board);
+            return new AgentEvent
+            {
+                Type = AgentEventType.TodoBoardPaused,
+                Message = prepareResult == null
+                    ? "当前任务已暂停。"
+                    : string.IsNullOrWhiteSpace(prepareResult.PauseReason)
+                        ? "当前任务已暂停。"
+                        : prepareResult.PauseReason,
+                BoardJson = board == null || todoManager == null ? string.Empty : todoManager.SerializeBoard(board),
+                CurrentTodoId = stats.CurrentTodoId,
+                CompletedSteps = stats.HandledCount,
+                TotalSteps = stats.TotalCount,
+                RecoveryRequestId = recoveryRequestId ?? string.Empty,
+                LastRunOutcome = prepareResult == null ? string.Empty : prepareResult.LastRunOutcome.ToString(),
+                LastErrorSummary = prepareResult == null ? string.Empty : prepareResult.LastErrorSummary,
+                HasActivePlan = prepareResult != null && prepareResult.HasActivePlan,
+                CanRecoverExisting = prepareResult == null || prepareResult.CanRecoverExisting
+            };
+        }
+
+        private static AgentEvent CreateTodoBoardPausedEvent(
+            TodoBoard board,
+            TodoManager todoManager,
+            string message)
+        {
+            var stats = todoManager == null ? new TodoBoardStats() : todoManager.BuildStats(board);
+            return new AgentEvent
+            {
+                Type = AgentEventType.TodoBoardPaused,
+                Message = message ?? "当前任务已暂停。",
+                BoardJson = board == null || todoManager == null ? string.Empty : todoManager.SerializeBoard(board),
+                CurrentTodoId = stats.CurrentTodoId,
+                CompletedSteps = stats.HandledCount,
+                TotalSteps = stats.TotalCount,
+                LastRunOutcome = board == null ? string.Empty : board.LastRunOutcome.ToString(),
+                LastErrorSummary = board == null ? string.Empty : board.LastErrorSummary
+            };
+        }
+
+        private static AgentEvent CreateMaxIterationsReachedEvent(
+            AgentMode mode,
+            int maxIterations,
+            string message)
+        {
+            return new AgentEvent
+            {
+                Type = AgentEventType.MaxIterationsReached,
+                Message = string.IsNullOrWhiteSpace(message)
+                    ? BuildMaxIterationsMessage(mode, maxIterations)
+                    : message
+            };
+        }
+
+        private static string BuildMaxIterationsMessage(AgentMode mode, int maxIterations)
+        {
+            switch (mode)
+            {
+                case AgentMode.Agent:
+                    return $"当前任务已达到本轮 {maxIterations} 轮预算上限，系统已暂停并保留 Todo Board。确认后可继续执行、按当前计划重建，或丢弃后重新开始。";
+                case AgentMode.Plan:
+                    return $"当前规划已达到本轮 {maxIterations} 轮预算上限，但尚未生成最终计划。你可以继续补充信息后再次规划。";
+                case AgentMode.Ask:
+                default:
+                    return $"当前回答已达到本轮 {maxIterations} 轮预算上限，若仍需继续，可直接继续追问。";
+            }
         }
 
         private static AgentEvent CreateToolStartedEvent(ToolCall toolCall, string operationDescription)
@@ -2286,13 +2437,16 @@ namespace SmartWord.Application.Orchestration
 
         private static int ResolveMaxIterations(AgentRunOptions options)
         {
-            var configured = options.MaxIterations > 0 ? options.MaxIterations : AskModeMaxIterations;
-            if (options.Mode == AgentMode.Ask)
+            var configured = options != null && options.MaxIterations > 0
+                ? options.MaxIterations
+                : FixedIterationBudget;
+            var bounded = Math.Min(FixedIterationBudget, configured);
+            if (options != null && options.Mode == AgentMode.Ask)
             {
-                return Math.Min(AskModeMaxIterations, configured);
+                return Math.Min(AskModeMaxIterations, bounded);
             }
 
-            return configured;
+            return bounded;
         }
 
         private enum PendingWriteState
