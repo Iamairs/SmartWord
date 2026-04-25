@@ -37,8 +37,10 @@ export const useChatStore = defineStore('chat', {
     pendingConfirmation: null,
     pendingQuestion: null,
     activePlan: null,
+    lastApprovedPlan: null,
     activeTodoBoard: null,
     pendingTodoRecovery: null,
+    pendingTodoPause: null,
     currentTodoId: '',
     todoBoardVisible: false,
     currentTaskChanges: [],
@@ -185,9 +187,12 @@ export const useChatStore = defineStore('chat', {
     },
     setPlan(planJson) {
       try {
-        this.activePlan = typeof planJson === 'string' ? JSON.parse(planJson) : planJson;
+        const parsedPlan = typeof planJson === 'string' ? JSON.parse(planJson) : planJson;
+        this.activePlan = parsedPlan;
+        this.lastApprovedPlan = parsedPlan;
       } catch {
         this.activePlan = null;
+        this.lastApprovedPlan = null;
       }
     },
     updatePlanProgress(planJson) {
@@ -207,6 +212,7 @@ export const useChatStore = defineStore('chat', {
           '';
         this.todoBoardVisible = true;
         this.pendingTodoRecovery = null;
+        this.pendingTodoPause = null;
       } catch {
         this.activeTodoBoard = null;
         this.currentTodoId = '';
@@ -238,6 +244,7 @@ export const useChatStore = defineStore('chat', {
       this.activeTodoBoard = null;
       this.currentTodoId = '';
       this.todoBoardVisible = false;
+      this.pendingTodoPause = null;
     },
     setPendingTodoRecoverySubmitting(isSubmitting) {
       if (!this.pendingTodoRecovery) {
@@ -251,6 +258,45 @@ export const useChatStore = defineStore('chat', {
     },
     clearPendingTodoRecovery() {
       this.pendingTodoRecovery = null;
+    },
+    setTodoPause(pause) {
+      let board = null;
+      try {
+        board = pause?.boardJson
+          ? typeof pause.boardJson === 'string'
+            ? JSON.parse(pause.boardJson)
+            : pause.boardJson
+          : null;
+      } catch {
+        board = null;
+      }
+
+      this.pendingTodoPause = {
+        message: pause?.message || '',
+        lastRunOutcome: pause?.lastRunOutcome || '',
+        lastErrorSummary: pause?.lastErrorSummary || '',
+        hasActivePlan: pause?.hasActivePlan === true,
+        canRecoverExisting: pause?.canRecoverExisting !== false && Boolean(board),
+        board,
+        isSubmitting: false
+      };
+      this.pendingTodoRecovery = null;
+      this.activeTodoBoard = null;
+      this.currentTodoId = '';
+      this.todoBoardVisible = false;
+    },
+    setPendingTodoPauseSubmitting(isSubmitting) {
+      if (!this.pendingTodoPause) {
+        return;
+      }
+
+      this.pendingTodoPause = {
+        ...this.pendingTodoPause,
+        isSubmitting: isSubmitting === true
+      };
+    },
+    clearPendingTodoPause() {
+      this.pendingTodoPause = null;
     },
     resumeLoadingAfterTodoRecovery() {
       this.isLoading = true;
@@ -268,6 +314,7 @@ export const useChatStore = defineStore('chat', {
       this.pendingConfirmation = null;
       this.pendingQuestion = null;
       this.pendingTodoRecovery = null;
+      this.pendingTodoPause = null;
       this.currentTaskChanges = [];
       this.completedTaskChanges = [];
       this.activeTodoBoard = null;

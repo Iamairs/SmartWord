@@ -119,6 +119,11 @@
         :recovery="chatStore.pendingTodoRecovery"
         @recover="submitTodoRecoveryDecision"
       />
+      <TodoBoardPausePanel
+        v-if="chatStore.pendingTodoPause"
+        :pause="chatStore.pendingTodoPause"
+        @resume="resumePausedTodoRun"
+      />
       <TodoBoardPanel
         v-if="chatStore.todoBoardVisible && chatStore.currentMode === 'agent' && chatStore.activeTodoBoard"
         :board="chatStore.activeTodoBoard"
@@ -237,6 +242,7 @@ import ChangesSummaryPanel from './ChangesSummaryPanel.vue';
 import ContentPreviewPanel from './ContentPreviewPanel.vue';
 import ThoughtActionTrace from './ThoughtActionTrace.vue';
 import TodoBoardPanel from './TodoBoardPanel.vue';
+import TodoBoardPausePanel from './TodoBoardPausePanel.vue';
 import TodoBoardRecoveryPanel from './TodoBoardRecoveryPanel.vue';
 
 const chatStore = useChatStore();
@@ -417,9 +423,51 @@ async function executePlan() {
   await hostBridge.sendMessage({
     content: '请按照以下计划执行任务：\n\n' + context,
     manualMode: 'agent',
-    maxIterations: 20,
+    maxIterations: 100,
     activePlan: plan
   });
+}
+
+function buildResumePrompt(decision) {
+  switch (decision) {
+    case 'rebuild_from_active_plan':
+      return '请按当前计划重建任务板，并继续执行尚未完成的任务。';
+    case 'discard_and_create_empty':
+      return '请丢弃旧任务板并新建空板，然后根据当前目标继续执行。';
+    case 'recover_existing':
+    default:
+      return '请继续执行当前未完成的任务，保持已完成进度，不要重复已经完成的步骤。';
+  }
+}
+
+async function resumePausedTodoRun(decision) {
+  const pause = chatStore.pendingTodoPause;
+  if (!pause) {
+    return;
+  }
+
+  if (decision === 'rebuild_from_active_plan' && !chatStore.lastApprovedPlan) {
+    chatStore.appendAssistantMessage('当前没有可用于重建的计划，请先重新规划或直接继续现有任务。');
+    return;
+  }
+
+  chatStore.setPendingTodoPauseSubmitting(true);
+  const resumePrompt = buildResumePrompt(decision);
+  chatStore.appendUserMessage(resumePrompt);
+  chatStore.startLoading();
+
+  try {
+    await hostBridge.sendMessage({
+      content: resumePrompt,
+      manualMode: 'agent',
+      maxIterations: 100,
+      activePlan: chatStore.lastApprovedPlan,
+      todoBoardDecision: decision
+    });
+  } catch (error) {
+    chatStore.finishLoading();
+    chatStore.appendAssistantMessage(`继续执行失败：${error.message || '未知错误'}`);
+  }
 }
 
 function handleAgentEvent(event) {
@@ -484,12 +532,30 @@ function handleAgentEvent(event) {
       });
       chatStore.finishLoading();
       break;
+    case 'todo_board_paused':
+      chatStore.setTodoPause({
+        message: event.message,
+        boardJson: event.boardJson,
+        lastRunOutcome: event.lastRunOutcome,
+        lastErrorSummary: event.lastErrorSummary,
+        hasActivePlan: event.hasActivePlan === true,
+        canRecoverExisting: event.canRecoverExisting !== false
+      });
+      chatStore.finishLoading();
+      break;
     case 'todo_board_ready':
       chatStore.clearPendingTodoRecovery();
+      chatStore.clearPendingTodoPause();
       chatStore.setTodoBoard(event.boardJson, event.currentTodoId || '');
       break;
     case 'todo_board_updated':
       chatStore.setTodoBoard(event.boardJson, event.currentTodoId || '');
+      break;
+    case 'max_iterations_reached':
+      chatStore.finishLoading();
+      if (event.message) {
+        chatStore.appendAssistantMessage(event.message);
+      }
       break;
     case 'todo_reminder_injected':
       chatStore.setTodoBoard(event.boardJson, event.currentTodoId || '');
@@ -503,6 +569,7 @@ function handleAgentEvent(event) {
     case 'task_completed':
       chatStore.setCitations(event.citations);
       chatStore.clearPendingTodoRecovery();
+      chatStore.clearPendingTodoPause();
       chatStore.finishLoading();
       chatStore.finalizeTaskChanges();
       if (event.message) {
@@ -515,6 +582,7 @@ function handleAgentEvent(event) {
     case 'cancelled':
       chatStore.setCitations(event.citations);
       chatStore.clearPendingTodoRecovery();
+      chatStore.clearPendingTodoPause();
       chatStore.finishLoading();
       chatStore.finalizeTaskChanges();
       if (event.message) {
