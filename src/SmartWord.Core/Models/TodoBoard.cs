@@ -53,7 +53,7 @@ namespace SmartWord.Core.Models
     /// </summary>
     public sealed class TodoBoard
     {
-        public const int CurrentSchemaVersion = 2;
+        public const int CurrentSchemaVersion = 3;
 
         public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
@@ -96,6 +96,18 @@ namespace SmartWord.Core.Models
         public string PauseReason { get; set; } = string.Empty;
 
         public string SourcePlanFingerprint { get; set; } = string.Empty;
+
+        public DateTime? LastTrustedCheckpointAtUtc { get; set; }
+
+        public string LastTrustedCheckpointSummary { get; set; } = string.Empty;
+
+        public string InFlightWriteStepId { get; set; } = string.Empty;
+
+        public string InFlightWriteStepSummary { get; set; } = string.Empty;
+
+        public string InFlightTodoBoardSnapshotJson { get; set; } = string.Empty;
+
+        public DateTime? InFlightStartedAtUtc { get; set; }
 
         public IList<TodoBoardItem> Items { get; set; } = new List<TodoBoardItem>();
     }

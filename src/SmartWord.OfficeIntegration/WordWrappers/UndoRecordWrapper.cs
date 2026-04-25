@@ -5,7 +5,7 @@ using SmartWord.Core.Interfaces;
 namespace SmartWord.OfficeIntegration.WordWrappers
 {
     /// <summary>
-    /// 提供任务级 UndoRecord 包装，并在回滚时做文档一致性保护。
+    /// 提供写步骤级 UndoRecord 包装，并在回滚时做文档一致性保护。
     /// </summary>
     public sealed class UndoRecordWrapper : IUndoScope
     {
@@ -52,7 +52,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
             ExecuteOnUiThread(() =>
             {
                 CloseRecord();
-                Log.Information("任务级 UndoRecord 已提交。DocumentPath={DocumentPath}", _initialDocumentPath);
+                Log.Information("写步骤级 UndoRecord 已提交。DocumentPath={DocumentPath}", _initialDocumentPath);
             });
         }
 
@@ -76,14 +76,14 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                 {
                     if (TryRollbackActiveDocument(currentDocumentPath))
                     {
-                        Log.Information("任务级 UndoRecord 已执行回滚。DocumentPath={DocumentPath}", currentDocumentPath);
+                        Log.Information("写步骤级 UndoRecord 已执行回滚。DocumentPath={DocumentPath}", currentDocumentPath);
                     }
                 }
                 catch (Exception ex)
                 {
                     Log.Warning(
                         ex,
-                        "任务级 UndoRecord 回滚失败，仅能做最佳努力处理。DocumentPath={DocumentPath}",
+                        "写步骤级 UndoRecord 回滚失败，仅能做最佳努力处理。DocumentPath={DocumentPath}",
                         currentDocumentPath);
                 }
             });
@@ -189,7 +189,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                 activeDocument = _wordApplication == null ? null : _wordApplication.ActiveDocument;
                 if (activeDocument == null)
                 {
-                    Log.Warning("任务级 UndoRecord 回滚被跳过，因为当前没有活动文档。DocumentPath={DocumentPath}", currentDocumentPath);
+                    Log.Warning("写步骤级 UndoRecord 回滚被跳过，因为当前没有活动文档。DocumentPath={DocumentPath}", currentDocumentPath);
                     return false;
                 }
 
@@ -197,7 +197,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                 if (!rollbackSucceeded)
                 {
                     Log.Warning(
-                        "任务级 UndoRecord 回滚未生效，Word 返回 Undo=False。DocumentPath={DocumentPath}",
+                        "写步骤级 UndoRecord 回滚未生效，Word 返回 Undo=False。DocumentPath={DocumentPath}",
                         currentDocumentPath);
                 }
 

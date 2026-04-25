@@ -88,6 +88,12 @@ namespace SmartWord.Application.Todo
             }
 
             NormalizeBoard(board);
+            if (HasInFlightWriteStep(board))
+            {
+                board = RestoreTrustedBoardFromInFlightSnapshot(board) ?? board;
+                await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
+            }
+
             if (ShouldTreatLegacyBoardAsDirty(board))
             {
                 MarkBoardRecoveryRequired(
@@ -159,6 +165,16 @@ namespace SmartWord.Application.Todo
             board.LastErrorSummary = string.Empty;
             board.RecoveryReason = string.Empty;
             board.PauseReason = string.Empty;
+            ClearInFlightWriteStep(board);
+            if (!board.LastTrustedCheckpointAtUtc.HasValue)
+            {
+                board.LastTrustedCheckpointAtUtc = DateTime.UtcNow;
+            }
+
+            if (string.IsNullOrWhiteSpace(board.LastTrustedCheckpointSummary))
+            {
+                board.LastTrustedCheckpointSummary = "当前任务板已进入新的运行轮次。";
+            }
             if (!string.IsNullOrWhiteSpace(activePlanFingerprint))
             {
                 board.SourcePlanFingerprint = activePlanFingerprint;
@@ -168,8 +184,21 @@ namespace SmartWord.Application.Todo
             return board;
         }
 
+        public Task<TodoBoard> MarkRunPausedAsync(
+            string documentPath,
+            string reason,
+            CancellationToken cancellationToken)
+        {
+            return MarkRunPausedAsync(
+                documentPath,
+                TodoBoardRunOutcome.PausedByBudget,
+                reason,
+                cancellationToken);
+        }
+
         public async Task<TodoBoard> MarkRunPausedAsync(
             string documentPath,
+            TodoBoardRunOutcome outcome,
             string reason,
             CancellationToken cancellationToken)
         {
@@ -188,7 +217,12 @@ namespace SmartWord.Application.Todo
 
             board = board ?? CreateEmptyBoard(normalizedDocumentPath);
             NormalizeBoard(board);
-            MarkBoardPaused(board, reason);
+            if (HasInFlightWriteStep(board))
+            {
+                board = RestoreTrustedBoardFromInFlightSnapshot(board) ?? board;
+            }
+
+            MarkBoardPaused(board, outcome, reason);
             await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
             return board;
         }
@@ -219,6 +253,11 @@ namespace SmartWord.Application.Todo
 
             board = board ?? CreateEmptyBoard(normalizedDocumentPath);
             NormalizeBoard(board);
+            if (HasInFlightWriteStep(board))
+            {
+                board = RestoreTrustedBoardFromInFlightSnapshot(board) ?? board;
+            }
+
             MarkBoardRecoveryRequired(
                 board,
                 outcome,
@@ -226,6 +265,72 @@ namespace SmartWord.Application.Todo
                 reason);
             await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
             return board;
+        }
+
+        public async Task<TodoBoard> MarkWriteStepStartedAsync(
+            string documentPath,
+            string stepId,
+            string stepSummary,
+            CancellationToken cancellationToken)
+        {
+            var board = await EnsureBoardAsync(documentPath, cancellationToken).ConfigureAwait(false);
+            NormalizeBoard(board);
+
+            // 当前写步骤开始前，先固化可信快照，保证失败回退时 Todo 能与文档一起恢复。
+            board.InFlightWriteStepId = string.IsNullOrWhiteSpace(stepId) ? Guid.NewGuid().ToString("N") : stepId.Trim();
+            board.InFlightWriteStepSummary = string.IsNullOrWhiteSpace(stepSummary) ? "当前写步骤" : stepSummary.Trim();
+            board.InFlightTodoBoardSnapshotJson = CreateTrustedBoardSnapshotJson(board);
+            board.InFlightStartedAtUtc = DateTime.UtcNow;
+            board.UpdatedAt = DateTime.UtcNow;
+
+            await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
+            return board;
+        }
+
+        public async Task<TodoBoard> MarkWriteStepCommittedAsync(
+            string documentPath,
+            string stepSummary,
+            CancellationToken cancellationToken)
+        {
+            var board = await EnsureBoardAsync(documentPath, cancellationToken).ConfigureAwait(false);
+            NormalizeBoard(board);
+            board.LastTrustedCheckpointAtUtc = DateTime.UtcNow;
+            board.LastTrustedCheckpointSummary = string.IsNullOrWhiteSpace(stepSummary)
+                ? "当前写步骤已提交并通过验证。"
+                : stepSummary.Trim();
+            ClearInFlightWriteStep(board);
+            board.UpdatedAt = DateTime.UtcNow;
+
+            await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
+            return board;
+        }
+
+        public async Task<TodoBoard> RollbackCurrentWriteStepAsync(
+            string documentPath,
+            string reason,
+            CancellationToken cancellationToken)
+        {
+            var board = await EnsureBoardAsync(documentPath, cancellationToken).ConfigureAwait(false);
+            NormalizeBoard(board);
+            var restoredBoard = RestoreTrustedBoardFromInFlightSnapshot(board) ?? board;
+            if (!string.IsNullOrWhiteSpace(reason))
+            {
+                restoredBoard.LastErrorSummary = reason.Trim();
+            }
+
+            if (!restoredBoard.LastTrustedCheckpointAtUtc.HasValue)
+            {
+                restoredBoard.LastTrustedCheckpointAtUtc = DateTime.UtcNow;
+            }
+
+            if (string.IsNullOrWhiteSpace(restoredBoard.LastTrustedCheckpointSummary))
+            {
+                restoredBoard.LastTrustedCheckpointSummary = "已恢复到当前写步骤开始前的可信任务板快照。";
+            }
+
+            restoredBoard.UpdatedAt = DateTime.UtcNow;
+            await _todoStore.SaveBoardAsync(restoredBoard, cancellationToken).ConfigureAwait(false);
+            return restoredBoard;
         }
 
         public async Task<TodoBoard> ResolveRecoveryAsync(
@@ -247,9 +352,16 @@ namespace SmartWord.Application.Todo
                         throw new InvalidOperationException("当前不存在可恢复的 Todo Board。");
                     }
 
+                    if (HasInFlightWriteStep(board))
+                    {
+                        board = RestoreTrustedBoardFromInFlightSnapshot(board) ?? board;
+                    }
+
                     board.ExecutionState = TodoBoardExecutionState.Idle;
                     board.RecoveryReason = string.Empty;
                     board.PauseReason = string.Empty;
+                    board.LastRunOutcome = TodoBoardRunOutcome.None;
+                    board.LastErrorSummary = string.Empty;
                     if (!string.IsNullOrWhiteSpace(activePlanFingerprint))
                     {
                         board.SourcePlanFingerprint = activePlanFingerprint;
@@ -344,6 +456,8 @@ namespace SmartWord.Application.Todo
             var action = (request.Action ?? string.Empty).Trim().ToLowerInvariant();
             string updatedItemId;
             string message;
+
+            ValidateChangeAllowedDuringInFlightWrite(board, request, action);
 
             switch (action)
             {
@@ -675,6 +789,9 @@ namespace SmartWord.Application.Todo
             board.RecoveryReason = string.Empty;
             board.PauseReason = string.Empty;
             board.LastErrorSummary = string.Empty;
+            board.LastTrustedCheckpointAtUtc = now;
+            board.LastTrustedCheckpointSummary = "当前任务板已初始化。";
+            ClearInFlightWriteStep(board);
             return board;
         }
 
@@ -949,6 +1066,10 @@ namespace SmartWord.Application.Todo
             board.RecoveryReason = board.RecoveryReason ?? string.Empty;
             board.PauseReason = board.PauseReason ?? string.Empty;
             board.SourcePlanFingerprint = board.SourcePlanFingerprint ?? string.Empty;
+            board.LastTrustedCheckpointSummary = board.LastTrustedCheckpointSummary ?? string.Empty;
+            board.InFlightWriteStepId = board.InFlightWriteStepId ?? string.Empty;
+            board.InFlightWriteStepSummary = board.InFlightWriteStepSummary ?? string.Empty;
+            board.InFlightTodoBoardSnapshotJson = board.InFlightTodoBoardSnapshotJson ?? string.Empty;
             board.Items = (board.Items ?? new List<TodoBoardItem>())
                 .OrderBy(item => item == null ? int.MaxValue : item.Order)
                 .ThenBy(item => item == null ? string.Empty : item.Id)
@@ -1056,7 +1177,7 @@ namespace SmartWord.Application.Todo
             board.UpdatedAt = DateTime.UtcNow;
         }
 
-        private static void MarkBoardPaused(TodoBoard board, string pauseReason)
+        private static void MarkBoardPaused(TodoBoard board, TodoBoardRunOutcome outcome, string pauseReason)
         {
             if (board == null)
             {
@@ -1066,13 +1187,15 @@ namespace SmartWord.Application.Todo
             board.SchemaVersion = TodoBoard.CurrentSchemaVersion;
             board.ExecutionState = TodoBoardExecutionState.Paused;
             board.LastRunFinishedAtUtc = DateTime.UtcNow;
-            board.LastRunOutcome = TodoBoardRunOutcome.PausedByBudget;
+            board.LastRunOutcome = outcome == TodoBoardRunOutcome.None
+                ? TodoBoardRunOutcome.PausedByBudget
+                : outcome;
             board.RecoveryReason = string.Empty;
             board.PauseReason = string.IsNullOrWhiteSpace(pauseReason)
                 ? "当前任务达到本轮预算上限，任务板已暂停，可在确认后继续。"
                 : pauseReason.Trim();
-            board.LastErrorSummary = string.Empty;
             board.UpdatedAt = DateTime.UtcNow;
+            ClearInFlightWriteStep(board);
         }
 
         private static string BuildRecoveryReason(TodoBoardRunOutcome outcome, string reason)
@@ -1097,6 +1220,105 @@ namespace SmartWord.Application.Todo
             return ex != null
                 && !string.IsNullOrWhiteSpace(ex.Message)
                 && ex.Message.IndexOf(CorruptedBoardMessage, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool HasInFlightWriteStep(TodoBoard board)
+        {
+            return board != null
+                && !string.IsNullOrWhiteSpace(board.InFlightWriteStepId)
+                && !string.IsNullOrWhiteSpace(board.InFlightTodoBoardSnapshotJson);
+        }
+
+        private static void ClearInFlightWriteStep(TodoBoard board)
+        {
+            if (board == null)
+            {
+                return;
+            }
+
+            board.InFlightWriteStepId = string.Empty;
+            board.InFlightWriteStepSummary = string.Empty;
+            board.InFlightTodoBoardSnapshotJson = string.Empty;
+            board.InFlightStartedAtUtc = null;
+        }
+
+        private string CreateTrustedBoardSnapshotJson(TodoBoard board)
+        {
+            var snapshot = CloneBoard(board);
+            ClearInFlightWriteStep(snapshot);
+            return SerializeBoard(snapshot);
+        }
+
+        private TodoBoard RestoreTrustedBoardFromInFlightSnapshot(TodoBoard board)
+        {
+            if (!HasInFlightWriteStep(board))
+            {
+                return board;
+            }
+
+            try
+            {
+                var restoredBoard = JsonConvert.DeserializeObject<TodoBoard>(
+                    board.InFlightTodoBoardSnapshotJson,
+                    BoardJsonSettings);
+                if (restoredBoard == null)
+                {
+                    return board;
+                }
+
+                NormalizeBoard(restoredBoard);
+                restoredBoard.SchemaVersion = TodoBoard.CurrentSchemaVersion;
+                restoredBoard.BoardId = string.IsNullOrWhiteSpace(restoredBoard.BoardId) ? board.BoardId : restoredBoard.BoardId;
+                restoredBoard.DocumentPath = NormalizeDocumentPath(board.DocumentPath);
+                restoredBoard.Version = Math.Max(restoredBoard.Version, board.Version);
+                restoredBoard.ExecutionState = board.ExecutionState;
+                restoredBoard.LastRunId = board.LastRunId;
+                restoredBoard.LastRunStartedAtUtc = board.LastRunStartedAtUtc;
+                restoredBoard.LastRunFinishedAtUtc = board.LastRunFinishedAtUtc;
+                restoredBoard.LastRunOutcome = board.LastRunOutcome;
+                restoredBoard.LastErrorSummary = board.LastErrorSummary;
+                restoredBoard.RecoveryReason = board.RecoveryReason;
+                restoredBoard.PauseReason = board.PauseReason;
+                restoredBoard.SourcePlanFingerprint = string.IsNullOrWhiteSpace(board.SourcePlanFingerprint)
+                    ? restoredBoard.SourcePlanFingerprint
+                    : board.SourcePlanFingerprint;
+                restoredBoard.LastTrustedCheckpointAtUtc = board.LastTrustedCheckpointAtUtc ?? DateTime.UtcNow;
+                restoredBoard.LastTrustedCheckpointSummary = string.IsNullOrWhiteSpace(board.LastTrustedCheckpointSummary)
+                    ? "已恢复到当前写步骤开始前的可信任务板快照。"
+                    : board.LastTrustedCheckpointSummary;
+                ClearInFlightWriteStep(restoredBoard);
+                restoredBoard.UpdatedAt = DateTime.UtcNow;
+                return restoredBoard;
+            }
+            catch
+            {
+                return board;
+            }
+        }
+
+        private TodoBoard CloneBoard(TodoBoard board)
+        {
+            if (board == null)
+            {
+                return CreateEmptyBoard(string.Empty);
+            }
+
+            var json = JsonConvert.SerializeObject(board, BoardJsonSettings);
+            return JsonConvert.DeserializeObject<TodoBoard>(json, BoardJsonSettings) ?? CreateEmptyBoard(board.DocumentPath);
+        }
+
+        private static void ValidateChangeAllowedDuringInFlightWrite(
+            TodoBoard board,
+            TodoWriteRequest request,
+            string action)
+        {
+            if (!HasInFlightWriteStep(board))
+            {
+                return;
+            }
+
+            throw new InvalidOperationException(
+                "当前存在尚未提交的写步骤，系统已锁定 Todo Board，需先完成验证或回退当前步骤后才能继续修改任务板。");
         }
 
         private static string NormalizeDocumentPath(string documentPath)

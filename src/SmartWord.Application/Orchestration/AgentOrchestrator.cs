@@ -239,18 +239,16 @@ namespace SmartWord.Application.Orchestration
     var nextCitationRef = 1;
     var maxIterations = ResolveMaxIterations(safeOptions);
     var consecutiveFailures = 0;
-    var shouldCommitUndo = false;
     var completedSuccessfully = false;
-    var hasStartedWriteExecution = false;
     var hasSuccessfulDocumentWriteOccurredInRun = false;
     var hasCompactedContext = false;
     var interviewRound = 0;
     const int MaxInterviewRounds = 3;
     PendingWriteStep pendingWriteStep = null;
     AgentMessage finalAssistantMessage = null;
-    IUndoScope undoScope = null;
     var interruptedOutcome = TodoBoardRunOutcome.None;
     var interruptedReason = string.Empty;
+    var runPaused = false;
 
     try
     {
@@ -457,10 +455,24 @@ namespace SmartWord.Application.Orchestration
 
                 if (pendingWriteStep != null)
                 {
+                    var pauseMessage = "模型在当前写步骤仍待修复时提前停止输出，系统已回退当前步骤并暂停，等待你决定继续、重建或放弃。";
                     yield return CreatePendingWriteStateEvent(pendingWriteStep);
-                    yield return CreatePendingWriteTerminationEvent(pendingWriteStep);
-                    interruptedOutcome = TodoBoardRunOutcome.RolledBack;
-                    interruptedReason = "模型在存在待修复写步骤时提前停止输出。";
+                    if (safeOptions.Mode == AgentMode.Agent && runStarted && _todoManager != null)
+                    {
+                        currentTodoBoard = await _todoManager
+                            .MarkRunPausedAsync(
+                                documentPath,
+                                TodoBoardRunOutcome.RolledBack,
+                                pauseMessage,
+                                CancellationToken.None)
+                            .ConfigureAwait(false);
+                        runPaused = true;
+                        yield return CreateTodoBoardPausedEvent(
+                            currentTodoBoard,
+                            _todoManager,
+                            pauseMessage);
+                    }
+
                     yield break;
                 }
 
@@ -828,6 +840,10 @@ namespace SmartWord.Application.Orchestration
                 }
 
                 ToolCallResult executionResult;
+                IUndoScope writeStepUndoScope = null;
+                var writeStepCommitted = false;
+                var writeStepRolledBack = false;
+                var todoWriteStepStarted = false;
                 try
                 {
                     if (tool == null)
@@ -837,14 +853,23 @@ namespace SmartWord.Application.Orchestration
                     else
                     {
                         if (isDocumentWriteTool
-                            && !hasStartedWriteExecution
                             && safeOptions.Mode == AgentMode.Agent
                             && _undoScopeFactory != null)
                         {
-                            undoScope = await _undoScopeFactory
-                                .BeginTaskUndoAsync("SmartWord Agent 写入任务", cancellationToken)
+                            writeStepUndoScope = await _undoScopeFactory
+                                .BeginWriteStepUndoAsync("SmartWord Agent 写步骤", cancellationToken)
                                 .ConfigureAwait(false);
-                            hasStartedWriteExecution = true;
+                            if (_todoManager != null)
+                            {
+                                currentTodoBoard = await _todoManager
+                                    .MarkWriteStepStartedAsync(
+                                        documentPath,
+                                        toolCall.Id,
+                                        operationDescription,
+                                        cancellationToken)
+                                    .ConfigureAwait(false);
+                                todoWriteStepStarted = true;
+                            }
                         }
 
                         using (var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
@@ -854,7 +879,7 @@ namespace SmartWord.Application.Orchestration
                             {
                                 var toolTask = tool.ExecuteAsync(
                                     inputDocument.RootElement.Clone(),
-                                    undoScope,
+                                    writeStepUndoScope,
                                     timeoutCts.Token);
                                 var completedTask = await Task.WhenAny(
                                         toolTask,
@@ -931,7 +956,7 @@ namespace SmartWord.Application.Orchestration
                                 documentPath,
                                 messages,
                                 executedWriteStep,
-                                undoScope,
+                                writeStepUndoScope,
                                 cancellationToken)
                             .ConfigureAwait(false);
 
@@ -946,23 +971,79 @@ namespace SmartWord.Application.Orchestration
                         if (!autoVerifyOutcome.Passed)
                         {
                             pendingWriteStep = executedWriteStep.MarkRepairRequired(autoVerifyOutcome.FailureMessage);
+                            if (writeStepUndoScope != null)
+                            {
+                                writeStepUndoScope.Rollback();
+                                writeStepRolledBack = true;
+                            }
+
+                            if (todoWriteStepStarted && _todoManager != null)
+                            {
+                                currentTodoBoard = await _todoManager
+                                    .RollbackCurrentWriteStepAsync(
+                                        documentPath,
+                                        pendingWriteStep.LastFailureMessage,
+                                        cancellationToken)
+                                    .ConfigureAwait(false);
+                                yield return CreateTodoBoardSnapshotEvent(
+                                    AgentEventType.TodoBoardUpdated,
+                                    currentTodoBoard,
+                                    _todoManager,
+                                    "当前写步骤已回退，Todo Board 已恢复到最近可信检查点。");
+                            }
+
                             yield return CreateChangeEvent(
                                 AgentEventType.ChangeVerificationFailed,
                                 pendingWriteStep,
                                 pendingWriteStep.LastFailureMessage,
                                 autoVerifyOutcome.Result == null ? string.Empty : autoVerifyOutcome.Result.Output);
 
-                            consecutiveFailures++;
-                            if (consecutiveFailures >= ConsecutiveFailureThreshold)
+                            if (pendingWriteStep.RepairAttempts >= WriteRepairAttemptLimit)
                             {
-                                interruptedOutcome = TodoBoardRunOutcome.RolledBack;
-                                interruptedReason = "写后验证连续失败，系统已停止当前任务。";
-                                yield return CreateCircuitBreakerEvent();
+                                var pauseMessage = "当前写步骤已连续失败 3 次，系统已回退当前步骤并暂停，等待你决定继续、重建或放弃。";
+                                if (safeOptions.Mode == AgentMode.Agent && runStarted && _todoManager != null)
+                                {
+                                    currentTodoBoard = await _todoManager
+                                        .MarkRunPausedAsync(
+                                            documentPath,
+                                            TodoBoardRunOutcome.RolledBack,
+                                            pauseMessage,
+                                            CancellationToken.None)
+                                        .ConfigureAwait(false);
+                                    runPaused = true;
+                                    yield return CreateTodoBoardPausedEvent(
+                                        currentTodoBoard,
+                                        _todoManager,
+                                        pauseMessage);
+                                }
+
+                                if (writeStepUndoScope != null)
+                                {
+                                    writeStepUndoScope.Dispose();
+                                    writeStepUndoScope = null;
+                                }
+
                                 yield break;
                             }
                         }
                         else
                         {
+                            if (writeStepUndoScope != null)
+                            {
+                                writeStepUndoScope.Commit();
+                                writeStepCommitted = true;
+                            }
+
+                            if (todoWriteStepStarted && _todoManager != null)
+                            {
+                                currentTodoBoard = await _todoManager
+                                    .MarkWriteStepCommittedAsync(
+                                        documentPath,
+                                        executedWriteStep.OperationDescription,
+                                        cancellationToken)
+                                    .ConfigureAwait(false);
+                            }
+
                             pendingWriteStep = null;
                             if (IsDocumentWriteTool(toolCall.Name))
                             {
@@ -997,10 +1078,29 @@ namespace SmartWord.Application.Orchestration
                 {
                     if (isDocumentWriteTool)
                     {
-                        consecutiveFailures++;
                         pendingWriteStep = pendingWriteStep != null
                             ? pendingWriteStep.RegisterWriteFailure(toolCall, executionResult, operationDescription)
                             : PendingWriteStep.CreateRepairRequired(toolCall, executionResult, operationDescription);
+                        if (writeStepUndoScope != null)
+                        {
+                            writeStepUndoScope.Rollback();
+                            writeStepRolledBack = true;
+                        }
+
+                        if (todoWriteStepStarted && _todoManager != null)
+                        {
+                            currentTodoBoard = await _todoManager
+                                .RollbackCurrentWriteStepAsync(
+                                    documentPath,
+                                    pendingWriteStep.LastFailureMessage,
+                                    cancellationToken)
+                                .ConfigureAwait(false);
+                            yield return CreateTodoBoardSnapshotEvent(
+                                AgentEventType.TodoBoardUpdated,
+                                currentTodoBoard,
+                                _todoManager,
+                                "当前写步骤已回退，Todo Board 已恢复到最近可信检查点。");
+                        }
 
                         yield return CreateChangeEvent(
                             AgentEventType.ChangeRepairRequired,
@@ -1010,19 +1110,29 @@ namespace SmartWord.Application.Orchestration
 
                         if (pendingWriteStep.RepairAttempts >= WriteRepairAttemptLimit)
                         {
-                            yield return CreatePendingWriteErrorEvent(
-                                pendingWriteStep,
-                                "当前写步骤已连续失败 3 次，系统已停止任务并保留失败信息供人工处理。");
-                            interruptedOutcome = TodoBoardRunOutcome.RolledBack;
-                            interruptedReason = "写步骤连续失败达到上限，系统已停止任务。";
-                            yield break;
-                        }
+                            var pauseMessage = "当前写步骤已连续失败 3 次，系统已回退当前步骤并暂停，等待你决定继续、重建或放弃。";
+                            if (safeOptions.Mode == AgentMode.Agent && runStarted && _todoManager != null)
+                            {
+                                currentTodoBoard = await _todoManager
+                                    .MarkRunPausedAsync(
+                                        documentPath,
+                                        TodoBoardRunOutcome.RolledBack,
+                                        pauseMessage,
+                                        CancellationToken.None)
+                                    .ConfigureAwait(false);
+                                runPaused = true;
+                                yield return CreateTodoBoardPausedEvent(
+                                    currentTodoBoard,
+                                    _todoManager,
+                                    pauseMessage);
+                            }
 
-                        if (consecutiveFailures >= ConsecutiveFailureThreshold)
-                        {
-                            interruptedOutcome = TodoBoardRunOutcome.RolledBack;
-                            interruptedReason = "写步骤连续失败，系统已触发熔断停止。";
-                            yield return CreateCircuitBreakerEvent();
+                            if (writeStepUndoScope != null)
+                            {
+                                writeStepUndoScope.Dispose();
+                                writeStepUndoScope = null;
+                            }
+
                             yield break;
                         }
 
@@ -1048,6 +1158,26 @@ namespace SmartWord.Application.Orchestration
                         remainingToolCallsReason = "当前轮次已停在待修复状态，剩余工具调用已跳过。";
                         break;
                     }
+                }
+
+                if (writeStepUndoScope != null)
+                {
+                    if (!writeStepCommitted && !writeStepRolledBack)
+                    {
+                        writeStepUndoScope.Rollback();
+                        writeStepRolledBack = true;
+                        if (todoWriteStepStarted && _todoManager != null)
+                        {
+                            currentTodoBoard = await _todoManager
+                                .RollbackCurrentWriteStepAsync(
+                                    documentPath,
+                                    interruptedReason,
+                                    CancellationToken.None)
+                                .ConfigureAwait(false);
+                        }
+                    }
+
+                    writeStepUndoScope.Dispose();
                 }
             }
 
@@ -1152,10 +1282,24 @@ namespace SmartWord.Application.Orchestration
 
         if (pendingWriteStep != null)
         {
+            var pauseMessage = "当前写步骤尚未修复，系统已回退当前步骤并暂停，等待你决定继续、重建或放弃。";
             yield return CreatePendingWriteStateEvent(pendingWriteStep);
-            yield return CreatePendingWriteTerminationEvent(pendingWriteStep);
-            interruptedOutcome = TodoBoardRunOutcome.RolledBack;
-            interruptedReason = "当前任务在待修复写步骤未解决的情况下结束，系统已保留恢复信息。";
+            if (safeOptions.Mode == AgentMode.Agent && runStarted && _todoManager != null)
+            {
+                currentTodoBoard = await _todoManager
+                    .MarkRunPausedAsync(
+                        documentPath,
+                        TodoBoardRunOutcome.RolledBack,
+                        pauseMessage,
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
+                runPaused = true;
+                yield return CreateTodoBoardPausedEvent(
+                    currentTodoBoard,
+                    _todoManager,
+                    pauseMessage);
+            }
+
             yield break;
         }
 
@@ -1169,7 +1313,7 @@ namespace SmartWord.Application.Orchestration
                 currentTodoBoard = await _todoManager
                     .MarkRunPausedAsync(documentPath, maxIterationsMessage, CancellationToken.None)
                     .ConfigureAwait(false);
-                shouldCommitUndo = true;
+                runPaused = true;
                 yield return CreateTodoBoardPausedEvent(
                     currentTodoBoard,
                     _todoManager,
@@ -1179,32 +1323,13 @@ namespace SmartWord.Application.Orchestration
             yield break;
         }
 
-        shouldCommitUndo = true;
         completedSuccessfully = true;
     }
     finally
     {
-        if (undoScope != null)
-        {
-            try
-            {
-                if (shouldCommitUndo)
-                {
-                    undoScope.Commit();
-                }
-                else if (hasStartedWriteExecution)
-                {
-                    undoScope.Rollback();
-                }
-            }
-            finally
-            {
-                undoScope.Dispose();
-            }
-        }
-
         if (runStarted
-            && !shouldCommitUndo
+            && !completedSuccessfully
+            && !runPaused
             && interruptedOutcome != TodoBoardRunOutcome.None
             && _todoManager != null
             && safeOptions.Mode == AgentMode.Agent)
@@ -1427,6 +1552,24 @@ namespace SmartWord.Application.Orchestration
                 Type = AgentEventType.TodoBoardReady,
                 Message = message ?? "当前 Todo Board 已就绪。",
                 BoardJson = todoManager == null ? string.Empty : todoManager.SerializeBoard(board),
+                CurrentTodoId = stats.CurrentTodoId,
+                CompletedSteps = stats.HandledCount,
+                TotalSteps = stats.TotalCount
+            };
+        }
+
+        private static AgentEvent CreateTodoBoardSnapshotEvent(
+            AgentEventType eventType,
+            TodoBoard board,
+            TodoManager todoManager,
+            string message)
+        {
+            var stats = todoManager == null ? new TodoBoardStats() : todoManager.BuildStats(board);
+            return new AgentEvent
+            {
+                Type = eventType,
+                Message = message ?? string.Empty,
+                BoardJson = board == null || todoManager == null ? string.Empty : todoManager.SerializeBoard(board),
                 CurrentTodoId = stats.CurrentTodoId,
                 CompletedSteps = stats.HandledCount,
                 TotalSteps = stats.TotalCount

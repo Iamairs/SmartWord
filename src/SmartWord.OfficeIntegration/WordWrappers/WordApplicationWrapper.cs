@@ -138,7 +138,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
             });
         }
 
-        public async Task<IUndoScope> BeginTaskUndoAsync(string operationName)
+        public async Task<IUndoScope> BeginWriteStepUndoAsync(string operationName)
         {
             return await InvokeAsync<IUndoScope>(() =>
             {
@@ -164,12 +164,12 @@ namespace SmartWord.OfficeIntegration.WordWrappers
             });
         }
 
-        async System.Threading.Tasks.Task<IUndoScope> IUndoScopeFactory.BeginTaskUndoAsync(
+        async System.Threading.Tasks.Task<IUndoScope> IUndoScopeFactory.BeginWriteStepUndoAsync(
             string operationName,
             System.Threading.CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return await BeginTaskUndoAsync(operationName).ConfigureAwait(false);
+            return await BeginWriteStepUndoAsync(operationName).ConfigureAwait(false);
         }
 
         public Task<int> GetParagraphCountAsync()

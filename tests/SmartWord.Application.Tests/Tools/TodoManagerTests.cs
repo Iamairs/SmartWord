@@ -257,6 +257,106 @@ namespace SmartWord.Application.Tests.Tools
         }
 
         [Fact]
+        public async Task RollbackCurrentWriteStepAsync_AfterBoardDrifted_RestoresTrustedSnapshot()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), "smartword-todo-tests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+            try
+            {
+                var store = new JsonTodoStore(tempDirectory);
+                var manager = new TodoManager(store);
+                await manager.InitializeFromExecutionPlanAsync(
+                    "doc1",
+                    new ExecutionPlan
+                    {
+                        TodoList = new List<TodoItem>
+                        {
+                            new TodoItem { Description = "第一步" },
+                            new TodoItem { Description = "第二步" }
+                        }
+                    },
+                    CancellationToken.None);
+                await manager.MarkRunStartedAsync("doc1", "run-1", string.Empty, CancellationToken.None);
+                await manager.MarkWriteStepStartedAsync("doc1", "step-1", "修改第一步", CancellationToken.None);
+
+                var driftedBoard = await store.GetBoardAsync("doc1", CancellationToken.None);
+                driftedBoard.Items[0].Status = TodoItemStatus.Completed;
+                driftedBoard.Items[1].Status = TodoItemStatus.InProgress;
+                await store.SaveBoardAsync(driftedBoard, CancellationToken.None);
+
+                var restoredBoard = await manager.RollbackCurrentWriteStepAsync(
+                    "doc1",
+                    "当前写步骤失败。",
+                    CancellationToken.None);
+
+                Assert.Equal(TodoItemStatus.InProgress, restoredBoard.Items[0].Status);
+                Assert.Equal(TodoItemStatus.Pending, restoredBoard.Items[1].Status);
+                Assert.True(string.IsNullOrWhiteSpace(restoredBoard.InFlightWriteStepId));
+                Assert.True(string.IsNullOrWhiteSpace(restoredBoard.InFlightTodoBoardSnapshotJson));
+                Assert.Contains("失败", restoredBoard.LastErrorSummary);
+            }
+            finally
+            {
+                if (Directory.Exists(tempDirectory))
+                {
+                    Directory.Delete(tempDirectory, true);
+                }
+            }
+        }
+
+        [Fact]
+        public async Task ResolveRecoveryAsync_RecoverExisting_WithInFlightSnapshot_RestoresTrustedSnapshot()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), "smartword-todo-tests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+            try
+            {
+                var store = new JsonTodoStore(tempDirectory);
+                var manager = new TodoManager(store);
+                await manager.InitializeFromExecutionPlanAsync(
+                    "doc1",
+                    new ExecutionPlan
+                    {
+                        TodoList = new List<TodoItem>
+                        {
+                            new TodoItem { Description = "第一步" },
+                            new TodoItem { Description = "第二步" }
+                        }
+                    },
+                    CancellationToken.None);
+                await manager.MarkRunStartedAsync("doc1", "run-1", string.Empty, CancellationToken.None);
+                await manager.MarkWriteStepStartedAsync("doc1", "step-1", "修改第一步", CancellationToken.None);
+
+                var driftedBoard = await store.GetBoardAsync("doc1", CancellationToken.None);
+                driftedBoard.ExecutionState = TodoBoardExecutionState.Paused;
+                driftedBoard.LastRunOutcome = TodoBoardRunOutcome.RolledBack;
+                driftedBoard.Items[0].Status = TodoItemStatus.Completed;
+                driftedBoard.Items[1].Status = TodoItemStatus.InProgress;
+                await store.SaveBoardAsync(driftedBoard, CancellationToken.None);
+
+                var recoveredBoard = await manager.ResolveRecoveryAsync(
+                    "doc1",
+                    TodoBoardRecoveryDecision.RecoverExisting,
+                    null,
+                    CancellationToken.None);
+
+                Assert.Equal(TodoBoardExecutionState.Idle, recoveredBoard.ExecutionState);
+                Assert.Equal(TodoItemStatus.InProgress, recoveredBoard.Items[0].Status);
+                Assert.Equal(TodoItemStatus.Pending, recoveredBoard.Items[1].Status);
+                Assert.True(string.IsNullOrWhiteSpace(recoveredBoard.InFlightWriteStepId));
+                Assert.True(string.IsNullOrWhiteSpace(recoveredBoard.RecoveryReason));
+                Assert.True(string.IsNullOrWhiteSpace(recoveredBoard.PauseReason));
+            }
+            finally
+            {
+                if (Directory.Exists(tempDirectory))
+                {
+                    Directory.Delete(tempDirectory, true);
+                }
+            }
+        }
+
+        [Fact]
         public async Task JsonTodoStore_GetBoardAsync_InvalidJson_ThrowsControlledError()
         {
             var tempDirectory = Path.Combine(Path.GetTempPath(), "smartword-todo-tests", Guid.NewGuid().ToString("N"));

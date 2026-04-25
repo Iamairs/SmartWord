@@ -677,7 +677,7 @@ namespace SmartWord.Application.Tests.Orchestration
                 CancellationToken.None));
 
             Assert.Contains(events, item => item.Type == AgentEventType.ChangeRepairRequired);
-            Assert.Contains(events, item => item.Type == AgentEventType.Error);
+            Assert.Contains(events, item => item.Type == AgentEventType.TodoBoardPaused);
             Assert.DoesNotContain(events, item => item.Type == AgentEventType.TaskCompleted);
             Assert.Equal(1, tool.ExecutionCount);
             Assert.Equal(0, undoScopeFactory.LastScope.CommitCount);
@@ -968,7 +968,7 @@ namespace SmartWord.Application.Tests.Orchestration
             Assert.Equal("已修改第 1 段。", verificationFailed.OperationDescription);
             Assert.Equal(new[] { 1 }, verificationFailed.AffectedParagraphs);
             Assert.DoesNotContain(events, item => item.Type == AgentEventType.ChangeApplied);
-            Assert.Contains(events, item => item.Type == AgentEventType.Error && item.Message.Contains("未完成修复"));
+            Assert.Contains(events, item => item.Type == AgentEventType.TodoBoardPaused && item.Message.Contains("暂停"));
             Assert.DoesNotContain(events, item => item.Type == AgentEventType.TaskCompleted);
         }
 
@@ -1025,6 +1025,78 @@ namespace SmartWord.Application.Tests.Orchestration
         }
 
         [Fact]
+        public async Task RunAsync_FirstWriteCommitted_SecondWriteFailed_OnlyCurrentStepRollsBack()
+        {
+            var llmClient = new FakeLlmClient(
+                CreateToolCallMessage(
+                    CreateToolCall("write-1", "patch_range", "{\"operations\":[{\"type\":\"replace_text\",\"paragraph_index\":0,\"text\":\"第一步\"}]}")),
+                CreateToolCallMessage(
+                    CreateToolCall("write-2", "patch_range", "{\"operations\":[{\"type\":\"replace_text\",\"paragraph_index\":1,\"text\":\"第二步\"}]}")),
+                new AgentMessage
+                {
+                    Role = "assistant",
+                    Content = "无法继续。"
+                });
+            var writeTool = new FakeTool(
+                "patch_range",
+                ToolPermission.Write,
+                ToolCallResult.Ok(
+                    "{\"success\":true}",
+                    new[] { 0 },
+                    operationDescription: "已完成第一步写入。"),
+                ToolCallResult.Error("patch_range", "第二步失败。"));
+            var verifyTool = new FakeTool(
+                "verify_script",
+                ToolPermission.ReadOnly,
+                ToolCallResult.Ok(
+                    "{\"all_passed\":true,\"results\":[]}",
+                    new[] { 0 },
+                    operationDescription: "已完成第一步验证。"));
+            var undoScopeFactory = new FakeUndoScopeFactory();
+            var todoStore = new FakeTodoStore();
+            var orchestrator = CreateOrchestrator(
+                llmClient,
+                CreateWritableHydrator(),
+                new ITool[] { writeTool, verifyTool },
+                new FakeConfirmationChannel(true, true),
+                undoScopeFactory,
+                todoStore: todoStore);
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "连续执行两个写步骤",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Agent,
+                    EnableToolCalling = true,
+                    RequireConfirmationForScripts = true,
+                    ActivePlan = new ExecutionPlan
+                    {
+                        TodoList = new List<TodoItem>
+                        {
+                            new TodoItem { Description = "第一步" },
+                            new TodoItem { Description = "第二步" }
+                        }
+                    }
+                },
+                CancellationToken.None));
+
+            Assert.Equal(2, undoScopeFactory.Scopes.Count);
+            Assert.Equal(1, undoScopeFactory.Scopes[0].CommitCount);
+            Assert.Equal(0, undoScopeFactory.Scopes[0].RollbackCount);
+            Assert.Equal(0, undoScopeFactory.Scopes[1].CommitCount);
+            Assert.Equal(1, undoScopeFactory.Scopes[1].RollbackCount);
+            Assert.Contains(events, item => item.Type == AgentEventType.ChangeApplied && item.ToolCallId == "write-1");
+            Assert.Contains(events, item => item.Type == AgentEventType.ChangeRepairRequired && item.ToolCallId == "write-2");
+            Assert.Contains(events, item => item.Type == AgentEventType.TodoBoardPaused);
+            Assert.DoesNotContain(events, item => item.Type == AgentEventType.TaskCompleted);
+
+            var persistedBoard = todoStore.PeekBoard("doc1");
+            Assert.NotNull(persistedBoard);
+            Assert.True(string.IsNullOrWhiteSpace(persistedBoard.InFlightWriteStepId));
+            Assert.True(string.IsNullOrWhiteSpace(persistedBoard.InFlightTodoBoardSnapshotJson));
+        }
+
+        [Fact]
         public async Task RunAsync_WriteToolFailedAndModelStopped_FailsTaskWithoutTaskCompleted()
         {
             var llmClient = new FakeLlmClient(
@@ -1058,7 +1130,7 @@ namespace SmartWord.Application.Tests.Orchestration
             Assert.Contains(events, item =>
                 item.Type == AgentEventType.ChangeRepairRequired
                 && item.ToolName == "execute_script");
-            Assert.Contains(events, item => item.Type == AgentEventType.Error && item.Message.Contains("未完成修复"));
+            Assert.Contains(events, item => item.Type == AgentEventType.TodoBoardPaused && item.Message.Contains("暂停"));
             Assert.DoesNotContain(events, item => item.Type == AgentEventType.TaskCompleted);
         }
 
@@ -1102,7 +1174,7 @@ namespace SmartWord.Application.Tests.Orchestration
             Assert.Contains(events, item =>
                 item.Type == AgentEventType.ChangeVerificationFailed
                 && item.Message.Contains("verify_code"));
-            Assert.Contains(events, item => item.Type == AgentEventType.Error);
+            Assert.Contains(events, item => item.Type == AgentEventType.TodoBoardPaused && item.Message.Contains("暂停"));
             Assert.DoesNotContain(events, item => item.Type == AgentEventType.TaskCompleted);
             Assert.Equal(0, undoScopeFactory.LastScope.CommitCount);
             Assert.Equal(1, undoScopeFactory.LastScope.RollbackCount);
@@ -1715,11 +1787,14 @@ namespace SmartWord.Application.Tests.Orchestration
         {
             public FakeUndoScope LastScope { get; private set; }
 
-            public Task<IUndoScope> BeginTaskUndoAsync(string operationName, CancellationToken cancellationToken)
+            public List<FakeUndoScope> Scopes { get; } = new List<FakeUndoScope>();
+
+            public Task<IUndoScope> BeginWriteStepUndoAsync(string operationName, CancellationToken cancellationToken)
             {
                 _ = operationName;
                 cancellationToken.ThrowIfCancellationRequested();
                 LastScope = new FakeUndoScope();
+                Scopes.Add(LastScope);
                 return Task.FromResult<IUndoScope>(LastScope);
             }
         }

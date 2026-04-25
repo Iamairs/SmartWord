@@ -642,6 +642,7 @@ watch(
     chatStore.activeToolCalls.length,
     chatStore.pendingQuestion ? chatStore.pendingQuestion.questionId : '',
     chatStore.pendingTodoRecovery ? chatStore.pendingTodoRecovery.recoveryRequestId : '',
+    chatStore.pendingTodoPause ? chatStore.pendingTodoPause.message : '',
     chatStore.activePlan ? JSON.stringify(chatStore.activePlan) : '',
     chatStore.isLoading
   ],

@@ -9,7 +9,7 @@
     </div>
 
     <p class="todo-pause-panel__reason">
-      {{ pause?.message || '当前任务已达到本轮预算上限，稍后可继续执行。' }}
+      {{ pause?.message || '当前步骤已回退，已保留之前通过验证的成果，请选择继续方式。' }}
     </p>
 
     <p v-if="pause?.lastErrorSummary" class="todo-pause-panel__error">
@@ -80,6 +80,8 @@ const orderedItems = computed(() => {
 const outcomeText = computed(() => {
   const raw = (props.pause?.lastRunOutcome || '').toLowerCase();
   switch (raw) {
+    case 'rolledback':
+      return '本轮结果：当前步已回退';
     case 'pausedbybudget':
       return '本轮结果：预算暂停';
     case 'cancelled':

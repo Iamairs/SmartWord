@@ -8,6 +8,6 @@ namespace SmartWord.Core.Interfaces
     /// </summary>
     public interface IUndoScopeFactory
     {
-        Task<IUndoScope> BeginTaskUndoAsync(string operationName, CancellationToken cancellationToken);
+        Task<IUndoScope> BeginWriteStepUndoAsync(string operationName, CancellationToken cancellationToken);
     }
 }
