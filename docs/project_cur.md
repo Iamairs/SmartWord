@@ -1,124 +1,78 @@
-# 当前需求说明：Todo Board 生命周期与异常恢复优化
+# 当前需求说明：固定 100 轮预算与上限命中收尾优化
 
 ## 1. 背景
 
-当前 SmartWord 已经实现 Todo Board 的基础闭环：
+当前 SmartWord 已有 Ask / Plan / Agent 三种运行模式，也已经具备 Todo Board 生命周期与恢复机制。
 
-- Agent 阶段可初始化、读取、更新 Todo Board
-- `todo_read` / `todo_write` 已接入模型工具链
-- 前端可展示执行期任务板
-- Reminder 与写后验证链路已具备首版能力
+但在“达到最大迭代数”场景下，系统仍存在明显缺陷：
 
-但现有实现仍把 Todo JSON 当成“持久化缓存”，没有把它当作“带运行状态的执行状态对象”来管理，导致两个问题：
-
-1. 任务成功后旧任务板仍残留在磁盘，下次执行容易被误当成当前任务继续使用。
-2. 任务取消、异常中断、写步骤回滚、宿主崩溃后，没有显式恢复入口，系统可能继续默默沿用一块可疑的旧板。
+1. Ask / Plan / Agent 的默认轮次分散，分别落在 5 / 8 / 20 等不同入口，用户体验不一致。
+2. `AgentOrchestrator` 在自然跑满迭代上限后，可能继续走成功收尾，甚至删除 Todo Board。
+3. Ask / Plan 触发上限但尚未完成时，前端缺少明确的“本轮已到预算上限”提示。
+4. Agent 触发上限但写入已验证成功时，更合理的语义应是“可信暂停”，而不是“成功完成”或“异常恢复”。
 
 ## 2. 当前需求
 
-本轮需要把 Todo Board 升级为“可恢复的执行状态”，核心目标如下：
+本轮需要在保留“固定轮次预算”前提下，把默认阈值统一提高到 100，并修正上限命中的收尾语义：
 
-1. 成功完成任务后自动删除 Todo 文件，避免历史残留污染下一次运行。
-2. 任务取消、异常、回滚、崩溃等异常路径保留 Todo 文件，但显式标记为待恢复。
-3. 下次进入 Agent 前必须先完成恢复决策，模型不能直接消费脏任务板。
-4. 前端提供恢复决策入口，由用户决定“恢复旧板 / 按 ActivePlan 重建 / 丢弃并新建空板”。
-5. JSON 持久化增强为临时文件写入后原子替换，并对损坏 JSON 提供受控恢复入口。
+1. Ask：达到上限后发出明确提示，不再误报完成。
+2. Plan：达到上限但尚未生成计划时，明确提示规划未完成，不再误报完成。
+3. Agent：达到上限但当前状态可信时，将 Todo Board 标记为 `Paused`，保留板子和已验证写入，不删板。
+4. 前端：新增暂停态卡片，允许用户继续执行、按当前计划重建，或丢弃后新建空板。
+5. 后端：所有入口默认预算统一为 100，同时强制上限也为 100，避免不同入口继续分叉。
 
 ## 3. 已确认的关键决策
 
-### 3.1 生命周期策略
+### 3.1 预算策略
 
-- Agent 一启动就把 Todo Board 标记为 `Running`
-- 正常完成后调用统一删除逻辑
-- 已知异常路径统一标记为 `RecoveryRequired`
-- 如果进程崩溃导致未收尾，下次看到 `Running` 视为“疑似崩溃”并要求恢复决策
+- 继续采用固定轮次预算，不改成无限循环。
+- 统一预算上限为 100 轮。
+- 即使前端传入更大的数，后端也会强制压到 100。
 
-### 3.2 恢复策略
+### 3.2 收尾语义
 
-- 默认不做静默自动修复
-- 默认先提示用户选择恢复策略
-- 不做 Word 文档内容级自动比对
-- 不追求 Todo JSON 与 Word Undo 的强事务一致性
+- 正常完成时才允许 `TaskCompleted`。
+- 命中预算上限时必须发出 `MaxIterationsReached`。
+- Ask / Plan 命中上限后直接停止本轮，不再冒充“完成”。
+- Agent 命中上限后进入 `Paused`，不删除 Todo 文件。
 
-### 3.3 ActivePlan 的角色
+### 3.3 暂停与恢复边界
 
-- `ActivePlan` 仅作为“可选重建源”
-- 不再无条件覆盖已有异常 Todo Board
-- 只有用户选择“按当前计划重建”时才重新生成任务板
+- `RecoveryRequired` 继续保留给“不可信状态”：异常、中断、回滚、崩溃样残留等。
+- `Paused` 只用于“达到预算上限但状态可信”的场景。
+- 前端要把暂停态和异常恢复态分开展示，避免用户误以为出了错。
 
 ## 4. 期望包含的核心能力
 
-### 4.1 Todo Board 运行元数据
+### 4.1 后端运行语义
 
-需要在 `TodoBoard` 上新增：
+- `ResolveMaxIterations` 统一固定到 100
+- `MaxIterationsReached` 真正落地发出
+- 命中上限后不再走成功删板链路
 
-- `ExecutionState`
-- `LastRunId`
-- `LastRunStartedAtUtc`
-- `LastRunFinishedAtUtc`
-- `LastRunOutcome`
-- `LastErrorSummary`
-- `RecoveryReason`
-- `SourcePlanFingerprint`
+### 4.2 Todo 生命周期扩展
 
-### 4.2 TodoManager 生命周期 API
+- `TodoBoardExecutionState` 新增 `Paused`
+- `TodoBoardRunOutcome` 新增 `PausedByBudget`
+- `TodoManager` 新增 `MarkRunPausedAsync`
+- 启动前若检测到 `Paused`，允许继续 / 重建 / 丢弃
 
-需要由 `TodoManager` 统一提供：
+### 4.3 前端交互
 
-- `PrepareBoardForRunAsync`
-- `MarkRunStartedAsync`
-- `MarkRunSucceededAndDeleteAsync`
-- `MarkRunInterruptedAsync`
-- `ResolveRecoveryAsync`
-- `DiscardBoardAsync`
-
-### 4.3 编排器恢复握手
-
-在模型调用前加入恢复判断：
-
-- 若发现 `RecoveryRequired` 或上次停留在 `Running`
-- 先发出 `todo_board_recovery_required`
-- 阻塞主循环，等待前端回传恢复决策
-- 决策完成后再发 `todo_board_ready`
-
-### 4.4 前端恢复入口
-
-前端新增独立恢复面板，而不是复用普通 Todo 面板：
-
-- 展示恢复原因、最近结果、错误摘要
-- 提供三个动作按钮
-- 将用户决策回传 C#
-
-### 4.5 JSON 可靠性
-
-- `JsonTodoStore.SaveBoardAsync` 需要改成临时文件写入后原子替换
-- 反序列化失败时要进入受控恢复路径
-- 保留按文档路径 hash 分桶的现有目录策略
+- Ask / Plan 收到 `max_iterations_reached` 后展示自然语言提示
+- Agent 收到 `todo_board_paused` 后展示独立暂停面板
+- 暂停面板按钮可发起新的 Agent 请求，并携带显式继续决策
 
 ## 5. 设计约束与注意事项
 
-### 5.1 技术约束
-
-- 后端仍为 `.NET Framework 4.7.2`
-- 文档与代码文件均使用 UTF-8
-- 新增代码注释需使用中文
-
-### 5.2 架构约束
-
-- Todo 生命周期规则集中在 Application 层的 `TodoManager`
-- 前端只消费后端给出的权威状态和恢复说明，不自行推断
-- AddIn 只做桥接与等待，不承载 Todo 业务判断
-
-### 5.3 交付边界
-
-- 本轮不做 Word 文档级自动比对
-- 本轮不做 SQLite 迁移
-- 本轮继续沿用 `%AppData%\\SmartWord\\todo\\<hash>.json`
+- 继续保持 .NET Framework 4.7.2 与现有 WebView2 通信结构
+- 中文注释与 UTF-8 编码要求不变
+- 尽量复用现有 Todo 恢复决策通道与前端交互结构，避免新增一套完全独立的协议
 
 ## 6. 本轮交付目标
 
-1. 完成 Todo Board 执行状态模型升级。
-2. 完成 TodoManager 生命周期和恢复 API。
-3. 完成 Agent 编排器恢复握手与统一收尾。
-4. 完成 WebView 桥接和前端恢复决策面板。
-5. 完成关键测试并更新 `docs/已实现的功能.md`。
+1. 统一 Ask / Plan / Agent 的默认与强制预算为 100。
+2. 修复上限命中后的错误成功收尾。
+3. 为 Agent 引入可信暂停态 `Paused`。
+4. 新增前端暂停面板与恢复继续入口。
+5. 补齐自动化测试并更新实现文档。

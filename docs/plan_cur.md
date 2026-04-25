@@ -1,77 +1,59 @@
 # Todo List
 
-- [x] P1 升级 TodoBoard 模型与恢复枚举，补齐运行状态字段
-- [x] P2 重构 TodoManager 与 JsonTodoStore，完成生命周期 API 与原子写入
-- [x] P3 改造 AgentOrchestrator / WebViewBridge，加入恢复握手与统一收尾
-- [x] P4 改造前端 store / bridge / UI，新增恢复决策面板
-- [x] P5 补齐测试、执行验证并更新实现文档
+- [x] P1 统一后端固定轮次预算为 100，并修正上限命中的停止语义
+- [x] P2 为 Todo Board 增加 `Paused / PausedByBudget` 暂停态与生命周期处理
+- [x] P3 改造前端暂停提示与继续执行入口，保留现有恢复链路
+- [x] P4 补充测试、重新构建前端资源并更新实现文档
 
-> 说明：本文件用于跟踪本轮“Todo Board 生命周期与异常恢复优化”的执行进度；每完成一个阶段，需要同步更新状态与验证结果。
+> 说明：本文件用于跟踪本轮“固定 100 轮预算与上限命中收尾优化”的执行进度。
 
-# 实施计划：Todo Board 生命周期与异常恢复优化
+# 实施计划：固定 100 轮预算与上限命中收尾优化
 
 ## 1. 目标
 
-将 Todo Board 从“纯持久化缓存”升级为“带运行状态的可恢复执行状态”，确保：
+在不改成无限循环的前提下，把 Ask / Plan / Agent 的预算控制统一为固定 100 轮，并确保：
 
-- 成功后自动删板
-- 异常后显式进入恢复态
-- 下次运行必须先做恢复决策
-- 模型只消费已确认可用的任务板
+- 未完成任务不再被误判为成功完成
+- Agent 命中预算上限后进入可信暂停态，而不是删板或进入异常恢复态
+- 前端能明确区分“异常恢复”和“预算暂停”
 
 ## 2. 分阶段实施步骤
 
-## 阶段 P1：升级 TodoBoard 模型
+## 阶段 P1：修正后端预算与收尾语义
 
-- 在 `TodoBoard` 中新增执行状态、最近运行结果、恢复原因、计划指纹等元数据
-- 新增恢复相关枚举与结果模型
-- 保证旧 JSON 缺字段时仍能按默认值读取
+- 将 `AgentRunOptions.MaxIterations` 默认值改为 100
+- 将 `AgentOrchestrator.ResolveMaxIterations` 改为固定上限 100
+- Ask / Plan / Agent 命中预算后统一发出 `MaxIterationsReached`
+- Ask / Plan 命中上限后直接停止本轮，不再发 `TaskCompleted`
+- 修正 `AgentOrchestrator` 中“自然跑满上限仍被当作成功”的错误路径
 
-## 阶段 P2：重构 TodoManager 与 JsonTodoStore
+## 阶段 P2：扩展 Todo 暂停态
 
-- 将 `TodoManager` 从“确保有板 + 普通写入”扩展为完整生命周期管理器
-- 新增：
-  - `PrepareBoardForRunAsync`
-  - `MarkRunStartedAsync`
-  - `MarkRunSucceededAndDeleteAsync`
-  - `MarkRunInterruptedAsync`
-  - `ResolveRecoveryAsync`
-  - `DiscardBoardAsync`
-- `JsonTodoStore` 改为临时文件写入后原子替换
-- 对 JSON 反序列化失败返回受控异常，供恢复链路消费
+- `TodoBoardExecutionState` 新增 `Paused`
+- `TodoBoardRunOutcome` 新增 `PausedByBudget`
+- `TodoBoardPreparationStatus` 新增 `Paused`
+- `TodoManager` 新增 `MarkRunPausedAsync`
+- 启动前若发现 `Paused`，允许继续旧板 / 按计划重建 / 丢弃并新建空板
 
-## 阶段 P3：改造 AgentOrchestrator 与 WebViewBridge
+## 阶段 P3：前端暂停交互
 
-- Agent 进入模型前先执行恢复判断
-- 新增 `TodoBoardRecoveryRequired` 事件
-- 编排器等待前端恢复决策后再继续
-- 正常完成走删板逻辑
-- 取消、异常、待修复终止、写后回滚统一标记为 `RecoveryRequired`
-- `WebViewBridge` 增加恢复决策提交接口和事件映射
+- 新增 `TodoBoardPausePanel.vue`
+- `chatStore` 新增 `pendingTodoPause` 与 `lastApprovedPlan`
+- `ChatWindow.vue` 支持：
+  - 处理 `max_iterations_reached`
+  - 处理 `todo_board_paused`
+  - 从暂停面板继续执行，并把显式决策带回后端
+- 保留现有 `TodoBoardRecoveryPanel`，继续只处理异常恢复
 
-## 阶段 P4：改造前端恢复入口
-
-- `chatStore` 新增恢复态数据
-- `hostBridge` 增加恢复决策调用
-- 新增恢复面板组件，展示：
-  - 恢复原因
-  - 最近运行结果
-  - 最近错误摘要
-  - 三个恢复动作
-- `TodoBoardPanel` 继续只负责稳定任务板展示
-
-## 阶段 P5：测试与文档
+## 阶段 P4：验证与文档
 
 - 补充 `TodoManagerTests`
-  - 成功后删板
-  - 取消/异常后保留并标记恢复
-  - 三个恢复决策分支
-  - JSON 损坏处理
+  - `MarkRunPausedAsync` 的持久化与再次准备行为
 - 补充 `AgentOrchestratorPhase3Tests`
-  - 发现脏板先发恢复事件并阻塞模型
-  - 恢复完成前不向模型注入旧 Todo
-  - 成功完成时删板
-  - 异常路径标记恢复态
+  - Ask 命中上限不再完成
+  - Plan 命中上限不再完成
+  - Agent 命中上限进入 `Paused`
+  - 前端传入大于 100 的预算时仍被限制为 100
 - 执行：
   - `dotnet test tests/SmartWord.Application.Tests/SmartWord.Application.Tests.csproj`
   - `npm run build`
@@ -79,14 +61,13 @@
 
 ## 3. 当前状态
 
-- [x] P1 已完成：已新增执行状态、运行结果、恢复决策枚举与准备结果模型，并保持旧 JSON 缺字段可按默认值读取。
-- [x] P2 已完成：`TodoManager` 已具备准备/启动/成功删板/异常标记/恢复决策等生命周期 API，`JsonTodoStore` 已改为临时文件写入后原子替换。
-- [x] P3 已完成：`AgentOrchestrator` 已在模型前加入恢复握手，`WebViewBridge` 已支持恢复事件映射与决策回传。
-- [x] P4 已完成：前端已新增恢复态 store、桥接调用与 `TodoBoardRecoveryPanel`，稳定任务板与恢复控制流已分离。
-- [x] P5 已完成：`dotnet test tests/SmartWord.Application.Tests/SmartWord.Application.Tests.csproj` 与 `npm run build` 已通过，相关实现文档已更新。
+- [x] P1 已完成：默认预算与强制上限已统一为 100，并修复了上限命中后继续走成功收尾的问题。
+- [x] P2 已完成：Todo Board 已支持 `Paused / PausedByBudget`，Agent 达到预算上限后可保留可信暂停态。
+- [x] P3 已完成：前端已新增暂停面板，并支持继续执行 / 按计划重建 / 丢弃后新建空板。
+- [x] P4 已完成：应用层测试通过，前端已重新构建，文档已同步更新。
 
 ## 4. 风险与注意事项
 
-- 需要保持旧版 Todo JSON 的向后兼容
-- 编排器已有写步骤验证状态机，恢复收尾需要避免与其冲突
-- 前端浏览器降级模式也要给出最小可运行的恢复交互
+- 暂停态继续执行依赖当前对话历史和 Todo Board 状态，仍建议用户在长任务中及时确认阶段性结果
+- 本轮仍未引入 token/time/tool 多维预算，只针对固定轮次预算做收尾修正
+- AddIn 真宿主工程仍受本机 VSTO 依赖限制，需在具备 Office 环境的机器上做最终宿主验证
