@@ -37,7 +37,9 @@ namespace SmartWord.Core.Models
         /// <summary>系统已注入 Todo reminder</summary>
         TodoReminderInjected = 23,
         /// <summary>Todo Board 进入恢复态，前端必须先提交恢复决策</summary>
-        TodoBoardRecoveryRequired = 24
+        TodoBoardRecoveryRequired = 24,
+        /// <summary>Todo Board 因预算耗尽进入暂停态，前端可选择继续、重建或丢弃</summary>
+        TodoBoardPaused = 25
     }
 
     /// <summary>

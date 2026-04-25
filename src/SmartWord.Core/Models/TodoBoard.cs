@@ -10,7 +10,8 @@ namespace SmartWord.Core.Models
     {
         Idle = 0,
         Running = 1,
-        RecoveryRequired = 2
+        RecoveryRequired = 2,
+        Paused = 3
     }
 
     /// <summary>
@@ -23,7 +24,8 @@ namespace SmartWord.Core.Models
         Cancelled = 2,
         Failed = 3,
         RolledBack = 4,
-        CrashedLike = 5
+        CrashedLike = 5,
+        PausedByBudget = 6
     }
 
     /// <summary>
@@ -42,7 +44,8 @@ namespace SmartWord.Core.Models
     public enum TodoBoardPreparationStatus
     {
         Ready = 0,
-        RecoveryRequired = 1
+        RecoveryRequired = 1,
+        Paused = 2
     }
 
     /// <summary>
@@ -89,6 +92,8 @@ namespace SmartWord.Core.Models
         public string LastErrorSummary { get; set; } = string.Empty;
 
         public string RecoveryReason { get; set; } = string.Empty;
+
+        public string PauseReason { get; set; } = string.Empty;
 
         public string SourcePlanFingerprint { get; set; } = string.Empty;
 
@@ -215,6 +220,8 @@ namespace SmartWord.Core.Models
         public TodoBoard Board { get; set; }
 
         public string RecoveryReason { get; set; } = string.Empty;
+
+        public string PauseReason { get; set; } = string.Empty;
 
         public TodoBoardRunOutcome LastRunOutcome { get; set; } = TodoBoardRunOutcome.None;
 
