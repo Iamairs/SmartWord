@@ -152,6 +152,9 @@ namespace SmartWord.AddIn.TaskPane
                     }
 
                     var modelRoute = llmClientOptions.ResolveModelRoute(selectedMode);
+                    var hasStartupTodoBoardDecision = TryParseTodoRecoveryDecision(
+                        request.Value<string>("todoBoardDecision"),
+                        out var startupTodoBoardDecision);
                     Log.Information(
                         "模型能力分流完成：Mode={Mode}, SelectedModel={SelectedModel}, EnableToolCalling={EnableToolCalling}, UsedFallbackModel={UsedFallbackModel}, RequiresReasoningContentReplay={RequiresReasoningContentReplay}, CapabilitySource={CapabilitySource}, RoutingMessage={RoutingMessage}",
                         selectedMode,
@@ -166,13 +169,16 @@ namespace SmartWord.AddIn.TaskPane
                     {
                         Mode = selectedMode,
                         Model = modelRoute.SelectedModel,
-                        MaxIterations = request.Value<int?>("maxIterations") ?? 8,
+                        MaxIterations = request.Value<int?>("maxIterations") ?? 100,
                         RequireConfirmationForScripts =
                             request.Value<bool?>("requireConfirmationForScripts")
                             ?? smartWordSettings.RequireConfirmationForScripts,
                         EnableToolCalling = modelRoute.EnableToolCalling,
                         ModelRoutingMessage = modelRoute.RoutingMessage ?? string.Empty,
                         CustomSystemInstructions = customInstructions ?? string.Empty,
+                        StartupTodoBoardDecision = hasStartupTodoBoardDecision
+                            ? startupTodoBoardDecision
+                            : (TodoBoardRecoveryDecision?)null,
                         ActivePlan = request["activePlan"] == null
                             ? null
                             : request["activePlan"].ToObject<ExecutionPlan>()
@@ -630,6 +636,8 @@ namespace SmartWord.AddIn.TaskPane
                     return "todo_reminder_injected";
                 case AgentEventType.TodoBoardRecoveryRequired:
                     return "todo_board_recovery_required";
+                case AgentEventType.TodoBoardPaused:
+                    return "todo_board_paused";
                 case AgentEventType.Error:
                 default:
                     return "error";
@@ -685,7 +693,7 @@ namespace SmartWord.AddIn.TaskPane
                     + ", requireConfirmationForScripts="
                     + (request.Value<bool?>("requireConfirmationForScripts") ?? true)
                     + ", maxIterations="
-                    + (request.Value<int?>("maxIterations") ?? 8);
+                    + (request.Value<int?>("maxIterations") ?? 100);
             }
             catch (Exception ex)
             {
