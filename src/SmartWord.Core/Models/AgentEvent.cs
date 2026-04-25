@@ -35,7 +35,9 @@ namespace SmartWord.Core.Models
         /// <summary>Todo Board 已更新，前端应以完整快照覆盖</summary>
         TodoBoardUpdated = 22,
         /// <summary>系统已注入 Todo reminder</summary>
-        TodoReminderInjected = 23
+        TodoReminderInjected = 23,
+        /// <summary>Todo Board 进入恢复态，前端必须先提交恢复决策</summary>
+        TodoBoardRecoveryRequired = 24
     }
 
     /// <summary>
@@ -88,5 +90,23 @@ namespace SmartWord.Core.Models
 
         /// <summary>Todo 事件携带的当前激活任务 Id</summary>
         public string CurrentTodoId { get; set; } = string.Empty;
+
+        /// <summary>恢复决策事件的请求 Id</summary>
+        public string RecoveryRequestId { get; set; } = string.Empty;
+
+        /// <summary>恢复决策事件的人类可读原因</summary>
+        public string RecoveryReason { get; set; } = string.Empty;
+
+        /// <summary>恢复决策事件中的最近运行结果</summary>
+        public string LastRunOutcome { get; set; } = string.Empty;
+
+        /// <summary>恢复决策事件中的最近错误摘要</summary>
+        public string LastErrorSummary { get; set; } = string.Empty;
+
+        /// <summary>当前请求是否携带可用于重建的 ActivePlan</summary>
+        public bool HasActivePlan { get; set; }
+
+        /// <summary>当前恢复事件是否允许直接恢复旧任务板</summary>
+        public bool CanRecoverExisting { get; set; } = true;
     }
 }

@@ -4,11 +4,55 @@ using System.Collections.Generic;
 namespace SmartWord.Core.Models
 {
     /// <summary>
+    /// 表示 Todo Board 当前所处的执行状态。
+    /// </summary>
+    public enum TodoBoardExecutionState
+    {
+        Idle = 0,
+        Running = 1,
+        RecoveryRequired = 2
+    }
+
+    /// <summary>
+    /// 表示最近一次 Agent 运行在 Todo Board 视角下的结束结果。
+    /// </summary>
+    public enum TodoBoardRunOutcome
+    {
+        None = 0,
+        Succeeded = 1,
+        Cancelled = 2,
+        Failed = 3,
+        RolledBack = 4,
+        CrashedLike = 5
+    }
+
+    /// <summary>
+    /// 表示前端给出的 Todo Board 恢复决策。
+    /// </summary>
+    public enum TodoBoardRecoveryDecision
+    {
+        RecoverExisting = 0,
+        RebuildFromActivePlan = 1,
+        DiscardAndCreateEmpty = 2
+    }
+
+    /// <summary>
+    /// 表示一次运行开始前的 Todo Board 准备结果。
+    /// </summary>
+    public enum TodoBoardPreparationStatus
+    {
+        Ready = 0,
+        RecoveryRequired = 1
+    }
+
+    /// <summary>
     /// 表示一个文档级的 Todo 任务板快照。
     /// </summary>
     public sealed class TodoBoard
     {
-        public int SchemaVersion { get; set; } = 1;
+        public const int CurrentSchemaVersion = 2;
+
+        public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
         public string BoardId { get; set; } = string.Empty;
 
@@ -31,6 +75,22 @@ namespace SmartWord.Core.Models
         public int RoundsSincePendingWriteWithoutTodoWrite { get; set; }
 
         public bool HasInjectedPendingWriteReminder { get; set; }
+
+        public TodoBoardExecutionState ExecutionState { get; set; } = TodoBoardExecutionState.Idle;
+
+        public string LastRunId { get; set; } = string.Empty;
+
+        public DateTime? LastRunStartedAtUtc { get; set; }
+
+        public DateTime? LastRunFinishedAtUtc { get; set; }
+
+        public TodoBoardRunOutcome LastRunOutcome { get; set; } = TodoBoardRunOutcome.None;
+
+        public string LastErrorSummary { get; set; } = string.Empty;
+
+        public string RecoveryReason { get; set; } = string.Empty;
+
+        public string SourcePlanFingerprint { get; set; } = string.Empty;
 
         public IList<TodoBoardItem> Items { get; set; } = new List<TodoBoardItem>();
     }
@@ -143,5 +203,27 @@ namespace SmartWord.Core.Models
         public int CompletedSteps { get; set; }
 
         public int TotalSteps { get; set; }
+    }
+
+    /// <summary>
+    /// 表示运行前 Todo Board 的准备结果。
+    /// </summary>
+    public sealed class TodoBoardPreparationResult
+    {
+        public TodoBoardPreparationStatus Status { get; set; } = TodoBoardPreparationStatus.Ready;
+
+        public TodoBoard Board { get; set; }
+
+        public string RecoveryReason { get; set; } = string.Empty;
+
+        public TodoBoardRunOutcome LastRunOutcome { get; set; } = TodoBoardRunOutcome.None;
+
+        public string LastErrorSummary { get; set; } = string.Empty;
+
+        public bool HasActivePlan { get; set; }
+
+        public string ActivePlanFingerprint { get; set; } = string.Empty;
+
+        public bool CanRecoverExisting { get; set; } = true;
     }
 }
