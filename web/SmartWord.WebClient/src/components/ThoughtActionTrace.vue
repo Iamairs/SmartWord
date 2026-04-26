@@ -3,7 +3,8 @@
     <article v-for="toolCall in toolCalls" :key="toolCall.id" class="trace-card">
       <button class="trace-header" type="button" @click="toggle(toolCall.id)">
         <span class="trace-status" :class="`trace-status--${toolCall.status}`"></span>
-        <span class="trace-name">{{ toolCall.name }}</span>
+        <span class="trace-name">{{ getToolDisplayName(toolCall.name) }}</span>
+        <span class="trace-technical">{{ toolCall.name }}</span>
         <span class="trace-toggle">{{ expandedIds.has(toolCall.id) ? '收起' : '展开' }}</span>
       </button>
 
@@ -38,6 +39,24 @@ function toggle(toolCallId) {
   }
 
   expandedIds.value = next;
+}
+
+function getToolDisplayName(toolName) {
+  const names = {
+    probe_document: '读取文档概况',
+    read_section: '读取文档片段',
+    grep_document: '搜索文档内容',
+    get_selection_context: '读取当前选区',
+    read_table: '读取表格',
+    read_annotations: '读取批注',
+    read_script: '诊断文档结构',
+    patch_range: '执行标准补丁',
+    execute_script: '执行脚本操作',
+    todo_read: '读取任务板',
+    todo_write: '更新任务板',
+    ask_user_question: '询问用户'
+  };
+  return names[toolName] || toolName || '工具调用';
 }
 </script>
 
@@ -97,6 +116,15 @@ function toggle(toolCallId) {
   font-size: 12px;
   font-weight: 600;
   text-align: left;
+}
+
+.trace-technical {
+  max-width: 86px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: #8a9ab0;
 }
 
 .trace-toggle {
