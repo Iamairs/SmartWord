@@ -66,9 +66,13 @@
           <input v-model.trim="settingsStore.form.heavyModel" type="text" />
         </label>
 
-        <label class="settings-field settings-field--checkbox">
-          <input v-model="settingsStore.form.requireConfirmationForScripts" type="checkbox" />
-          <span>写操作前需要确认</span>
+        <label class="settings-field">
+          <span>执行权限</span>
+          <select v-model="settingsStore.form.permissionMode">
+            <option v-for="option in permissionOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
         </label>
 
         <label class="settings-field settings-field--textarea">
@@ -108,6 +112,7 @@
         :confirmation="chatStore.pendingConfirmation"
         @confirm="confirmPendingToolCall"
         @skip="skipPendingToolCall"
+        @cancel="cancelCurrentRun"
       />
       <ChangesSummaryPanel
         v-if="chatStore.completedTaskChanges.length"
@@ -165,6 +170,9 @@
           />
           <button type="button" class="send-button" @click="submitQuestionAnswer(customQuestionAnswer)">发送</button>
         </div>
+        <button type="button" class="ghost-button ghost-button--full" @click="cancelCurrentRun">
+          取消规划
+        </button>
       </div>
 
       <!-- Plan 模式：执行计划面板 -->
@@ -225,8 +233,17 @@
       ></textarea>
       <div class="composer-footer">
         <p class="environment-hint">{{ environmentHint }}</p>
-        <button class="send-button" type="submit" :disabled="isSubmitDisabled">
-          {{ chatStore.isLoading ? '发送中...' : '发送' }}
+        <button
+          v-if="chatStore.isLoading"
+          class="ghost-button composer-cancel-button"
+          type="button"
+          :disabled="isCancelling"
+          @click="cancelCurrentRun"
+        >
+          {{ isCancelling ? '取消中...' : '取消' }}
+        </button>
+        <button v-else class="send-button" type="submit" :disabled="isSubmitDisabled">
+          发送
         </button>
       </div>
     </form>
@@ -251,11 +268,18 @@ const settingsStore = useSettingsStore();
 const draft = ref('');
 const messageListRef = ref(null);
 const customQuestionAnswer = ref('');
+const isCancelling = ref(false);
 let unsubscribeAgentEvent = null;
 const modeOptions = [
   { value: 'ask', label: '对话交流' },
   { value: 'plan', label: '规划任务' },
   { value: 'agent', label: '自主执行' }
+];
+const permissionOptions = [
+  { value: 'read_only', label: '只读模式' },
+  { value: 'confirm_writes', label: '写入前确认' },
+  { value: 'auto_safe_writes', label: '自动安全写入' },
+  { value: 'full_auto', label: '全自动执行' }
 ];
 
 marked.setOptions({
@@ -292,7 +316,8 @@ const settingsSummary = computed(() => {
     return '正在加载连接设置...';
   }
 
-  return `轻量模型：${settingsStore.form.lightModel} / 重量模型：${settingsStore.form.heavyModel}`;
+  const permission = permissionOptions.find((item) => item.value === settingsStore.form.permissionMode);
+  return `轻量：${settingsStore.form.lightModel} / 重量：${settingsStore.form.heavyModel} / ${permission?.label || '写入前确认'}`;
 });
 
 const environmentHint = computed(() => {
@@ -339,7 +364,8 @@ async function submitMessage() {
   const request = {
     content: draft.value,
     manualMode: chatStore.currentMode,
-    requireConfirmationForScripts: settingsStore.form.requireConfirmationForScripts,
+    permissionMode: settingsStore.form.permissionMode,
+    requireConfirmationForScripts: requireConfirmationForPermission(settingsStore.form.permissionMode),
     customInstructions: settingsStore.form.customInstructions
   };
 
@@ -399,6 +425,20 @@ async function submitTodoRecoveryDecision(decision) {
   }
 }
 
+async function cancelCurrentRun() {
+  if (!chatStore.isLoading && !chatStore.pendingConfirmation && !chatStore.pendingQuestion) {
+    return;
+  }
+
+  isCancelling.value = true;
+  try {
+    await hostBridge.cancelCurrentRun();
+  } catch (error) {
+    chatStore.appendAssistantMessage(`取消任务失败：${error.message || '未知错误'}`);
+    isCancelling.value = false;
+  }
+}
+
 async function submitQuestionAnswer(answer) {
   const q = chatStore.pendingQuestion;
   if (!q || !answer?.trim()) return;
@@ -425,8 +465,20 @@ async function executePlan() {
     content: '请按照以下计划执行任务：\n\n' + context,
     manualMode: 'agent',
     maxIterations: 100,
+    permissionMode: settingsStore.form.permissionMode,
+    requireConfirmationForScripts: requireConfirmationForPermission(settingsStore.form.permissionMode),
     activePlan: plan
   });
+}
+
+function requireConfirmationForPermission(permissionMode) {
+  return !['auto_safe_writes', 'full_auto'].includes(permissionMode);
+}
+
+function getCancellationMessage() {
+  return chatStore.currentMode === 'agent'
+    ? '已取消当前任务。已验证的改动会保留，未验证的当前步骤会回滚。'
+    : '已停止当前回答。';
 }
 
 function buildResumePrompt(decision) {
@@ -462,6 +514,8 @@ async function resumePausedTodoRun(decision) {
       content: resumePrompt,
       manualMode: 'agent',
       maxIterations: 100,
+      permissionMode: settingsStore.form.permissionMode,
+      requireConfirmationForScripts: requireConfirmationForPermission(settingsStore.form.permissionMode),
       activePlan: chatStore.lastApprovedPlan,
       todoBoardDecision: decision
     });
@@ -564,6 +618,7 @@ function handleAgentEvent(event) {
       break;
     case 'max_iterations_reached':
       chatStore.finishLoading();
+      isCancelling.value = false;
       if (event.message) {
         chatStore.appendAssistantMessage(event.message);
       }
@@ -575,9 +630,6 @@ function handleAgentEvent(event) {
         event.todoBoardUpdateKind || 'reminder',
         event.message || ''
       );
-      if (event.message) {
-        chatStore.appendAssistantMessage(event.message);
-      }
       break;
     case 'progress_update':
       if (event.message) chatStore.updatePlanProgress(event.message);
@@ -588,19 +640,28 @@ function handleAgentEvent(event) {
       chatStore.clearPendingTodoPause();
       chatStore.finishLoading();
       chatStore.finalizeTaskChanges();
+      isCancelling.value = false;
       if (event.message) {
         chatStore.appendAssistantMessage(event.message);
       }
       break;
+    case 'cancelled':
+      chatStore.setCitations(event.citations);
+      chatStore.clearPendingRunWaits();
+      chatStore.finishLoading();
+      chatStore.finalizeTaskChanges();
+      chatStore.appendAssistantMessage(getCancellationMessage());
+      isCancelling.value = false;
+      break;
     case 'document_not_writable':
     case 'document_mismatch':
     case 'error':
-    case 'cancelled':
       chatStore.setCitations(event.citations);
       chatStore.clearPendingTodoRecovery();
       chatStore.clearPendingTodoPause();
       chatStore.finishLoading();
       chatStore.finalizeTaskChanges();
+      isCancelling.value = false;
       if (event.message) {
         chatStore.appendAssistantMessage(event.message);
       }
@@ -664,6 +725,13 @@ watch(
   ],
   () => {
     scrollToBottom();
+  }
+);
+
+watch(
+  () => settingsStore.form.permissionMode,
+  (permissionMode) => {
+    settingsStore.form.requireConfirmationForScripts = requireConfirmationForPermission(permissionMode);
   }
 );
 </script>
@@ -761,6 +829,10 @@ watch(
   padding: 6px 8px;
 }
 
+.ghost-button--full {
+  width: 100%;
+}
+
 .settings-panel {
   padding: 14px;
   border-radius: 18px;
@@ -804,6 +876,7 @@ watch(
 }
 
 .settings-field input,
+.settings-field select,
 .settings-field textarea {
   width: 100%;
   padding: 10px 12px;
@@ -820,6 +893,7 @@ watch(
 }
 
 .settings-field input:focus,
+.settings-field select:focus,
 .settings-field textarea:focus {
   outline: 2px solid rgba(40, 81, 125, 0.25);
   border-color: rgba(40, 81, 125, 0.42);
@@ -1033,6 +1107,11 @@ watch(
   cursor: pointer;
   transition: transform 0.16s ease, box-shadow 0.16s ease;
   box-shadow: 0 10px 18px rgba(217, 111, 50, 0.24);
+}
+
+.composer-cancel-button {
+  min-width: 76px;
+  background: #ffffff;
 }
 
 .send-button:hover:enabled,

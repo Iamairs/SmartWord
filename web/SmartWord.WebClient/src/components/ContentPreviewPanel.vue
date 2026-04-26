@@ -32,7 +32,15 @@
         :disabled="confirmation.isSubmitting"
         @click="$emit('skip')"
       >
-        跳过
+        跳过此步
+      </button>
+      <button
+        class="preview-panel__button preview-panel__button--cancel"
+        type="button"
+        :disabled="confirmation.isSubmitting"
+        @click="$emit('cancel')"
+      >
+        取消任务
       </button>
     </div>
   </section>
@@ -46,7 +54,7 @@ defineProps({
   }
 });
 
-defineEmits(['confirm', 'skip']);
+defineEmits(['confirm', 'skip', 'cancel']);
 </script>
 
 <style scoped>
@@ -122,7 +130,7 @@ defineEmits(['confirm', 'skip']);
 .preview-panel__actions {
   margin-top: 12px;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -150,5 +158,11 @@ defineEmits(['confirm', 'skip']);
   background: rgba(255, 255, 255, 0.9);
   color: #6f4f38;
   border: 1px solid rgba(166, 75, 24, 0.16);
+}
+
+.preview-panel__button--cancel {
+  background: #ffffff;
+  color: #9f1239;
+  border: 1px solid rgba(159, 18, 57, 0.18);
 }
 </style>

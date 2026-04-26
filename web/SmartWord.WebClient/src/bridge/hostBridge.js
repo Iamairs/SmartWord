@@ -23,14 +23,36 @@ function createDefaultSettings() {
     apiKeyLight: '',
     lightModel: 'gpt-4.1-mini',
     heavyModel: 'gpt-4.1',
+    permissionMode: 'confirm_writes',
     requireConfirmationForScripts: true,
     customInstructions: ''
   };
 }
 
+function normalizePermissionMode(permissionMode, requireConfirmationForScripts = true) {
+  const raw = String(permissionMode || '').trim().toLowerCase();
+  if (['read_only', 'confirm_writes', 'auto_safe_writes', 'full_auto'].includes(raw)) {
+    return raw;
+  }
+
+  return requireConfirmationForScripts === false ? 'auto_safe_writes' : 'confirm_writes';
+}
+
+function legacyConfirmationFromPermissionMode(permissionMode) {
+  return !['auto_safe_writes', 'full_auto'].includes(permissionMode);
+}
+
 function normalizeSettings(settings) {
   const source = settings || {};
   const defaults = createDefaultSettings();
+  const legacyConfirmation =
+    source.requireConfirmationForScripts ??
+    source.RequireConfirmationForScripts ??
+    defaults.requireConfirmationForScripts;
+  const permissionMode = normalizePermissionMode(
+    source.permissionMode ?? source.PermissionMode,
+    legacyConfirmation
+  );
 
   return {
     baseUrl: source.baseUrl ?? source.BaseUrl ?? source.apiBaseUrl ?? source.ApiBaseUrl ?? defaults.baseUrl,
@@ -41,10 +63,8 @@ function normalizeSettings(settings) {
     apiKeyLight: source.apiKeyLight ?? source.ApiKeyLight ?? defaults.apiKeyLight,
     lightModel: source.lightModel ?? source.LightModel ?? defaults.lightModel,
     heavyModel: source.heavyModel ?? source.HeavyModel ?? defaults.heavyModel,
-    requireConfirmationForScripts:
-      source.requireConfirmationForScripts ??
-      source.RequireConfirmationForScripts ??
-      defaults.requireConfirmationForScripts,
+    permissionMode,
+    requireConfirmationForScripts: legacyConfirmationFromPermissionMode(permissionMode),
     customInstructions:
       source.customInstructions ?? source.CustomInstructions ?? defaults.customInstructions
   };
@@ -68,7 +88,7 @@ function createMockResponse(request, notify) {
     detectedMode: request.manualMode
   });
 
-  if (request.manualMode === 'agent' && request.requireConfirmationForScripts !== false) {
+  if (request.manualMode === 'agent' && request.permissionMode === 'confirm_writes') {
     pendingMockConfirmation = {
       toolCallId: 'mock-tool-call-1',
       toolName: 'patch_range',
@@ -189,6 +209,21 @@ export const hostBridge = {
 
     console.warn('WebView2 HostObject 不可用，已回退到本地模拟。');
     createMockResponse(request, emitEvent);
+  },
+
+  async cancelCurrentRun() {
+    pendingMockConfirmation = null;
+    pendingMockTodoRecovery = null;
+
+    if (this.isAvailable) {
+      await callBridge('CancelCurrentRun');
+      return;
+    }
+
+    emitEvent({
+      type: 'cancelled',
+      message: '已取消当前任务。'
+    });
   },
 
   async confirmToolCall(toolCallId, confirmed) {

@@ -11,6 +11,7 @@ function createDefaultSettings() {
     apiKeyLight: '',
     lightModel: 'gpt-4.1-mini',
     heavyModel: 'gpt-4.1',
+    permissionMode: 'confirm_writes',
     requireConfirmationForScripts: true,
     customInstructions: ''
   };

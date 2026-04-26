@@ -332,6 +332,12 @@ export const useChatStore = defineStore('chat', {
     clearPendingTodoPause() {
       this.pendingTodoPause = null;
     },
+    clearPendingRunWaits() {
+      this.pendingConfirmation = null;
+      this.pendingQuestion = null;
+      this.pendingTodoRecovery = null;
+      this.pendingTodoPause = null;
+    },
     resumeLoadingAfterTodoRecovery() {
       this.isLoading = true;
       this.pendingTodoRecovery = null;
