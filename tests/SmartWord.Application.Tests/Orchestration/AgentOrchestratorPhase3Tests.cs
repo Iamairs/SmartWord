@@ -450,10 +450,10 @@ namespace SmartWord.Application.Tests.Orchestration
         }
 
         [Fact]
-        public async Task RunAsync_AfterFiveEffectiveExecutionRounds_EmitsTodoReminderInjected()
+        public async Task RunAsync_AfterEightEffectiveExecutionRounds_EmitsTodoReminderInjected()
         {
             var llmMessages = new List<AgentMessage>();
-            for (var index = 0; index < 5; index++)
+            for (var index = 0; index < 8; index++)
             {
                 llmMessages.Add(CreateToolCallMessage(
                     CreateToolCall($"probe-{index + 1}", "probe_document", "{}")));
@@ -495,7 +495,7 @@ namespace SmartWord.Application.Tests.Orchestration
             Assert.Contains(
                 lastRequestMessages.Skip(1),
                 item => string.Equals(item.Role, "user", StringComparison.OrdinalIgnoreCase)
-                    && (item.Content ?? string.Empty).Contains("请持续维护 todo board"));
+                    && (item.Content ?? string.Empty).Contains("内部提醒：当前任务较复杂"));
         }
 
         [Fact]
@@ -508,6 +508,9 @@ namespace SmartWord.Application.Tests.Orchestration
                 CreateToolCallMessage(CreateToolCall("probe-4", "probe_document", "{}")),
                 CreateToolCallMessage(CreateToolCall("todo-read-1", "todo_read", "{}")),
                 CreateToolCallMessage(CreateToolCall("probe-5", "probe_document", "{}")),
+                CreateToolCallMessage(CreateToolCall("probe-6", "probe_document", "{}")),
+                CreateToolCallMessage(CreateToolCall("probe-7", "probe_document", "{}")),
+                CreateToolCallMessage(CreateToolCall("probe-8", "probe_document", "{}")),
                 new AgentMessage
                 {
                     Role = "assistant",
@@ -529,7 +532,7 @@ namespace SmartWord.Application.Tests.Orchestration
                 {
                     Mode = AgentMode.Agent,
                     EnableToolCalling = true,
-                    MaxIterations = 8
+                    MaxIterations = 12
                 },
                 CancellationToken.None));
 
@@ -537,7 +540,7 @@ namespace SmartWord.Application.Tests.Orchestration
         }
 
         [Fact]
-        public async Task RunAsync_AfterVerifiedWriteWithoutTodoWriteNextRound_EmitsHighPriorityReminder()
+        public async Task RunAsync_AfterVerifiedWriteWithoutTodoWriteNextRound_DoesNotEmitHighPriorityReminder()
         {
             var llmClient = new FakeLlmClient(
                 CreateToolCallMessage(
@@ -583,18 +586,17 @@ namespace SmartWord.Application.Tests.Orchestration
                 },
                 CancellationToken.None));
 
-            var reminderEvent = Assert.Single(events.Where(item => item.Type == AgentEventType.TodoReminderInjected));
-            Assert.Contains("上一轮已经发生文档写入", reminderEvent.Message);
+            Assert.DoesNotContain(events, item => item.Type == AgentEventType.TodoReminderInjected);
             var lastRequestMessages = llmClient.RequestMessageSnapshots.LastOrDefault();
             Assert.NotNull(lastRequestMessages);
-            Assert.Contains(
+            Assert.DoesNotContain(
                 lastRequestMessages,
                 item => string.Equals(item.Role, "user", StringComparison.OrdinalIgnoreCase)
                     && (item.Content ?? string.Empty).Contains("上一轮已经发生文档写入"));
         }
 
         [Fact]
-        public async Task RunAsync_ReminderIsInjectedAfterSkippedToolResults()
+        public async Task RunAsync_WriteFailureAfterVerifiedWrite_DoesNotInjectPostWriteReminder()
         {
             var llmClient = new FakeLlmClient(
                 CreateToolCallMessage(
@@ -647,7 +649,7 @@ namespace SmartWord.Application.Tests.Orchestration
                 },
                 CancellationToken.None));
 
-            Assert.Contains(events, item => item.Type == AgentEventType.TodoReminderInjected);
+            Assert.DoesNotContain(events, item => item.Type == AgentEventType.TodoReminderInjected);
             var lastRequestMessages = llmClient.RequestMessageSnapshots.LastOrDefault();
             Assert.NotNull(lastRequestMessages);
             var skippedIndex = lastRequestMessages.FindIndex(item =>
@@ -659,7 +661,7 @@ namespace SmartWord.Application.Tests.Orchestration
                 && (item.Content ?? string.Empty).Contains("上一轮已经发生文档写入"));
 
             Assert.True(skippedIndex >= 0);
-            Assert.True(reminderIndex > skippedIndex);
+            Assert.Equal(-1, reminderIndex);
         }
 
         [Fact]
@@ -887,7 +889,7 @@ namespace SmartWord.Application.Tests.Orchestration
                 });
             var todoWriteTool = new FakeTool(
                 "todo_write",
-                ToolPermission.Write,
+                ToolPermission.StateWrite,
                 ToolCallResult.Ok(
                     "{\"success\":true}",
                     metadata: new TodoToolMetadata

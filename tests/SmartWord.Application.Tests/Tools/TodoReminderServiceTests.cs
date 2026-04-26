@@ -12,7 +12,7 @@ namespace SmartWord.Application.Tests.Tools
             var service = new TodoReminderService();
             var board = new TodoBoard
             {
-                RoundsSinceLastTodoUpdate = 5
+                RoundsSinceLastTodoUpdate = 8
             };
 
             var decision = service.BuildDecision(board, false);
@@ -22,14 +22,14 @@ namespace SmartWord.Application.Tests.Tools
         }
 
         [Fact]
-        public void BuildDecision_AfterFirstReminderRequiresThreeRounds_ReturnsNoReminderBeforeCooldown()
+        public void BuildDecision_AfterFirstReminderRequiresTenRounds_ReturnsNoReminderBeforeCooldown()
         {
             var service = new TodoReminderService();
             var board = new TodoBoard
             {
-                RoundsSinceLastTodoUpdate = 6,
+                RoundsSinceLastTodoUpdate = 9,
                 ReminderCount = 1,
-                RoundsSinceLastReminder = 2
+                RoundsSinceLastReminder = 9
             };
 
             var decision = service.BuildDecision(board, false);
@@ -38,14 +38,14 @@ namespace SmartWord.Application.Tests.Tools
         }
 
         [Fact]
-        public void BuildDecision_AfterFirstReminderAndThreeRounds_ReturnsNormalReminder()
+        public void BuildDecision_AfterFirstReminderAndTenRounds_ReturnsNormalReminder()
         {
             var service = new TodoReminderService();
             var board = new TodoBoard
             {
-                RoundsSinceLastTodoUpdate = 6,
+                RoundsSinceLastTodoUpdate = 18,
                 ReminderCount = 1,
-                RoundsSinceLastReminder = 3
+                RoundsSinceLastReminder = 10
             };
 
             var decision = service.BuildDecision(board, false);
@@ -55,7 +55,7 @@ namespace SmartWord.Application.Tests.Tools
         }
 
         [Fact]
-        public void BuildDecision_PendingWriteWithoutTodoWrite_ReturnsHighPriorityReminder()
+        public void BuildDecision_PendingWriteWithoutTodoWrite_DoesNotReturnHighPriorityReminder()
         {
             var service = new TodoReminderService();
             var board = new TodoBoard
@@ -66,8 +66,8 @@ namespace SmartWord.Application.Tests.Tools
 
             var decision = service.BuildDecision(board, true);
 
-            Assert.True(decision.ShouldInject);
-            Assert.True(decision.IsHighPriority);
+            Assert.False(decision.ShouldInject);
+            Assert.False(decision.IsHighPriority);
         }
     }
 }
