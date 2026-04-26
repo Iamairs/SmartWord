@@ -279,6 +279,8 @@ namespace SmartWord.Application.Context
                 Name = message.Name,
                 LocalMessageId = message.LocalMessageId,
                 IsCompressedSummary = message.IsCompressedSummary,
+                IsInternalObservation = message.IsInternalObservation,
+                InternalObservationKind = message.InternalObservationKind,
                 ToolName = message.ToolName,
                 RawToolInput = message.RawToolInput,
                 ToolSuccess = message.ToolSuccess

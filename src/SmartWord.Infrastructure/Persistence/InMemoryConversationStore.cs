@@ -117,6 +117,8 @@ namespace SmartWord.Infrastructure.Persistence
                 ToolCallId = message.ToolCallId,
                 LocalMessageId = message.LocalMessageId,
                 IsCompressedSummary = message.IsCompressedSummary,
+                IsInternalObservation = message.IsInternalObservation,
+                InternalObservationKind = message.InternalObservationKind,
                 ToolName = message.ToolName,
                 RawToolInput = message.RawToolInput,
                 ToolSuccess = message.ToolSuccess,

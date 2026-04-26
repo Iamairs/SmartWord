@@ -1440,7 +1440,9 @@ namespace SmartWord.Application.Orchestration
             var message = new AgentMessage
             {
                 Role = "user",
-                Content = content.Trim()
+                Content = content.Trim(),
+                IsInternalObservation = true,
+                InternalObservationKind = "auto_verify_result"
             };
 
             await _conversationStore
@@ -2775,6 +2777,9 @@ namespace SmartWord.Application.Orchestration
                 ReasoningContent = message.ReasoningContent,
                 ToolCallId = message.ToolCallId,
                 Name = message.Name,
+                IsCompressedSummary = message.IsCompressedSummary,
+                IsInternalObservation = message.IsInternalObservation,
+                InternalObservationKind = message.InternalObservationKind,
                 ToolCalls = message.ToolCalls == null
                     ? new List<ToolCall>()
                     : message.ToolCalls.Select(item => new ToolCall

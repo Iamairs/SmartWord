@@ -33,6 +33,12 @@ namespace SmartWord.Core.Models
         public bool IsCompressedSummary { get; set; }
 
         [JsonIgnore]
+        public bool IsInternalObservation { get; set; }
+
+        [JsonIgnore]
+        public string InternalObservationKind { get; set; } = string.Empty;
+
+        [JsonIgnore]
         public string ToolName { get; set; } = string.Empty;
 
         [JsonIgnore]
