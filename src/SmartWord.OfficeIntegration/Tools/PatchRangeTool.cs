@@ -40,7 +40,7 @@ namespace SmartWord.OfficeIntegration.Tools
 
         public string Description => "以最小风险执行段落替换、插入、样式设置与删除。operations 必须传真正的 JSON 数组，不要传字符串化 JSON；所有 paragraph_index 都使用 0-based 段落索引。当前批处理按实时文档顺序执行，前一步对结构的影响会改变后续索引。";
 
-        public ToolPermission RequiredPermission => ToolPermission.Write;
+        public ToolPermission RequiredPermission => ToolPermission.DocumentPatchWrite;
 
         public bool IsVisibleToModel => true;
 

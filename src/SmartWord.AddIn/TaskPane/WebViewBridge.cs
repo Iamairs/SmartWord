@@ -170,6 +170,10 @@ namespace SmartWord.AddIn.TaskPane
                         Mode = selectedMode,
                         Model = modelRoute.SelectedModel,
                         MaxIterations = request.Value<int?>("maxIterations") ?? 100,
+                        PermissionMode = ResolvePermissionMode(
+                            request.Value<string>("permissionMode"),
+                            request.Value<bool?>("requireConfirmationForScripts")
+                                ?? smartWordSettings.RequireConfirmationForScripts),
                         RequireConfirmationForScripts =
                             request.Value<bool?>("requireConfirmationForScripts")
                             ?? smartWordSettings.RequireConfirmationForScripts,
@@ -224,6 +228,24 @@ namespace SmartWord.AddIn.TaskPane
                 {
                     DisposeCancellationTokenSource(requestCts);
                 }
+            });
+        }
+
+        public string CancelCurrentRun()
+        {
+            CancellationTokenSource cancellationTokenSource;
+            lock (_ctsSyncRoot)
+            {
+                cancellationTokenSource = _currentCts;
+            }
+
+            cancellationTokenSource?.Cancel();
+            CancelPendingWaits();
+
+            return JsonConvert.SerializeObject(new
+            {
+                success = true,
+                message = "已请求取消当前任务。"
             });
         }
 
@@ -527,6 +549,84 @@ namespace SmartWord.AddIn.TaskPane
             }
         }
 
+        private static AgentPermissionMode ResolvePermissionMode(
+            string permissionMode,
+            bool requireConfirmationForScripts)
+        {
+            if (TryParsePermissionMode(permissionMode, out var parsedMode))
+            {
+                return parsedMode;
+            }
+
+            return requireConfirmationForScripts
+                ? AgentPermissionMode.ConfirmWrites
+                : AgentPermissionMode.AutoSafeWrites;
+        }
+
+        private static bool TryParsePermissionMode(
+            string permissionMode,
+            out AgentPermissionMode parsedMode)
+        {
+            parsedMode = AgentPermissionMode.ConfirmWrites;
+            if (string.IsNullOrWhiteSpace(permissionMode))
+            {
+                return false;
+            }
+
+            switch (permissionMode.Trim().ToLowerInvariant())
+            {
+                case "read_only":
+                case "readonly":
+                    parsedMode = AgentPermissionMode.ReadOnly;
+                    return true;
+                case "confirm_writes":
+                case "confirmwrites":
+                    parsedMode = AgentPermissionMode.ConfirmWrites;
+                    return true;
+                case "auto_safe_writes":
+                case "autosafewrites":
+                    parsedMode = AgentPermissionMode.AutoSafeWrites;
+                    return true;
+                case "full_auto":
+                case "fullauto":
+                    parsedMode = AgentPermissionMode.FullAuto;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private void CancelPendingWaits()
+        {
+            foreach (var item in _pendingToolConfirmations)
+            {
+                if (_pendingToolConfirmations.TryRemove(item.Key, out var pending))
+                {
+                    pending.TrySetCanceled();
+                }
+            }
+
+            foreach (var item in _pendingQuestionAnswers)
+            {
+                if (_pendingQuestionAnswers.TryRemove(item.Key, out var pending))
+                {
+                    pending.TrySetCanceled();
+                }
+            }
+
+            foreach (var item in _pendingTodoRecoveryDecisions)
+            {
+                if (_pendingTodoRecoveryDecisions.TryRemove(item.Key, out var pending))
+                {
+                    pending.TrySetCanceled();
+                }
+            }
+
+            _earlyConfirmationResults.Clear();
+            _earlyQuestionAnswers.Clear();
+            _earlyTodoRecoveryDecisions.Clear();
+        }
+
         private bool IsOwnerControlAvailable()
         {
             return _ownerControl != null
@@ -691,6 +791,8 @@ namespace SmartWord.AddIn.TaskPane
                     + content.Length
                     + ", hasCustomInstructions="
                     + (!string.IsNullOrWhiteSpace(customInstructions))
+                    + ", permissionMode="
+                    + (request.Value<string>("permissionMode") ?? string.Empty)
                     + ", requireConfirmationForScripts="
                     + (request.Value<bool?>("requireConfirmationForScripts") ?? true)
                     + ", maxIterations="

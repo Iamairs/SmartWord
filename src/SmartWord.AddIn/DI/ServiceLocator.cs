@@ -148,6 +148,7 @@ namespace SmartWord.AddIn.DI
                     ApiKeyLight = llmOptions.ApiKeyLight,
                     LightModel = llmOptions.LightModel,
                     HeavyModel = llmOptions.HeavyModel,
+                    PermissionMode = persistedSettings.PermissionMode,
                     RequireConfirmationForScripts = persistedSettings.RequireConfirmationForScripts,
                     CustomInstructions = persistedSettings.CustomInstructions
                 };
@@ -260,6 +261,11 @@ namespace SmartWord.AddIn.DI
             normalized.HeavyModel = string.IsNullOrWhiteSpace(normalized.HeavyModel)
                 ? "gpt-4.1"
                 : normalized.HeavyModel;
+            normalized.PermissionMode = NormalizePermissionMode(
+                normalized.PermissionMode,
+                normalized.RequireConfirmationForScripts);
+            normalized.RequireConfirmationForScripts =
+                IsLegacyConfirmationRequired(normalized.PermissionMode);
             return normalized;
         }
 
@@ -276,6 +282,7 @@ namespace SmartWord.AddIn.DI
                 ApiKeyLight = settings.ApiKeyLight,
                 LightModel = settings.LightModel,
                 HeavyModel = settings.HeavyModel,
+                PermissionMode = settings.PermissionMode,
                 RequireConfirmationForScripts = settings.RequireConfirmationForScripts,
                 CustomInstructions = settings.CustomInstructions
             };
@@ -292,6 +299,7 @@ namespace SmartWord.AddIn.DI
             target.ApiKeyLight = source.ApiKeyLight;
             target.LightModel = source.LightModel;
             target.HeavyModel = source.HeavyModel;
+            target.PermissionMode = source.PermissionMode;
             target.RequireConfirmationForScripts = source.RequireConfirmationForScripts;
             target.CustomInstructions = source.CustomInstructions;
         }
@@ -314,6 +322,38 @@ namespace SmartWord.AddIn.DI
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "SmartWord",
                 "settings.json");
+        }
+
+        private static string NormalizePermissionMode(
+            string permissionMode,
+            bool requireConfirmationForScripts)
+        {
+            var normalized = (permissionMode ?? string.Empty).Trim().ToLowerInvariant();
+            switch (normalized)
+            {
+                case "read_only":
+                case "readonly":
+                    return "read_only";
+                case "confirm_writes":
+                case "confirmwrites":
+                    return "confirm_writes";
+                case "auto_safe_writes":
+                case "autosafewrites":
+                    return "auto_safe_writes";
+                case "full_auto":
+                case "fullauto":
+                    return "full_auto";
+                default:
+                    return requireConfirmationForScripts
+                        ? "confirm_writes"
+                        : "auto_safe_writes";
+            }
+        }
+
+        private static bool IsLegacyConfirmationRequired(string permissionMode)
+        {
+            return !string.Equals(permissionMode, "auto_safe_writes", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(permissionMode, "full_auto", StringComparison.OrdinalIgnoreCase);
         }
 
         private static void ApplyEnvironmentOverrides(LlmClientOptions options)

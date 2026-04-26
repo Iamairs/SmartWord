@@ -6,6 +6,13 @@ namespace SmartWord.Core.Enums
     public enum ToolPermission
     {
         ReadOnly = 0,
-        Write = 1
+        StateWrite = 1,
+        DocumentPatchWrite = 2,
+        ScriptWrite = 3,
+
+        /// <summary>
+        /// 兼容旧测试与旧工具声明，默认按文档补丁写入处理。
+        /// </summary>
+        Write = DocumentPatchWrite
     }
 }

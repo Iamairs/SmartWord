@@ -48,7 +48,7 @@ namespace SmartWord.OfficeIntegration.Tools
 
         public string Description => "执行受控的 C# 写入脚本以完成 patch_range 难以覆盖的复杂写入。输入必须同时提供 write_code 与 verify_code；验证脚本只允许读取 Word DOM，并应返回包含 all_passed 与 results 的结构化结果。";
 
-        public ToolPermission RequiredPermission => ToolPermission.Write;
+        public ToolPermission RequiredPermission => ToolPermission.ScriptWrite;
 
         public bool IsVisibleToModel => true;
 

@@ -52,6 +52,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Enums\AgentMode.cs" />
+    <Compile Include="Enums\AgentPermissionMode.cs" />
     <Compile Include="Enums\ToolPermission.cs" />
     <Compile Include="Interfaces\IAgentOrchestrator.cs" />
     <Compile Include="Interfaces\IConfirmationChannel.cs" />
@@ -73,6 +74,7 @@
     <Compile Include="Models\DocumentHeading.cs" />
     <Compile Include="Models\DocumentStatus.cs" />
     <Compile Include="Models\ExecutionPlan.cs" />
+    <Compile Include="Models\PermissionDecision.cs" />
     <Compile Include="Models\TodoBoard.cs" />
     <Compile Include="Models\ToolCall.cs" />
     <Compile Include="Models\ToolCallResult.cs" />

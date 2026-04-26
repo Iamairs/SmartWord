@@ -27,7 +27,7 @@ namespace SmartWord.Application.Tools
 
         public string Description => "按结构化动作更新当前文档的 Todo Board，只允许受控地新增、更新、改状态、重排或重建任务板。";
 
-        public ToolPermission RequiredPermission => ToolPermission.Write;
+        public ToolPermission RequiredPermission => ToolPermission.StateWrite;
 
         public bool IsVisibleToModel => true;
 

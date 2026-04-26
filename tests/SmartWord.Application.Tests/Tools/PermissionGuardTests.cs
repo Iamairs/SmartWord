@@ -46,6 +46,74 @@ namespace SmartWord.Application.Tests.Tools
         }
 
         [Fact]
+        public void Decide_AgentReadOnlyModeWriteTools_ReturnsDenied()
+        {
+            var registry = CreateRegistryWithWriteTools();
+            var guard = new PermissionGuard(registry);
+
+            Assert.False(guard.Decide("patch_range", AgentMode.Agent, AgentPermissionMode.ReadOnly).IsAllowed);
+            Assert.False(guard.Decide("execute_script", AgentMode.Agent, AgentPermissionMode.ReadOnly).IsAllowed);
+            Assert.False(guard.Decide("todo_write", AgentMode.Agent, AgentPermissionMode.ReadOnly).IsAllowed);
+        }
+
+        [Fact]
+        public void Decide_ConfirmWrites_RequiresConfirmationOnlyForDocumentWrites()
+        {
+            var registry = CreateRegistryWithWriteTools();
+            var guard = new PermissionGuard(registry);
+
+            var patch = guard.Decide("patch_range", AgentMode.Agent, AgentPermissionMode.ConfirmWrites);
+            var script = guard.Decide("execute_script", AgentMode.Agent, AgentPermissionMode.ConfirmWrites);
+            var todo = guard.Decide("todo_write", AgentMode.Agent, AgentPermissionMode.ConfirmWrites);
+
+            Assert.True(patch.IsAllowed);
+            Assert.True(patch.RequiresConfirmation);
+            Assert.True(script.IsAllowed);
+            Assert.True(script.RequiresConfirmation);
+            Assert.True(todo.IsAllowed);
+            Assert.False(todo.RequiresConfirmation);
+        }
+
+        [Fact]
+        public void Decide_AutoSafeWrites_ConfirmsOnlyScriptWrites()
+        {
+            var registry = CreateRegistryWithWriteTools();
+            var guard = new PermissionGuard(registry);
+
+            var patch = guard.Decide("patch_range", AgentMode.Agent, AgentPermissionMode.AutoSafeWrites);
+            var script = guard.Decide("execute_script", AgentMode.Agent, AgentPermissionMode.AutoSafeWrites);
+            var todo = guard.Decide("todo_write", AgentMode.Agent, AgentPermissionMode.AutoSafeWrites);
+
+            Assert.True(patch.IsAllowed);
+            Assert.False(patch.RequiresConfirmation);
+            Assert.True(script.IsAllowed);
+            Assert.True(script.RequiresConfirmation);
+            Assert.True(todo.IsAllowed);
+            Assert.False(todo.RequiresConfirmation);
+        }
+
+        [Fact]
+        public void Decide_FullAuto_AllowsWritesWithoutConfirmation()
+        {
+            var registry = CreateRegistryWithWriteTools();
+            var guard = new PermissionGuard(registry);
+
+            Assert.False(guard.Decide("patch_range", AgentMode.Agent, AgentPermissionMode.FullAuto).RequiresConfirmation);
+            Assert.False(guard.Decide("execute_script", AgentMode.Agent, AgentPermissionMode.FullAuto).RequiresConfirmation);
+            Assert.False(guard.Decide("todo_write", AgentMode.Agent, AgentPermissionMode.FullAuto).RequiresConfirmation);
+        }
+
+        [Fact]
+        public void Decide_AskAndPlanWriteTools_ReturnDenied()
+        {
+            var registry = CreateRegistryWithWriteTools();
+            var guard = new PermissionGuard(registry);
+
+            Assert.False(guard.Decide("patch_range", AgentMode.Ask, AgentPermissionMode.FullAuto).IsAllowed);
+            Assert.False(guard.Decide("execute_script", AgentMode.Plan, AgentPermissionMode.FullAuto).IsAllowed);
+        }
+
+        [Fact]
         public void IsAllowed_UnregisteredTool_ReturnsFalse()
         {
             var registry = new ToolRegistry();
@@ -54,6 +122,15 @@ namespace SmartWord.Application.Tests.Tools
             var allowed = guard.IsAllowed("missing_tool", AgentMode.Ask);
 
             Assert.False(allowed);
+        }
+
+        private static ToolRegistry CreateRegistryWithWriteTools()
+        {
+            var registry = new ToolRegistry();
+            registry.Register(new FakeTool("patch_range", ToolPermission.DocumentPatchWrite));
+            registry.Register(new FakeTool("execute_script", ToolPermission.ScriptWrite));
+            registry.Register(new FakeTool("todo_write", ToolPermission.StateWrite));
+            return registry;
         }
 
         private sealed class FakeTool : ITool

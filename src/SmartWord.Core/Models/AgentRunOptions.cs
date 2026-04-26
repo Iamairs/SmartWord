@@ -15,6 +15,8 @@ namespace SmartWord.Core.Models
 
         public int CompactionThreshold { get; set; } = 24000;
 
+        public AgentPermissionMode? PermissionMode { get; set; }
+
         public bool RequireConfirmationForScripts { get; set; } = true;
 
         public bool EnableToolCalling { get; set; } = true;

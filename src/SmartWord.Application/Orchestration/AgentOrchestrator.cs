@@ -689,9 +689,11 @@ namespace SmartWord.Application.Orchestration
                 }
 
                 var operationDescription = BuildOperationDescription(toolCall.Name, parsedInput);
-                var requiresConfirmation = safeOptions.Mode == AgentMode.Agent
-                    && safeOptions.RequireConfirmationForScripts
-                    && isDocumentWriteTool;
+                var permissionDecision = _permissionGuard.Decide(
+                    toolCall.Name,
+                    safeOptions.Mode,
+                    ResolvePermissionMode(safeOptions));
+                var requiresConfirmation = permissionDecision.RequiresConfirmation;
 
                 yield return new AgentEvent
                 {
@@ -703,9 +705,9 @@ namespace SmartWord.Application.Orchestration
                     OperationDescription = operationDescription
                 };
 
-                if (!_permissionGuard.IsAllowed(toolCall.Name, safeOptions.Mode))
+                if (!permissionDecision.IsAllowed)
                 {
-                    var deniedResult = ToolCallResult.Denied(toolCall.Name);
+                    var deniedResult = ToolCallResult.Denied(toolCall.Name, permissionDecision.Reason);
                     await AppendToolResultAsync(documentPath, messages, toolCall, deniedResult, cancellationToken)
                         .ConfigureAwait(false);
 
@@ -891,6 +893,28 @@ namespace SmartWord.Application.Orchestration
                             }
                         }
                     }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    interruptedOutcome = TodoBoardRunOutcome.Cancelled;
+                    interruptedReason = "用户已取消当前任务。";
+                    if (writeStepUndoScope != null && !writeStepCommitted && !writeStepRolledBack)
+                    {
+                        writeStepUndoScope.Rollback();
+                        writeStepRolledBack = true;
+                    }
+
+                    if (todoWriteStepStarted && _todoManager != null)
+                    {
+                        currentTodoBoard = await _todoManager
+                            .RollbackCurrentWriteStepAsync(
+                                documentPath,
+                                interruptedReason,
+                                CancellationToken.None)
+                            .ConfigureAwait(false);
+                    }
+
+                    throw;
                 }
                 catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                 {
@@ -2629,6 +2653,18 @@ namespace SmartWord.Application.Orchestration
             }
 
             return bounded;
+        }
+
+        private static AgentPermissionMode ResolvePermissionMode(AgentRunOptions options)
+        {
+            if (options != null && options.PermissionMode.HasValue)
+            {
+                return options.PermissionMode.Value;
+            }
+
+            return options != null && !options.RequireConfirmationForScripts
+                ? AgentPermissionMode.AutoSafeWrites
+                : AgentPermissionMode.ConfirmWrites;
         }
 
         private enum PendingWriteState

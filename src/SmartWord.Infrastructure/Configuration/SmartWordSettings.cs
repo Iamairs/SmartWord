@@ -26,6 +26,8 @@ namespace SmartWord.Infrastructure.Configuration
 
         public string HeavyModel { get; set; } = "gpt-4.1";
 
+        public string PermissionMode { get; set; } = string.Empty;
+
         public bool RequireConfirmationForScripts { get; set; } = true;
 
         public string CustomInstructions { get; set; } = string.Empty;
