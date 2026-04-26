@@ -1,69 +1,23 @@
-# Todo List
+# 当前实施计划归档：执行体验优化
 
-- [x] P0 写入本轮 `project_cur.md` 与 `plan_cur.md`
-- [x] P1 扩展 TodoBoard / TodoManager，建立“可信提交快照”主语义
-- [x] P2 扩展 AgentEvent / WebViewBridge，区分普通同步与回滚恢复事件
-- [x] P3 改造前端 Todo store 与 TodoBoardPanel，正确显示回滚恢复提示
-- [x] P4 补齐测试、跑验证、更新文档并提交 git
+## 完成状态
 
-> 说明：本文件用于跟踪本轮“Todo Board 回滚显示与真实执行状态彻底对齐”的执行进度；每完成一个阶段，都要同步更新状态。
+- [x] 阅读 README 与相关开发规格。
+- [x] 创建并归档临时需求文档 `docs/project_cur.md`。
+- [x] 实现 Core 权限模型与 PermissionGuard 决策。
+- [x] 更新工具权限、编排层确认逻辑与取消处理。
+- [x] 更新 AddIn 设置、桥接和运行选项。
+- [x] 更新前端设置、发送 payload、取消按钮和 reminder 静默处理。
+- [x] 调整 SYSTEM / ASK / AGENT / PLAN Prompt。
+- [x] 更新权限、Prompt、Todo reminder 相关测试。
+- [x] 更新 `docs/已实现的功能.md`。
+- [x] 运行后端测试/构建与前端构建。
 
-# 实施计划：Todo Board 回滚显示与真实执行状态对齐
+## 已验证命令
 
-## 1. 目标
-
-修复 `verify_script` 失败后 Todo Board 短暂把历史完成项显示为未完成的问题，并从状态模型层面保证：
-
-- 可信已提交进度有独立持久化锚点
-- 当前写步骤回滚只恢复到可信检查点
-- 前端能区分“普通更新”和“回滚恢复”
-- 暂停、恢复、异常恢复时看到的任务板都与真实执行状态一致
-
-## 2. 分阶段实施步骤
-
-### 阶段 P1：后端可信快照语义
-
-- 在 `TodoBoard` 中新增最近可信提交快照字段
-- 所有正常可信写入后刷新该快照
-- 当前写步骤开始时，从可信快照建立当前步恢复锚点
-- 当前步回滚、暂停、恢复时优先恢复可信快照，而不是直接沿用漂移板
-
-### 阶段 P2：事件语义扩展
-
-- 在 `AgentEvent` 中新增 Todo 更新类型字段
-- `todo_write`、`todo_read`、回滚恢复、Ready、Paused 等事件都带上明确类型
-- `WebViewBridge` 把新字段桥接给前端
-
-### 阶段 P3：前端展示改造
-
-- `chat` store 保存 Todo 更新类型与提示信息
-- 普通同步清空提示
-- 回滚恢复显示“当前步已回退，已恢复到最近可信检查点”的提示，不再伪装成普通刷新
-- `TodoBoardPanel` 显示提示条与最近可信检查点说明
-
-### 阶段 P4：测试与收尾
-
-- 补充 `TodoManager` 测试：
-  - 可信快照初始化与刷新
-  - 回滚优先使用可信快照
-- 补充 `AgentOrchestrator` 测试：
-  - 验证失败时发出的 Todo 更新事件类型正确
-  - 暂停态仍保留可信板
-- 运行后端测试与前端构建
-- 更新 `docs/已实现的功能.md`
-- 按原子化要求提交 git
-
-## 3. 当前状态
-
-- [x] P0 已完成：本轮需求文档与执行计划文档已重写。
-- [x] P1 已完成：后端已引入最近可信提交快照，并优先用它驱动回滚、暂停与恢复。
-- [x] P2 已完成：Todo 事件已补充更新类型，并桥接到前端。
-- [x] P3 已完成：前端任务板已能区分普通同步、回滚恢复与提醒提示。
-- [x] P4 已完成：后端测试通过、前端构建通过、文档已更新，当前进入 git 提交收尾。
-
-## 4. 风险与注意事项
-
-- 不能把“可信提交快照”设计成自引用 JSON，否则会造成快照无限膨胀
-- 不能只修前端覆盖逻辑，否则暂停/恢复链路仍会保留错误语义
-- 必须兼容旧版 Todo JSON 缺少新字段的场景
-- 前端没有现成单测框架，本轮以后端自动化测试 + 前端构建验证为主
+- `dotnet test tests\SmartWord.Application.Tests\SmartWord.Application.Tests.csproj`
+- `dotnet build src\SmartWord.Core\SmartWord.Core.csproj`
+- `dotnet build src\SmartWord.Application\SmartWord.Application.csproj`
+- `dotnet build src\SmartWord.OfficeIntegration\SmartWord.OfficeIntegration.csproj`
+- `dotnet build src\SmartWord.Infrastructure\SmartWord.Infrastructure.csproj`
+- `npm run build` in `web\SmartWord.WebClient`
