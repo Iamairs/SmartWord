@@ -648,10 +648,11 @@ namespace SmartWord.Infrastructure.LlmClients
             var hasUserQuery = messages.Any(message =>
                 message != null
                 && string.Equals(message.Role, "user", StringComparison.OrdinalIgnoreCase)
+                && !message.IsInternalObservation
                 && !string.IsNullOrWhiteSpace(message.Content));
             if (!hasUserQuery)
             {
-                throw new InvalidOperationException("LLM 请求 messages 缺少有效的 role=user 用户消息，已阻止发送非法请求。");
+                throw new InvalidOperationException("LLM 请求 messages 缺少有效的真实 role=user 用户消息，已阻止发送非法请求。");
             }
 
             HashSet<string> pendingToolCallIds = null;

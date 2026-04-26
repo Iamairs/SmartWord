@@ -135,7 +135,49 @@ namespace SmartWord.Application.Tests.Infrastructure
 
             var exception = AssertBuildRequestJsonInvalid(messages);
 
-            Assert.Contains("role=user", exception.Message);
+            Assert.Contains("真实 role=user", exception.Message);
+        }
+
+        [Fact]
+        public void BuildRequestJson_OnlyInternalObservationUser_ThrowsBeforeSendingProviderRequest()
+        {
+            var messages = new List<AgentMessage>
+            {
+                new AgentMessage { Role = "system", Content = "system" },
+                new AgentMessage
+                {
+                    Role = "user",
+                    Content = "[SmartWord 自动验证结果] 当前写步骤已验证通过。",
+                    IsInternalObservation = true,
+                    InternalObservationKind = "auto_verify_result"
+                }
+            };
+
+            var exception = AssertBuildRequestJsonInvalid(messages);
+
+            Assert.Contains("真实 role=user", exception.Message);
+        }
+
+        [Fact]
+        public void BuildRequestJson_RealUserWithInternalObservation_SerializesRequest()
+        {
+            var messages = new List<AgentMessage>
+            {
+                new AgentMessage { Role = "system", Content = "system" },
+                new AgentMessage { Role = "user", Content = "继续执行正文格式修改" },
+                new AgentMessage
+                {
+                    Role = "user",
+                    Content = "[SmartWord 自动验证结果] 当前写步骤已验证通过。",
+                    IsInternalObservation = true,
+                    InternalObservationKind = "auto_verify_result"
+                }
+            };
+
+            var requestJson = InvokeBuildRequestJson(messages);
+
+            Assert.Contains("继续执行正文格式修改", requestJson);
+            Assert.Contains("SmartWord 自动验证结果", requestJson);
         }
 
         [Fact]
