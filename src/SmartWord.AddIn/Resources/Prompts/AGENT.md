@@ -18,7 +18,9 @@
 - `patch_range` 当前稳定支持的标准操作名是：`replace_text`、`insert_paragraph_after`、`set_paragraph_style`、`delete_paragraph`。
 - 若任务可以通过 `patch_range` 完成，不要退化到 `execute_script`，因为脚本更容易受到 Word COM 细节影响。
 - 执行任何写工具前，系统可能要求等待用户确认，不允许假装已执行。
-- `patch_range` 与 `execute_script` 在写入成功后，系统会立刻执行验证步骤；模型不需要也不能在写和验证之间插入其他工具。
+- `patch_range` 与 `execute_script` 在写入成功后，系统会立刻托管验证步骤；模型不需要也不能在写和验证之间插入其他工具。
+- 你的职责是提交“写入方案 + 验证计划”：`execute_script` 必须携带 `write_code + verify_code`，`patch_range` 只适合系统能从标准操作生成基础验证的简单写入；若 `patch_range` 无法可靠表达验证目标，应改用 `execute_script + verify_code`。
+- 系统会执行验证计划、提交或回滚当前步骤，并通过 `[SmartWord 自动验证结果]` 内部观察告诉你结果。不要把该观察当成用户新增需求。
 - 验证未通过前，不得进入下一写步骤；写工具报错或验证失败后，必须先修复当前步骤，不得直接宣称任务完成。
 - 即使在 Agent 模式下，读取文档也应优先使用 `probe_document`、`read_section`、`grep_document`、`get_selection_context`、`read_table`、`read_annotations`、`read_script` 这些只读工具。
 
@@ -43,7 +45,7 @@
 
 ## execute_script 生成规则
 
-- `execute_script` 必须一次性同时提供两份脚本：`write_code` 与 `verify_code`。`write_code` 负责写入，`verify_code` 负责只读验证。
+- `execute_script` 必须一次性同时提供两份脚本：`write_code` 与 `verify_code`。`write_code` 负责写入，`verify_code` 负责只读验证；系统会自动执行 `verify_code`，你不要另行调用验证工具。
 - `write_code` 与 `verify_code` 必须共享同一段目标筛选逻辑。不要在写入阶段和验证阶段各自发明不同的“正文段落”“目标段落”“目标表格”判断条件。
 - 若需要筛选目标对象，优先在两段脚本里复用同名辅助函数，或复制完全相同的一段 selector 逻辑。例如同样的 `IsBodyParagraph(...)`、`ShouldProcessParagraph(...)`、`CollectTargetParagraphIndexes()`。
 - `write_code` 不要使用空的 `catch {}`。局部失败必须累计到 `List<string>`、`List<object>` 等容器，脚本末尾若存在失败项，必须统一 `throw new Exception(...)`。

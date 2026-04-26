@@ -13,6 +13,9 @@ namespace SmartWord.Application.Tests.PromptBuilder
 
             Assert.Contains("write_code` 与 `verify_code` 必须共享同一段目标筛选逻辑", prompt);
             Assert.Contains("写什么属性，就验证什么属性", prompt);
+            Assert.Contains("写入方案 + 验证计划", prompt);
+            Assert.Contains("系统会自动执行 `verify_code`", prompt);
+            Assert.Contains("[SmartWord 自动验证结果]", prompt);
             Assert.Contains("只维护局部变量", prompt);
             Assert.Contains("return new { all_passed = allPassed, results = results };", prompt);
             Assert.Contains("不要先假设 `Information(...)`、`Style`、`Font`、`ParagraphFormat`", prompt);
