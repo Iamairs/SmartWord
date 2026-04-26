@@ -15,7 +15,7 @@
     </p>
 
     <div v-if="orderedItems.length" class="todo-recovery-panel__snapshot">
-      <p class="todo-recovery-panel__snapshot-title">旧任务板快照</p>
+      <p class="todo-recovery-panel__snapshot-title">最近可信任务板快照</p>
       <ul class="todo-recovery-panel__list">
         <li
           v-for="item in orderedItems"

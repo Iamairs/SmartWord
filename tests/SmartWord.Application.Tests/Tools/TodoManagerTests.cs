@@ -359,6 +359,77 @@ namespace SmartWord.Application.Tests.Tools
         }
 
         [Fact]
+        public async Task RollbackCurrentWriteStepAsync_WhenInFlightSnapshotIsStale_PrefersCommittedSnapshot()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), "smartword-todo-tests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+            try
+            {
+                var store = new JsonTodoStore(tempDirectory);
+                var manager = new TodoManager(store);
+                await manager.InitializeFromExecutionPlanAsync(
+                    "doc1",
+                    new ExecutionPlan
+                    {
+                        TodoList = new List<TodoItem>
+                        {
+                            new TodoItem { Description = "第一步" },
+                            new TodoItem { Description = "第二步" }
+                        }
+                    },
+                    CancellationToken.None);
+
+                var progressedBoard = await manager.ApplyChangeAsync(
+                    "doc1",
+                    new TodoWriteRequest
+                    {
+                        Action = "set_status",
+                        Id = "T1",
+                        Status = TodoItemStatus.Completed
+                    },
+                    CancellationToken.None);
+
+                await manager.MarkRunStartedAsync("doc1", "run-1", string.Empty, CancellationToken.None);
+
+                var staleSnapshotBoard = new TodoBoard
+                {
+                    SchemaVersion = TodoBoard.CurrentSchemaVersion,
+                    BoardId = progressedBoard.Board.BoardId,
+                    DocumentPath = "doc1",
+                    Items = new List<TodoBoardItem>
+                    {
+                        new TodoBoardItem { Id = "T1", Content = "第一步", Status = TodoItemStatus.InProgress, Order = 1 },
+                        new TodoBoardItem { Id = "T2", Content = "第二步", Status = TodoItemStatus.Pending, Order = 2 }
+                    }
+                };
+
+                var driftedBoard = await store.GetBoardAsync("doc1", CancellationToken.None);
+                driftedBoard.InFlightWriteStepId = "step-1";
+                driftedBoard.InFlightWriteStepSummary = "修改第二步";
+                driftedBoard.InFlightTodoBoardSnapshotJson = manager.SerializeBoard(staleSnapshotBoard);
+                driftedBoard.Items[0].Status = TodoItemStatus.Pending;
+                driftedBoard.Items[1].Status = TodoItemStatus.Pending;
+                await store.SaveBoardAsync(driftedBoard, CancellationToken.None);
+
+                var restoredBoard = await manager.RollbackCurrentWriteStepAsync(
+                    "doc1",
+                    "验证失败。",
+                    CancellationToken.None);
+
+                Assert.Equal(TodoItemStatus.Completed, restoredBoard.Items[0].Status);
+                Assert.Equal(TodoItemStatus.InProgress, restoredBoard.Items[1].Status);
+                Assert.False(string.IsNullOrWhiteSpace(restoredBoard.LastCommittedBoardSnapshotJson));
+            }
+            finally
+            {
+                if (Directory.Exists(tempDirectory))
+                {
+                    Directory.Delete(tempDirectory, true);
+                }
+            }
+        }
+
+        [Fact]
         public async Task ResolveRecoveryAsync_RecoverExisting_WithInFlightSnapshot_RestoresTrustedSnapshot()
         {
             var tempDirectory = Path.Combine(Path.GetTempPath(), "smartword-todo-tests", Guid.NewGuid().ToString("N"));

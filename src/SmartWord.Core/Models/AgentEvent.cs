@@ -110,5 +110,8 @@ namespace SmartWord.Core.Models
 
         /// <summary>当前恢复事件是否允许直接恢复旧任务板</summary>
         public bool CanRecoverExisting { get; set; } = true;
+
+        /// <summary>Todo 事件的更新语义，用于区分普通同步、回滚恢复、暂停快照等场景。</summary>
+        public string TodoBoardUpdateKind { get; set; } = string.Empty;
     }
 }

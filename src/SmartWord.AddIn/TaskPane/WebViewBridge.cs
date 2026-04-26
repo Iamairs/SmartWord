@@ -580,7 +580,8 @@ namespace SmartWord.AddIn.TaskPane
                 lastRunOutcome = agentEvent.LastRunOutcome,
                 lastErrorSummary = agentEvent.LastErrorSummary,
                 hasActivePlan = agentEvent.HasActivePlan,
-                canRecoverExisting = agentEvent.CanRecoverExisting
+                canRecoverExisting = agentEvent.CanRecoverExisting,
+                todoBoardUpdateKind = agentEvent.TodoBoardUpdateKind
             };
         }
 

@@ -53,7 +53,7 @@ namespace SmartWord.Core.Models
     /// </summary>
     public sealed class TodoBoard
     {
-        public const int CurrentSchemaVersion = 3;
+        public const int CurrentSchemaVersion = 4;
 
         public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
@@ -100,6 +100,12 @@ namespace SmartWord.Core.Models
         public DateTime? LastTrustedCheckpointAtUtc { get; set; }
 
         public string LastTrustedCheckpointSummary { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 最近一次可信提交后的 Todo Board 快照。
+        /// 该快照不包含运行中的临时写步骤信息，用于回滚、暂停与恢复时还原稳定进度。
+        /// </summary>
+        public string LastCommittedBoardSnapshotJson { get; set; } = string.Empty;
 
         public string InFlightWriteStepId { get; set; } = string.Empty;
 
@@ -244,5 +250,20 @@ namespace SmartWord.Core.Models
         public string ActivePlanFingerprint { get; set; } = string.Empty;
 
         public bool CanRecoverExisting { get; set; } = true;
+    }
+
+    /// <summary>
+    /// 表示一次 Todo Board 推送事件的更新语义。
+    /// </summary>
+    public enum TodoBoardUpdateKind
+    {
+        Unknown = 0,
+        Ready = 1,
+        ToolReadSync = 2,
+        ToolWriteSync = 3,
+        RollbackRestored = 4,
+        Reminder = 5,
+        PausedSnapshot = 6,
+        RecoverySnapshot = 7
     }
 }

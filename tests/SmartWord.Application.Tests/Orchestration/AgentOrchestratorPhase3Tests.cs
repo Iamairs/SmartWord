@@ -1022,6 +1022,9 @@ namespace SmartWord.Application.Tests.Orchestration
             Assert.Equal("patch_range", verificationFailed.ToolName);
             Assert.Equal("已修改第 1 段。", verificationFailed.OperationDescription);
             Assert.Equal(new[] { 1 }, verificationFailed.AffectedParagraphs);
+            Assert.Contains(events, item =>
+                item.Type == AgentEventType.TodoBoardUpdated
+                && string.Equals(item.TodoBoardUpdateKind, "rollback_restored", StringComparison.OrdinalIgnoreCase));
             Assert.DoesNotContain(events, item => item.Type == AgentEventType.ChangeApplied);
             Assert.Contains(events, item => item.Type == AgentEventType.TodoBoardPaused && item.Message.Contains("暂停"));
             Assert.DoesNotContain(events, item => item.Type == AgentEventType.TaskCompleted);
@@ -1147,6 +1150,7 @@ namespace SmartWord.Application.Tests.Orchestration
 
             var persistedBoard = todoStore.PeekBoard("doc1");
             Assert.NotNull(persistedBoard);
+            Assert.False(string.IsNullOrWhiteSpace(persistedBoard.LastCommittedBoardSnapshotJson));
             Assert.True(string.IsNullOrWhiteSpace(persistedBoard.InFlightWriteStepId));
             Assert.True(string.IsNullOrWhiteSpace(persistedBoard.InFlightTodoBoardSnapshotJson));
         }

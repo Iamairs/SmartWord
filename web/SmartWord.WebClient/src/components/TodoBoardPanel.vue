@@ -10,6 +10,13 @@
       </p>
     </div>
 
+    <div v-if="noticeMessage" class="todo-board-panel__notice" :class="noticeClassName">
+      <p class="todo-board-panel__notice-text">{{ noticeMessage }}</p>
+      <p v-if="checkpointText" class="todo-board-panel__notice-meta">
+        最近可信检查点：{{ checkpointText }}
+      </p>
+    </div>
+
     <ul class="todo-board-panel__list">
       <li
         v-for="item in orderedItems"
@@ -38,6 +45,10 @@ const props = defineProps({
   currentTodoId: {
     type: String,
     default: ''
+  },
+  notice: {
+    type: Object,
+    default: null
   }
 });
 
@@ -65,6 +76,21 @@ const statsText = computed(() => {
   });
 
   return `共 ${items.length} 项 · 进行中 ${statusCount.in_progress} · 已完成 ${statusCount.completed} · 失败 ${statusCount.failed}`;
+});
+
+const noticeMessage = computed(() => {
+  return typeof props.notice?.message === 'string' ? props.notice.message.trim() : '';
+});
+
+const checkpointText = computed(() => {
+  return typeof props.notice?.checkpointSummary === 'string'
+    ? props.notice.checkpointSummary.trim()
+    : '';
+});
+
+const noticeClassName = computed(() => {
+  const kind = typeof props.notice?.kind === 'string' ? props.notice.kind.trim().toLowerCase() : '';
+  return kind ? `todo-board-panel__notice--${kind}` : '';
 });
 
 function normalizeStatus(status) {
@@ -158,6 +184,37 @@ function isActive(item) {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+.todo-board-panel__notice {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(191, 87, 0, 0.18);
+  background: linear-gradient(180deg, rgba(255, 247, 237, 0.94) 0%, rgba(255, 255, 255, 0.92) 100%);
+}
+
+.todo-board-panel__notice--reminder {
+  border-color: rgba(30, 102, 195, 0.16);
+  background: linear-gradient(180deg, rgba(237, 245, 255, 0.95) 0%, rgba(255, 255, 255, 0.92) 100%);
+}
+
+.todo-board-panel__notice-text,
+.todo-board-panel__notice-meta {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #6d4b2d;
+}
+
+.todo-board-panel__notice--reminder .todo-board-panel__notice-text,
+.todo-board-panel__notice--reminder .todo-board-panel__notice-meta {
+  color: #244464;
+}
+
+.todo-board-panel__notice-meta {
+  margin-top: 4px;
+  color: #7f5a35;
 }
 
 .todo-board-panel__item {

@@ -16,6 +16,35 @@ function cloneParagraphs(affectedParagraphs) {
   return Array.isArray(affectedParagraphs) ? [...affectedParagraphs] : [];
 }
 
+function normalizeTodoBoardUpdateKind(kind) {
+  return typeof kind === 'string' ? kind.trim().toLowerCase() : 'unknown';
+}
+
+function createTodoBoardNotice(updateKind, message, board) {
+  const normalizedKind = normalizeTodoBoardUpdateKind(updateKind);
+  const safeMessage = (message || '').trim();
+  const checkpointSummary = (board?.lastTrustedCheckpointSummary || '').trim();
+
+  switch (normalizedKind) {
+    case 'rollback_restored':
+      return {
+        kind: normalizedKind,
+        message: safeMessage || '当前写步骤已回退，任务板已恢复到最近可信检查点。',
+        checkpointSummary
+      };
+    case 'reminder':
+      return safeMessage
+        ? {
+            kind: normalizedKind,
+            message: safeMessage,
+            checkpointSummary
+          }
+        : null;
+    default:
+      return null;
+  }
+}
+
 function createChangeRecord(change) {
   return {
     id: change.toolCallId || `${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -39,6 +68,7 @@ export const useChatStore = defineStore('chat', {
     activePlan: null,
     lastApprovedPlan: null,
     activeTodoBoard: null,
+    todoBoardNotice: null,
     pendingTodoRecovery: null,
     pendingTodoPause: null,
     currentTodoId: '',
@@ -200,7 +230,7 @@ export const useChatStore = defineStore('chat', {
         this.activePlan = typeof planJson === 'string' ? JSON.parse(planJson) : planJson;
       } catch { /* 忽略解析失败 */ }
     },
-    setTodoBoard(boardJson, currentTodoId = '') {
+    setTodoBoard(boardJson, currentTodoId = '', updateKind = 'unknown', message = '') {
       try {
         this.activeTodoBoard = typeof boardJson === 'string' ? JSON.parse(boardJson) : boardJson;
         this.currentTodoId =
@@ -210,11 +240,13 @@ export const useChatStore = defineStore('chat', {
             return status === 'inprogress' || status === 'in_progress' || status === 1;
           })?.id ||
           '';
+        this.todoBoardNotice = createTodoBoardNotice(updateKind, message, this.activeTodoBoard);
         this.todoBoardVisible = true;
         this.pendingTodoRecovery = null;
         this.pendingTodoPause = null;
       } catch {
         this.activeTodoBoard = null;
+        this.todoBoardNotice = null;
         this.currentTodoId = '';
         this.todoBoardVisible = false;
       }
@@ -242,6 +274,7 @@ export const useChatStore = defineStore('chat', {
         isSubmitting: false
       };
       this.activeTodoBoard = null;
+      this.todoBoardNotice = null;
       this.currentTodoId = '';
       this.todoBoardVisible = false;
       this.pendingTodoPause = null;
@@ -282,6 +315,7 @@ export const useChatStore = defineStore('chat', {
       };
       this.pendingTodoRecovery = null;
       this.activeTodoBoard = null;
+      this.todoBoardNotice = null;
       this.currentTodoId = '';
       this.todoBoardVisible = false;
     },
@@ -304,6 +338,7 @@ export const useChatStore = defineStore('chat', {
     },
     clearTodoBoard() {
       this.activeTodoBoard = null;
+      this.todoBoardNotice = null;
       this.currentTodoId = '';
       this.todoBoardVisible = false;
     },
@@ -318,6 +353,7 @@ export const useChatStore = defineStore('chat', {
       this.currentTaskChanges = [];
       this.completedTaskChanges = [];
       this.activeTodoBoard = null;
+      this.todoBoardNotice = null;
       this.currentTodoId = '';
       this.todoBoardVisible = false;
     },

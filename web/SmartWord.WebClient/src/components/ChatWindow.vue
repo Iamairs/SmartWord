@@ -128,6 +128,7 @@
         v-if="chatStore.todoBoardVisible && chatStore.currentMode === 'agent' && chatStore.activeTodoBoard"
         :board="chatStore.activeTodoBoard"
         :current-todo-id="chatStore.currentTodoId"
+        :notice="chatStore.todoBoardNotice"
       />
 
       <article
@@ -546,10 +547,20 @@ function handleAgentEvent(event) {
     case 'todo_board_ready':
       chatStore.clearPendingTodoRecovery();
       chatStore.clearPendingTodoPause();
-      chatStore.setTodoBoard(event.boardJson, event.currentTodoId || '');
+      chatStore.setTodoBoard(
+        event.boardJson,
+        event.currentTodoId || '',
+        event.todoBoardUpdateKind || 'ready',
+        event.message || ''
+      );
       break;
     case 'todo_board_updated':
-      chatStore.setTodoBoard(event.boardJson, event.currentTodoId || '');
+      chatStore.setTodoBoard(
+        event.boardJson,
+        event.currentTodoId || '',
+        event.todoBoardUpdateKind || 'unknown',
+        event.message || ''
+      );
       break;
     case 'max_iterations_reached':
       chatStore.finishLoading();
@@ -558,7 +569,12 @@ function handleAgentEvent(event) {
       }
       break;
     case 'todo_reminder_injected':
-      chatStore.setTodoBoard(event.boardJson, event.currentTodoId || '');
+      chatStore.setTodoBoard(
+        event.boardJson,
+        event.currentTodoId || '',
+        event.todoBoardUpdateKind || 'reminder',
+        event.message || ''
+      );
       if (event.message) {
         chatStore.appendAssistantMessage(event.message);
       }

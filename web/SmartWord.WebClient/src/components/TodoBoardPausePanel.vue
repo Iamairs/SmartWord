@@ -17,7 +17,7 @@
     </p>
 
     <div v-if="orderedItems.length" class="todo-pause-panel__snapshot">
-      <p class="todo-pause-panel__snapshot-title">当前任务板快照</p>
+      <p class="todo-pause-panel__snapshot-title">最近可信任务板快照</p>
       <ul class="todo-pause-panel__list">
         <li
           v-for="item in orderedItems"

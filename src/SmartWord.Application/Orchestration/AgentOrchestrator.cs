@@ -935,6 +935,9 @@ namespace SmartWord.Application.Orchestration
                     yield return CreateTodoBoardEvent(
                         AgentEventType.TodoBoardUpdated,
                         todoToolMetadata,
+                        todoToolMetadata.IsWriteOperation
+                            ? TodoBoardUpdateKind.ToolWriteSync
+                            : TodoBoardUpdateKind.ToolReadSync,
                         todoToolMetadata.IsWriteOperation ? "Todo Board 已更新。" : "Todo Board 已同步。");
                 }
 
@@ -989,6 +992,7 @@ namespace SmartWord.Application.Orchestration
                                     AgentEventType.TodoBoardUpdated,
                                     currentTodoBoard,
                                     _todoManager,
+                                    TodoBoardUpdateKind.RollbackRestored,
                                     "当前写步骤已回退，Todo Board 已恢复到最近可信检查点。");
                             }
 
@@ -1099,6 +1103,7 @@ namespace SmartWord.Application.Orchestration
                                 AgentEventType.TodoBoardUpdated,
                                 currentTodoBoard,
                                 _todoManager,
+                                TodoBoardUpdateKind.RollbackRestored,
                                 "当前写步骤已回退，Todo Board 已恢复到最近可信检查点。");
                         }
 
@@ -1245,7 +1250,8 @@ namespace SmartWord.Application.Orchestration
                         BoardJson = _todoManager.SerializeBoard(currentTodoBoard),
                         CurrentTodoId = reminderStats.CurrentTodoId,
                         CompletedSteps = reminderStats.HandledCount,
-                        TotalSteps = reminderStats.TotalCount
+                        TotalSteps = reminderStats.TotalCount,
+                        TodoBoardUpdateKind = ToTodoBoardUpdateKindValue(TodoBoardUpdateKind.Reminder)
                     };
                 }
 
@@ -1275,7 +1281,8 @@ namespace SmartWord.Application.Orchestration
                     BoardJson = _todoManager.SerializeBoard(currentTodoBoard),
                     CurrentTodoId = reminderStats.CurrentTodoId,
                     CompletedSteps = reminderStats.HandledCount,
-                    TotalSteps = reminderStats.TotalCount
+                    TotalSteps = reminderStats.TotalCount,
+                    TodoBoardUpdateKind = ToTodoBoardUpdateKindValue(TodoBoardUpdateKind.Reminder)
                 };
             }
         }
@@ -1531,6 +1538,7 @@ namespace SmartWord.Application.Orchestration
         private static AgentEvent CreateTodoBoardEvent(
             AgentEventType eventType,
             TodoToolMetadata metadata,
+            TodoBoardUpdateKind updateKind,
             string message)
         {
             return new AgentEvent
@@ -1540,7 +1548,8 @@ namespace SmartWord.Application.Orchestration
                 BoardJson = metadata == null ? string.Empty : metadata.BoardJson ?? string.Empty,
                 CurrentTodoId = metadata == null ? string.Empty : metadata.CurrentTodoId ?? string.Empty,
                 CompletedSteps = metadata == null ? 0 : metadata.CompletedSteps,
-                TotalSteps = metadata == null ? 0 : metadata.TotalSteps
+                TotalSteps = metadata == null ? 0 : metadata.TotalSteps,
+                TodoBoardUpdateKind = ToTodoBoardUpdateKindValue(updateKind)
             };
         }
 
@@ -1554,7 +1563,8 @@ namespace SmartWord.Application.Orchestration
                 BoardJson = todoManager == null ? string.Empty : todoManager.SerializeBoard(board),
                 CurrentTodoId = stats.CurrentTodoId,
                 CompletedSteps = stats.HandledCount,
-                TotalSteps = stats.TotalCount
+                TotalSteps = stats.TotalCount,
+                TodoBoardUpdateKind = ToTodoBoardUpdateKindValue(TodoBoardUpdateKind.Ready)
             };
         }
 
@@ -1562,6 +1572,7 @@ namespace SmartWord.Application.Orchestration
             AgentEventType eventType,
             TodoBoard board,
             TodoManager todoManager,
+            TodoBoardUpdateKind updateKind,
             string message)
         {
             var stats = todoManager == null ? new TodoBoardStats() : todoManager.BuildStats(board);
@@ -1572,7 +1583,8 @@ namespace SmartWord.Application.Orchestration
                 BoardJson = board == null || todoManager == null ? string.Empty : todoManager.SerializeBoard(board),
                 CurrentTodoId = stats.CurrentTodoId,
                 CompletedSteps = stats.HandledCount,
-                TotalSteps = stats.TotalCount
+                TotalSteps = stats.TotalCount,
+                TodoBoardUpdateKind = ToTodoBoardUpdateKindValue(updateKind)
             };
         }
 
@@ -1595,7 +1607,8 @@ namespace SmartWord.Application.Orchestration
                 LastRunOutcome = prepareResult == null ? string.Empty : prepareResult.LastRunOutcome.ToString(),
                 LastErrorSummary = prepareResult == null ? string.Empty : prepareResult.LastErrorSummary,
                 HasActivePlan = prepareResult != null && prepareResult.HasActivePlan,
-                CanRecoverExisting = prepareResult == null || prepareResult.CanRecoverExisting
+                CanRecoverExisting = prepareResult == null || prepareResult.CanRecoverExisting,
+                TodoBoardUpdateKind = ToTodoBoardUpdateKindValue(TodoBoardUpdateKind.RecoverySnapshot)
             };
         }
 
@@ -1622,7 +1635,8 @@ namespace SmartWord.Application.Orchestration
                 LastRunOutcome = prepareResult == null ? string.Empty : prepareResult.LastRunOutcome.ToString(),
                 LastErrorSummary = prepareResult == null ? string.Empty : prepareResult.LastErrorSummary,
                 HasActivePlan = prepareResult != null && prepareResult.HasActivePlan,
-                CanRecoverExisting = prepareResult == null || prepareResult.CanRecoverExisting
+                CanRecoverExisting = prepareResult == null || prepareResult.CanRecoverExisting,
+                TodoBoardUpdateKind = ToTodoBoardUpdateKindValue(TodoBoardUpdateKind.PausedSnapshot)
             };
         }
 
@@ -1641,8 +1655,33 @@ namespace SmartWord.Application.Orchestration
                 CompletedSteps = stats.HandledCount,
                 TotalSteps = stats.TotalCount,
                 LastRunOutcome = board == null ? string.Empty : board.LastRunOutcome.ToString(),
-                LastErrorSummary = board == null ? string.Empty : board.LastErrorSummary
+                LastErrorSummary = board == null ? string.Empty : board.LastErrorSummary,
+                TodoBoardUpdateKind = ToTodoBoardUpdateKindValue(TodoBoardUpdateKind.PausedSnapshot)
             };
+        }
+
+        private static string ToTodoBoardUpdateKindValue(TodoBoardUpdateKind updateKind)
+        {
+            switch (updateKind)
+            {
+                case TodoBoardUpdateKind.Ready:
+                    return "ready";
+                case TodoBoardUpdateKind.ToolReadSync:
+                    return "tool_read_sync";
+                case TodoBoardUpdateKind.ToolWriteSync:
+                    return "tool_write_sync";
+                case TodoBoardUpdateKind.RollbackRestored:
+                    return "rollback_restored";
+                case TodoBoardUpdateKind.Reminder:
+                    return "reminder";
+                case TodoBoardUpdateKind.PausedSnapshot:
+                    return "paused_snapshot";
+                case TodoBoardUpdateKind.RecoverySnapshot:
+                    return "recovery_snapshot";
+                case TodoBoardUpdateKind.Unknown:
+                default:
+                    return "unknown";
+            }
         }
 
         private static AgentEvent CreateMaxIterationsReachedEvent(

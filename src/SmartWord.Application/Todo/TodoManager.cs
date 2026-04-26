@@ -83,14 +83,16 @@ namespace SmartWord.Application.Todo
                 board.SourcePlanFingerprint = string.IsNullOrWhiteSpace(planFingerprint)
                     ? board.SourcePlanFingerprint
                     : planFingerprint;
+                RefreshCommittedBoardSnapshot(board);
                 await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
                 return CreateReadyPreparationResult(board, activePlan, planFingerprint);
             }
 
             NormalizeBoard(board);
+            EnsureCommittedBoardSnapshotInitialized(board);
             if (HasInFlightWriteStep(board))
             {
-                board = RestoreTrustedBoardFromInFlightSnapshot(board) ?? board;
+                board = RestoreBestTrustedBoardSnapshot(board) ?? board;
                 await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
             }
 
@@ -150,6 +152,7 @@ namespace SmartWord.Application.Todo
             {
                 var rebuiltBoard = CreateBoardFromExecutionPlan(normalizedDocumentPath, activePlan);
                 rebuiltBoard.SourcePlanFingerprint = planFingerprint;
+                RefreshCommittedBoardSnapshot(rebuiltBoard);
                 await _todoStore.SaveBoardAsync(rebuiltBoard, cancellationToken).ConfigureAwait(false);
                 return CreateReadyPreparationResult(rebuiltBoard, activePlan, planFingerprint);
             }
@@ -165,6 +168,7 @@ namespace SmartWord.Application.Todo
         {
             var board = await EnsureBoardAsync(documentPath, cancellationToken).ConfigureAwait(false);
             board.SchemaVersion = TodoBoard.CurrentSchemaVersion;
+            EnsureCommittedBoardSnapshotInitialized(board);
             board.ExecutionState = TodoBoardExecutionState.Running;
             board.LastRunId = string.IsNullOrWhiteSpace(runId) ? Guid.NewGuid().ToString("N") : runId.Trim();
             board.LastRunStartedAtUtc = DateTime.UtcNow;
@@ -225,9 +229,10 @@ namespace SmartWord.Application.Todo
 
             board = board ?? CreateEmptyBoard(normalizedDocumentPath);
             NormalizeBoard(board);
+            EnsureCommittedBoardSnapshotInitialized(board);
             if (HasInFlightWriteStep(board))
             {
-                board = RestoreTrustedBoardFromInFlightSnapshot(board) ?? board;
+                board = RestoreBestTrustedBoardSnapshot(board) ?? board;
             }
 
             MarkBoardPaused(board, outcome, reason);
@@ -261,9 +266,10 @@ namespace SmartWord.Application.Todo
 
             board = board ?? CreateEmptyBoard(normalizedDocumentPath);
             NormalizeBoard(board);
+            EnsureCommittedBoardSnapshotInitialized(board);
             if (HasInFlightWriteStep(board))
             {
-                board = RestoreTrustedBoardFromInFlightSnapshot(board) ?? board;
+                board = RestoreBestTrustedBoardSnapshot(board) ?? board;
             }
 
             MarkBoardRecoveryRequired(
@@ -283,11 +289,14 @@ namespace SmartWord.Application.Todo
         {
             var board = await EnsureBoardAsync(documentPath, cancellationToken).ConfigureAwait(false);
             NormalizeBoard(board);
+            EnsureCommittedBoardSnapshotInitialized(board);
 
             // 当前写步骤开始前，先固化可信快照，保证失败回退时 Todo 能与文档一起恢复。
             board.InFlightWriteStepId = string.IsNullOrWhiteSpace(stepId) ? Guid.NewGuid().ToString("N") : stepId.Trim();
             board.InFlightWriteStepSummary = string.IsNullOrWhiteSpace(stepSummary) ? "当前写步骤" : stepSummary.Trim();
-            board.InFlightTodoBoardSnapshotJson = CreateTrustedBoardSnapshotJson(board);
+            board.InFlightTodoBoardSnapshotJson = string.IsNullOrWhiteSpace(board.LastCommittedBoardSnapshotJson)
+                ? CreateTrustedBoardSnapshotJson(board)
+                : board.LastCommittedBoardSnapshotJson;
             board.InFlightStartedAtUtc = DateTime.UtcNow;
             board.UpdatedAt = DateTime.UtcNow;
 
@@ -302,11 +311,13 @@ namespace SmartWord.Application.Todo
         {
             var board = await EnsureBoardAsync(documentPath, cancellationToken).ConfigureAwait(false);
             NormalizeBoard(board);
+            EnsureCommittedBoardSnapshotInitialized(board);
             board.LastTrustedCheckpointAtUtc = DateTime.UtcNow;
             board.LastTrustedCheckpointSummary = string.IsNullOrWhiteSpace(stepSummary)
                 ? "当前写步骤已提交并通过验证。"
                 : stepSummary.Trim();
             ClearInFlightWriteStep(board);
+            RefreshCommittedBoardSnapshot(board);
             board.UpdatedAt = DateTime.UtcNow;
 
             await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
@@ -320,7 +331,8 @@ namespace SmartWord.Application.Todo
         {
             var board = await EnsureBoardAsync(documentPath, cancellationToken).ConfigureAwait(false);
             NormalizeBoard(board);
-            var restoredBoard = RestoreTrustedBoardFromInFlightSnapshot(board) ?? board;
+            EnsureCommittedBoardSnapshotInitialized(board);
+            var restoredBoard = RestoreBestTrustedBoardSnapshot(board) ?? board;
             if (!string.IsNullOrWhiteSpace(reason))
             {
                 restoredBoard.LastErrorSummary = reason.Trim();
@@ -336,6 +348,7 @@ namespace SmartWord.Application.Todo
                 restoredBoard.LastTrustedCheckpointSummary = "已恢复到当前写步骤开始前的可信任务板快照。";
             }
 
+            RefreshCommittedBoardSnapshot(restoredBoard);
             restoredBoard.UpdatedAt = DateTime.UtcNow;
             await _todoStore.SaveBoardAsync(restoredBoard, cancellationToken).ConfigureAwait(false);
             return restoredBoard;
@@ -362,7 +375,7 @@ namespace SmartWord.Application.Todo
 
                     if (HasInFlightWriteStep(board))
                     {
-                        board = RestoreTrustedBoardFromInFlightSnapshot(board) ?? board;
+                        board = RestoreBestTrustedBoardSnapshot(board) ?? board;
                     }
 
                     board.ExecutionState = TodoBoardExecutionState.Idle;
@@ -387,6 +400,7 @@ namespace SmartWord.Application.Todo
 
                     var board = CreateBoardFromExecutionPlan(normalizedDocumentPath, activePlan);
                     board.SourcePlanFingerprint = activePlanFingerprint;
+                    RefreshCommittedBoardSnapshot(board);
                     await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
                     return board;
                 }
@@ -395,6 +409,7 @@ namespace SmartWord.Application.Todo
                     await _todoStore.DeleteBoardAsync(normalizedDocumentPath, cancellationToken).ConfigureAwait(false);
                     var board = CreateEmptyBoard(normalizedDocumentPath);
                     board.SourcePlanFingerprint = activePlanFingerprint;
+                    RefreshCommittedBoardSnapshot(board);
                     await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
                     return board;
                 }
@@ -418,6 +433,7 @@ namespace SmartWord.Application.Todo
             }
 
             var created = CreateEmptyBoard(normalizedDocumentPath);
+            RefreshCommittedBoardSnapshot(created);
             await _todoStore.SaveBoardAsync(created, cancellationToken).ConfigureAwait(false);
             return created;
         }
@@ -430,6 +446,7 @@ namespace SmartWord.Application.Todo
             if (board != null)
             {
                 NormalizeBoard(board);
+                EnsureCommittedBoardSnapshotInitialized(board);
             }
 
             return board;
@@ -446,6 +463,7 @@ namespace SmartWord.Application.Todo
             }
 
             var board = CreateBoardFromExecutionPlan(documentPath, plan);
+            RefreshCommittedBoardSnapshot(board);
             await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
             return CreateResult(board, "replace_board", "已根据当前执行计划初始化 Todo Board。", string.Empty);
         }
@@ -506,6 +524,7 @@ namespace SmartWord.Application.Todo
             ValidateBoard(board.Items);
             EnsureSingleActiveItem(board.Items, action == "replace_board");
             StampBoard(board);
+            RefreshCommittedBoardSnapshot(board);
             await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
             return CreateResult(board, action, message, updatedItemId);
         }
@@ -1075,6 +1094,7 @@ namespace SmartWord.Application.Todo
             board.PauseReason = board.PauseReason ?? string.Empty;
             board.SourcePlanFingerprint = board.SourcePlanFingerprint ?? string.Empty;
             board.LastTrustedCheckpointSummary = board.LastTrustedCheckpointSummary ?? string.Empty;
+            board.LastCommittedBoardSnapshotJson = board.LastCommittedBoardSnapshotJson ?? string.Empty;
             board.InFlightWriteStepId = board.InFlightWriteStepId ?? string.Empty;
             board.InFlightWriteStepSummary = board.InFlightWriteStepSummary ?? string.Empty;
             board.InFlightTodoBoardSnapshotJson = board.InFlightTodoBoardSnapshotJson ?? string.Empty;
@@ -1260,6 +1280,12 @@ namespace SmartWord.Application.Todo
                 && !string.IsNullOrWhiteSpace(board.InFlightTodoBoardSnapshotJson);
         }
 
+        private static bool HasCommittedBoardSnapshot(TodoBoard board)
+        {
+            return board != null
+                && !string.IsNullOrWhiteSpace(board.LastCommittedBoardSnapshotJson);
+        }
+
         private static void ClearInFlightWriteStep(TodoBoard board)
         {
             if (board == null)
@@ -1277,7 +1303,63 @@ namespace SmartWord.Application.Todo
         {
             var snapshot = CloneBoard(board);
             ClearInFlightWriteStep(snapshot);
+            snapshot.LastCommittedBoardSnapshotJson = string.Empty;
+            snapshot.LastTrustedCheckpointAtUtc = null;
+            snapshot.LastTrustedCheckpointSummary = string.Empty;
             return SerializeBoard(snapshot);
+        }
+
+        private string CreateCommittedBoardSnapshotJson(TodoBoard board)
+        {
+            var snapshot = CloneBoard(board);
+            ClearInFlightWriteStep(snapshot);
+            snapshot.LastCommittedBoardSnapshotJson = string.Empty;
+            return SerializeBoard(snapshot);
+        }
+
+        private void RefreshCommittedBoardSnapshot(TodoBoard board)
+        {
+            if (board == null)
+            {
+                return;
+            }
+
+            board.LastCommittedBoardSnapshotJson = CreateCommittedBoardSnapshotJson(board);
+            board.LastTrustedCheckpointAtUtc = DateTime.UtcNow;
+
+            if (string.IsNullOrWhiteSpace(board.LastTrustedCheckpointSummary))
+            {
+                board.LastTrustedCheckpointSummary = "当前任务板已保存为可信检查点。";
+            }
+        }
+
+        private void EnsureCommittedBoardSnapshotInitialized(TodoBoard board)
+        {
+            if (board == null || HasCommittedBoardSnapshot(board))
+            {
+                return;
+            }
+
+            RefreshCommittedBoardSnapshot(board);
+        }
+
+        private TodoBoard RestoreBestTrustedBoardSnapshot(TodoBoard board)
+        {
+            if (board == null)
+            {
+                return null;
+            }
+
+            if (HasCommittedBoardSnapshot(board))
+            {
+                var restoredCommittedBoard = RestoreBoardFromSnapshotJson(board.LastCommittedBoardSnapshotJson, board);
+                if (restoredCommittedBoard != null)
+                {
+                    return restoredCommittedBoard;
+                }
+            }
+
+            return RestoreTrustedBoardFromInFlightSnapshot(board);
         }
 
         private TodoBoard RestoreTrustedBoardFromInFlightSnapshot(TodoBoard board)
@@ -1287,10 +1369,20 @@ namespace SmartWord.Application.Todo
                 return board;
             }
 
+            return RestoreBoardFromSnapshotJson(board.InFlightTodoBoardSnapshotJson, board);
+        }
+
+        private TodoBoard RestoreBoardFromSnapshotJson(string snapshotJson, TodoBoard board)
+        {
+            if (string.IsNullOrWhiteSpace(snapshotJson) || board == null)
+            {
+                return board;
+            }
+
             try
             {
                 var restoredBoard = JsonConvert.DeserializeObject<TodoBoard>(
-                    board.InFlightTodoBoardSnapshotJson,
+                    snapshotJson,
                     BoardJsonSettings);
                 if (restoredBoard == null)
                 {
@@ -1302,6 +1394,13 @@ namespace SmartWord.Application.Todo
                 restoredBoard.BoardId = string.IsNullOrWhiteSpace(restoredBoard.BoardId) ? board.BoardId : restoredBoard.BoardId;
                 restoredBoard.DocumentPath = NormalizeDocumentPath(board.DocumentPath);
                 restoredBoard.Version = Math.Max(restoredBoard.Version, board.Version);
+                restoredBoard.RoundsSinceLastTodoUpdate = board.RoundsSinceLastTodoUpdate;
+                restoredBoard.LastReminderRound = board.LastReminderRound;
+                restoredBoard.RoundsSinceLastReminder = board.RoundsSinceLastReminder;
+                restoredBoard.ReminderCount = board.ReminderCount;
+                restoredBoard.HasPendingWriteWithoutTodoWrite = board.HasPendingWriteWithoutTodoWrite;
+                restoredBoard.RoundsSincePendingWriteWithoutTodoWrite = board.RoundsSincePendingWriteWithoutTodoWrite;
+                restoredBoard.HasInjectedPendingWriteReminder = board.HasInjectedPendingWriteReminder;
                 restoredBoard.ExecutionState = board.ExecutionState;
                 restoredBoard.LastRunId = board.LastRunId;
                 restoredBoard.LastRunStartedAtUtc = board.LastRunStartedAtUtc;
@@ -1313,6 +1412,9 @@ namespace SmartWord.Application.Todo
                 restoredBoard.SourcePlanFingerprint = string.IsNullOrWhiteSpace(board.SourcePlanFingerprint)
                     ? restoredBoard.SourcePlanFingerprint
                     : board.SourcePlanFingerprint;
+                restoredBoard.LastCommittedBoardSnapshotJson = string.IsNullOrWhiteSpace(board.LastCommittedBoardSnapshotJson)
+                    ? CreateCommittedBoardSnapshotJson(restoredBoard)
+                    : board.LastCommittedBoardSnapshotJson;
                 restoredBoard.LastTrustedCheckpointAtUtc = board.LastTrustedCheckpointAtUtc ?? DateTime.UtcNow;
                 restoredBoard.LastTrustedCheckpointSummary = string.IsNullOrWhiteSpace(board.LastTrustedCheckpointSummary)
                     ? "已恢复到当前写步骤开始前的可信任务板快照。"
