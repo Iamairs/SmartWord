@@ -15,6 +15,7 @@
     </header>
 
     <SettingsPanel v-if="settingsStore.isPanelOpen" />
+    <QuickActionsPanel v-if="!chatStore.isLoading" @select="submitQuickAction" />
 
     <section class="message-list" ref="messageListRef" @click="handleMessageListClick">
       <ThoughtActionTrace :tool-calls="chatStore.activeToolCalls" />
@@ -117,22 +118,26 @@
 
     <form class="composer" @submit.prevent="submitMessage">
       <label class="composer-label" for="chat-input">输入自然语言指令</label>
-      <div class="mode-selector">
-        <p class="mode-selector__label">运行模式</p>
-        <div class="mode-selector__options">
-          <button
-            v-for="option in modeOptions"
-            :key="option.value"
-            class="mode-option"
-            :class="{ 'mode-option--active': chatStore.currentMode === option.value }"
-            type="button"
-            :disabled="chatStore.isLoading"
-            @click="chatStore.setMode(option.value)"
-          >
-            {{ option.label }}
-          </button>
+      <details class="advanced-options">
+        <summary>高级执行选项</summary>
+        <div class="mode-selector">
+          <p class="mode-selector__label">运行模式</p>
+          <div class="mode-selector__options">
+            <button
+              v-for="option in modeOptions"
+              :key="option.value"
+              class="mode-option"
+              :class="{ 'mode-option--active': chatStore.currentMode === option.value }"
+              type="button"
+              :disabled="chatStore.isLoading"
+              @click="chatStore.setMode(option.value)"
+            >
+              {{ option.label }}
+            </button>
+          </div>
         </div>
-      </div>
+        <p class="environment-hint environment-hint--wide">{{ environmentHint }}</p>
+      </details>
       <textarea
         id="chat-input"
         v-model.trim="draft"
@@ -143,7 +148,7 @@
         :placeholder="composerPlaceholder"
       ></textarea>
       <div class="composer-footer">
-        <p class="environment-hint">{{ environmentHint }}</p>
+        <p class="environment-hint">{{ composerHint }}</p>
         <button
           v-if="chatStore.isLoading"
           class="ghost-button composer-cancel-button"
@@ -169,6 +174,7 @@ import { useSettingsStore } from '../stores/settings';
 import { hostBridge } from '../bridge/hostBridge';
 import ChangesSummaryPanel from './ChangesSummaryPanel.vue';
 import ContentPreviewPanel from './ContentPreviewPanel.vue';
+import QuickActionsPanel from './QuickActionsPanel.vue';
 import SettingsPanel from './SettingsPanel.vue';
 import ThoughtActionTrace from './ThoughtActionTrace.vue';
 import TodoBoardPanel from './TodoBoardPanel.vue';
@@ -246,6 +252,12 @@ const environmentHint = computed(() => {
     : '当前为浏览器预览模式，设置会暂存到本地 localStorage。';
 });
 
+const composerHint = computed(() => {
+  return chatStore.currentMode === 'agent'
+    ? '写入会按权限设置确认。'
+    : '默认先读取证据再回答。';
+});
+
 const isSubmitDisabled = computed(() => {
   return chatStore.isLoading || draft.value.length === 0 || settingsStore.isLoading;
 });
@@ -273,15 +285,30 @@ async function submitMessage() {
     return;
   }
 
+  await sendMessage(draft.value, chatStore.currentMode);
+}
+
+async function submitQuickAction(action) {
+  if (!action || chatStore.isLoading) {
+    return;
+  }
+
+  await sendMessage(action.content, action.manualMode || 'ask', action.permissionMode || '');
+}
+
+async function sendMessage(content, manualMode, permissionModeOverride = '') {
   const request = {
-    content: draft.value,
-    manualMode: chatStore.currentMode,
-    permissionMode: settingsStore.form.permissionMode,
-    requireConfirmationForScripts: requireConfirmationForPermission(settingsStore.form.permissionMode),
+    content,
+    manualMode,
+    permissionMode: permissionModeOverride || settingsStore.form.permissionMode,
+    requireConfirmationForScripts: requireConfirmationForPermission(
+      permissionModeOverride || settingsStore.form.permissionMode
+    ),
     customInstructions: settingsStore.form.customInstructions
   };
 
-  chatStore.appendUserMessage(draft.value);
+  chatStore.setMode(manualMode);
+  chatStore.appendUserMessage(content);
   draft.value = '';
   chatStore.startLoading();
 
@@ -621,7 +648,7 @@ onMounted(async () => {
 
   if (!chatStore.messages.length) {
     chatStore.appendAssistantMessage(
-      '已完成前端初始化。你现在可以直接聊天，也可以先在“设置”里保存长期使用的模型与接口配置。'
+      '我可以帮你总结、审阅、改写或整理当前 Word 文档。你可以直接描述目标，也可以先点击上方常用任务。'
     );
   }
 });
@@ -940,7 +967,23 @@ watch(
   color: #395372;
 }
 
+.advanced-options {
+  margin-bottom: 10px;
+  border: 1px solid rgba(89, 118, 161, 0.18);
+  border-radius: 10px;
+  background: #f7f9fc;
+  padding: 8px;
+}
+
+.advanced-options summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  color: #395372;
+}
+
 .mode-selector {
+  margin-top: 10px;
   margin-bottom: 10px;
 }
 
@@ -1012,6 +1055,10 @@ watch(
   font-size: 11px;
   line-height: 1.5;
   color: #60758f;
+}
+
+.environment-hint--wide {
+  max-width: none;
 }
 
 .send-button {
