@@ -285,7 +285,14 @@ namespace SmartWord.Application.Orchestration
             var estimatedTokenCount = _conversationStore.EstimateTokenCount(messages);
             if (estimatedTokenCount > compactionThreshold)
             {
-                var compactedMessages = _conversationCompressor.Compress(messages);
+                var compressionContext = CreateCompressionContext(
+                    safeOptions,
+                    documentPath,
+                    latestContext,
+                    currentTodoBoard,
+                    pendingWriteStep,
+                    messages);
+                var compactedMessages = _conversationCompressor.Compress(messages, compressionContext);
                 var compactedTokenCount = _conversationStore.EstimateTokenCount(compactedMessages);
                 var canContinueWithCompactedContext = compactedMessages != null
                     && compactedMessages.Count < messages.Count
@@ -1439,6 +1446,68 @@ namespace SmartWord.Application.Orchestration
                 RawToolInput = toolCall.Input ?? string.Empty,
                 ToolSuccess = result.Success
             });
+        }
+
+        private static ConversationCompressionContext CreateCompressionContext(
+            AgentRunOptions options,
+            string documentPath,
+            DocumentContext documentContext,
+            TodoBoard currentTodoBoard,
+            PendingWriteStep pendingWriteStep,
+            IReadOnlyList<AgentMessage> messages)
+        {
+            var recentInternalObservations = messages == null
+                ? new List<AgentMessage>()
+                : messages
+                    .Where(message => message != null && message.IsInternalObservation)
+                    .Reverse()
+                    .Take(5)
+                    .Select(CloneMessage)
+                    .Reverse()
+                    .ToList();
+
+            var latestRealUserMessage = messages == null
+                ? null
+                : messages.LastOrDefault(message =>
+                    message != null
+                    && string.Equals(message.Role, "user", StringComparison.OrdinalIgnoreCase)
+                    && !message.IsInternalObservation);
+
+            return new ConversationCompressionContext
+            {
+                Mode = options == null ? AgentMode.Ask : options.Mode,
+                DocumentPath = documentPath ?? string.Empty,
+                CurrentUserGoal = latestRealUserMessage == null
+                    ? string.Empty
+                    : latestRealUserMessage.Content ?? string.Empty,
+                CurrentTodoBoard = currentTodoBoard,
+                ActivePlan = options == null ? null : options.ActivePlan,
+                PendingWriteStep = CreatePendingWriteStepSnapshot(pendingWriteStep),
+                DocumentContext = documentContext,
+                RecentInternalObservations = recentInternalObservations
+            };
+        }
+
+        private static PendingWriteStepSnapshot CreatePendingWriteStepSnapshot(PendingWriteStep pendingWriteStep)
+        {
+            if (pendingWriteStep == null)
+            {
+                return null;
+            }
+
+            return new PendingWriteStepSnapshot
+            {
+                ToolCallId = pendingWriteStep.ToolCallId,
+                ToolName = pendingWriteStep.ToolName,
+                AffectedParagraphs = pendingWriteStep.AffectedParagraphs,
+                OperationDescription = pendingWriteStep.OperationDescription,
+                State = pendingWriteStep.State.ToString(),
+                RepairAttempts = pendingWriteStep.RepairAttempts,
+                LastFailureMessage = pendingWriteStep.LastFailureMessage,
+                VerificationToolName = pendingWriteStep.VerificationToolName,
+                VerificationOperationDescription = pendingWriteStep.VerificationOperationDescription,
+                VerificationFailureReason = pendingWriteStep.VerificationFailureReason
+            };
         }
 
         private async Task AppendInternalObservationAsync(

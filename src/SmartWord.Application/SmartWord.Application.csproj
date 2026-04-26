@@ -68,6 +68,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Context\ContextHydrator.cs" />
+    <Compile Include="Context\ConversationCompressionContext.cs" />
     <Compile Include="Context\ConversationCompressor.cs" />
     <Compile Include="Orchestration\AgentOrchestrator.cs" />
     <Compile Include="Orchestration\ExecutionPlanParser.cs" />
