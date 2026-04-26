@@ -47,22 +47,16 @@ namespace SmartWord.Infrastructure.Configuration
 
         public string CustomInstructions { get; set; } = string.Empty;
 
-        [Newtonsoft.Json.JsonIgnore]
         public bool HasApiKey { get; set; }
 
-        [Newtonsoft.Json.JsonIgnore]
         public bool HasApiKeyHeavy { get; set; }
 
-        [Newtonsoft.Json.JsonIgnore]
         public bool HasApiKeyLight { get; set; }
 
-        [Newtonsoft.Json.JsonIgnore]
         public string ApiKeyDisplay { get; set; } = string.Empty;
 
-        [Newtonsoft.Json.JsonIgnore]
         public string ApiKeyHeavyDisplay { get; set; } = string.Empty;
 
-        [Newtonsoft.Json.JsonIgnore]
         public string ApiKeyLightDisplay { get; set; } = string.Empty;
     }
 }

@@ -14,96 +14,7 @@
       </div>
     </header>
 
-    <section v-if="settingsStore.isPanelOpen" class="settings-panel">
-      <div class="settings-panel__header">
-        <div>
-          <h2>连接设置</h2>
-          <p>保存后，新请求会直接使用最新配置。</p>
-        </div>
-        <button class="ghost-button ghost-button--small" type="button" @click="settingsStore.closePanel()">
-          关闭
-        </button>
-      </div>
-
-      <div class="settings-grid">
-        <label class="settings-field">
-          <span>默认 Base URL</span>
-          <input v-model.trim="settingsStore.form.baseUrl" type="text" />
-        </label>
-
-        <label class="settings-field">
-          <span>默认 API Key</span>
-          <input v-model.trim="settingsStore.form.apiKey" type="password" autocomplete="off" />
-        </label>
-
-        <label class="settings-field">
-          <span>轻量 Base URL</span>
-          <input v-model.trim="settingsStore.form.baseUrlLight" type="text" />
-        </label>
-
-        <label class="settings-field">
-          <span>轻量 API Key</span>
-          <input v-model.trim="settingsStore.form.apiKeyLight" type="password" autocomplete="off" />
-        </label>
-
-        <label class="settings-field">
-          <span>轻量模型</span>
-          <input v-model.trim="settingsStore.form.lightModel" type="text" />
-        </label>
-
-        <label class="settings-field">
-          <span>重量 Base URL</span>
-          <input v-model.trim="settingsStore.form.baseUrlHeavy" type="text" />
-        </label>
-
-        <label class="settings-field">
-          <span>重量 API Key</span>
-          <input v-model.trim="settingsStore.form.apiKeyHeavy" type="password" autocomplete="off" />
-        </label>
-
-        <label class="settings-field">
-          <span>重量模型</span>
-          <input v-model.trim="settingsStore.form.heavyModel" type="text" />
-        </label>
-
-        <label class="settings-field">
-          <span>执行权限</span>
-          <select v-model="settingsStore.form.permissionMode">
-            <option v-for="option in permissionOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </label>
-
-        <label class="settings-field settings-field--textarea">
-          <span>自定义系统指令</span>
-          <textarea
-            v-model.trim="settingsStore.form.customInstructions"
-            rows="4"
-            maxlength="2000"
-            placeholder="例如：优先使用简洁正式的中文回答。"
-          ></textarea>
-        </label>
-      </div>
-
-      <div class="settings-panel__footer">
-        <p
-          v-if="settingsStore.saveMessage"
-          class="settings-message"
-          :class="`settings-message--${settingsStore.saveMessageType}`"
-        >
-          {{ settingsStore.saveMessage }}
-        </p>
-        <button
-          class="send-button send-button--full"
-          type="button"
-          :disabled="settingsStore.isSaving"
-          @click="saveSettings"
-        >
-          {{ settingsStore.isSaving ? '保存中...' : '保存设置' }}
-        </button>
-      </div>
-    </section>
+    <SettingsPanel v-if="settingsStore.isPanelOpen" />
 
     <section class="message-list" ref="messageListRef" @click="handleMessageListClick">
       <ThoughtActionTrace :tool-calls="chatStore.activeToolCalls" />
@@ -258,6 +169,7 @@ import { useSettingsStore } from '../stores/settings';
 import { hostBridge } from '../bridge/hostBridge';
 import ChangesSummaryPanel from './ChangesSummaryPanel.vue';
 import ContentPreviewPanel from './ContentPreviewPanel.vue';
+import SettingsPanel from './SettingsPanel.vue';
 import ThoughtActionTrace from './ThoughtActionTrace.vue';
 import TodoBoardPanel from './TodoBoardPanel.vue';
 import TodoBoardPausePanel from './TodoBoardPausePanel.vue';
@@ -354,14 +266,6 @@ function renderMessage(message) {
     const title = `段落 ${citation.paragraphIndex}`;
     return `<button class="citation-anchor" type="button" data-citation-ref="${ref}" title="${title}">[${ref}]</button>`;
   });
-}
-
-async function saveSettings() {
-  try {
-    await settingsStore.saveSettings();
-  } catch {
-    // 错误信息已由 store 写入状态提示，这里不重复处理。
-  }
 }
 
 async function submitMessage() {

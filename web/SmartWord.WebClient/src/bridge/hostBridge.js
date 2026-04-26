@@ -17,10 +17,16 @@ function createDefaultSettings() {
   return {
     baseUrl: 'https://api.openai.com/v1',
     apiKey: '',
+    apiKeyDisplay: '',
+    hasApiKey: false,
     baseUrlHeavy: '',
     apiKeyHeavy: '',
+    apiKeyHeavyDisplay: '',
+    hasApiKeyHeavy: false,
     baseUrlLight: '',
     apiKeyLight: '',
+    apiKeyLightDisplay: '',
+    hasApiKeyLight: false,
     lightModel: 'gpt-4.1-mini',
     heavyModel: 'gpt-4.1',
     permissionMode: 'confirm_writes',
@@ -53,14 +59,38 @@ function normalizeSettings(settings) {
     source.permissionMode ?? source.PermissionMode,
     legacyConfirmation
   );
+  const hasApiKey = Boolean(source.hasApiKey ?? source.HasApiKey);
+  const hasApiKeyHeavy = Boolean(source.hasApiKeyHeavy ?? source.HasApiKeyHeavy);
+  const hasApiKeyLight = Boolean(source.hasApiKeyLight ?? source.HasApiKeyLight);
 
   return {
     baseUrl: source.baseUrl ?? source.BaseUrl ?? source.apiBaseUrl ?? source.ApiBaseUrl ?? defaults.baseUrl,
-    apiKey: source.apiKey ?? source.ApiKey ?? defaults.apiKey,
+    apiKey:
+      source.apiKey ??
+      source.ApiKey ??
+      source.apiKeyDisplay ??
+      source.ApiKeyDisplay ??
+      (hasApiKey ? '********' : defaults.apiKey),
+    apiKeyDisplay: source.apiKeyDisplay ?? source.ApiKeyDisplay ?? (hasApiKey ? '********' : ''),
+    hasApiKey,
     baseUrlHeavy: source.baseUrlHeavy ?? source.BaseUrlHeavy ?? defaults.baseUrlHeavy,
-    apiKeyHeavy: source.apiKeyHeavy ?? source.ApiKeyHeavy ?? defaults.apiKeyHeavy,
+    apiKeyHeavy:
+      source.apiKeyHeavy ??
+      source.ApiKeyHeavy ??
+      source.apiKeyHeavyDisplay ??
+      source.ApiKeyHeavyDisplay ??
+      (hasApiKeyHeavy ? '********' : defaults.apiKeyHeavy),
+    apiKeyHeavyDisplay: source.apiKeyHeavyDisplay ?? source.ApiKeyHeavyDisplay ?? (hasApiKeyHeavy ? '********' : ''),
+    hasApiKeyHeavy,
     baseUrlLight: source.baseUrlLight ?? source.BaseUrlLight ?? defaults.baseUrlLight,
-    apiKeyLight: source.apiKeyLight ?? source.ApiKeyLight ?? defaults.apiKeyLight,
+    apiKeyLight:
+      source.apiKeyLight ??
+      source.ApiKeyLight ??
+      source.apiKeyLightDisplay ??
+      source.ApiKeyLightDisplay ??
+      (hasApiKeyLight ? '********' : defaults.apiKeyLight),
+    apiKeyLightDisplay: source.apiKeyLightDisplay ?? source.ApiKeyLightDisplay ?? (hasApiKeyLight ? '********' : ''),
+    hasApiKeyLight,
     lightModel: source.lightModel ?? source.LightModel ?? defaults.lightModel,
     heavyModel: source.heavyModel ?? source.HeavyModel ?? defaults.heavyModel,
     permissionMode,
@@ -194,6 +224,46 @@ export const hostBridge = {
 
     window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
     return normalized;
+  },
+
+  async testModelConnection(settings) {
+    const normalized = normalizeSettings(settings);
+
+    if (this.isAvailable) {
+      const raw = await callBridge('TestModelConnection', JSON.stringify(normalized));
+      return JSON.parse(raw || '{}');
+    }
+
+    const hasKey = Boolean(normalized.apiKey || normalized.hasApiKey);
+    return {
+      success: hasKey,
+      serviceReachable: hasKey,
+      supportsToolCalling: !String(normalized.heavyModel || '').toLowerCase().includes('speciale'),
+      usedFallbackModel: false,
+      message: hasKey
+        ? '浏览器预览模式：已模拟连接测试通过。'
+        : '浏览器预览模式：请先填写 API Key。',
+      routes: [
+        {
+          mode: 'ask',
+          selectedModel: normalized.lightModel,
+          enableToolCalling: true,
+          routingMessage: '浏览器预览模式模拟结果。'
+        },
+        {
+          mode: 'plan',
+          selectedModel: normalized.heavyModel,
+          enableToolCalling: true,
+          routingMessage: '浏览器预览模式模拟结果。'
+        },
+        {
+          mode: 'agent',
+          selectedModel: normalized.heavyModel,
+          enableToolCalling: true,
+          routingMessage: '浏览器预览模式模拟结果。'
+        }
+      ]
+    };
   },
 
   async sendMessage(request) {
