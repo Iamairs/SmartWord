@@ -985,8 +985,6 @@ namespace SmartWord.Application.Orchestration
                             "写入已执行，系统正在执行验证步骤。");
 
                         var autoVerifyOutcome = await ExecuteAutoVerifyAsync(
-                                documentPath,
-                                messages,
                                 executedWriteStep,
                                 writeStepUndoScope,
                                 cancellationToken)
@@ -1024,6 +1022,15 @@ namespace SmartWord.Application.Orchestration
                                     TodoBoardUpdateKind.RollbackRestored,
                                     "当前写步骤已回退，Todo Board 已恢复到最近可信检查点。");
                             }
+
+                            await AppendAutoVerifyObservationAsync(
+                                    documentPath,
+                                    messages,
+                                    executedWriteStep,
+                                    autoVerifyOutcome,
+                                    AutoVerifyObservationDisposition.RolledBack,
+                                    cancellationToken)
+                                .ConfigureAwait(false);
 
                             yield return CreateChangeEvent(
                                 AgentEventType.ChangeVerificationFailed,
@@ -1076,6 +1083,15 @@ namespace SmartWord.Application.Orchestration
                                         cancellationToken)
                                     .ConfigureAwait(false);
                             }
+
+                            await AppendAutoVerifyObservationAsync(
+                                    documentPath,
+                                    messages,
+                                    executedWriteStep,
+                                    autoVerifyOutcome,
+                                    AutoVerifyObservationDisposition.Committed,
+                                    cancellationToken)
+                                .ConfigureAwait(false);
 
                             pendingWriteStep = null;
                             if (IsDocumentWriteTool(toolCall.Name))
@@ -2215,8 +2231,6 @@ namespace SmartWord.Application.Orchestration
         }
 
         private async Task<AutoVerifyOutcome> ExecuteAutoVerifyAsync(
-            string documentPath,
-            IList<AgentMessage> messages,
             PendingWriteStep pendingWriteStep,
             IUndoScope undoScope,
             CancellationToken cancellationToken)
@@ -2229,15 +2243,6 @@ namespace SmartWord.Application.Orchestration
             if (pendingWriteStep.State != PendingWriteState.AwaitingVerification)
             {
                 var failureMessage = "当前写步骤不处于待验证状态，无法自动补验证。";
-                await AppendAutoVerifyObservationAsync(
-                        documentPath,
-                        messages,
-                        pendingWriteStep,
-                        null,
-                        null,
-                        failureMessage,
-                        cancellationToken)
-                    .ConfigureAwait(false);
                 return AutoVerifyOutcome.CreateFailed(
                     failureMessage,
                     "当前写步骤状态异常，任务已中止。");
@@ -2245,15 +2250,6 @@ namespace SmartWord.Application.Orchestration
 
             if (!pendingWriteStep.HasAutoVerifyPlan)
             {
-                await AppendAutoVerifyObservationAsync(
-                        documentPath,
-                        messages,
-                        pendingWriteStep,
-                        null,
-                        null,
-                        pendingWriteStep.VerificationFailureReason,
-                        cancellationToken)
-                    .ConfigureAwait(false);
                 return AutoVerifyOutcome.CreateFailed(
                     pendingWriteStep.VerificationFailureReason,
                     "当前写步骤缺少可执行的验证输入，当前步骤待修复。");
@@ -2263,15 +2259,6 @@ namespace SmartWord.Application.Orchestration
             if (verifyTool == null)
             {
                 var failureMessage = "系统未找到内部验证工具实现，当前步骤待修复。";
-                await AppendAutoVerifyObservationAsync(
-                        documentPath,
-                        messages,
-                        pendingWriteStep,
-                        null,
-                        null,
-                        failureMessage,
-                        cancellationToken)
-                    .ConfigureAwait(false);
                 return AutoVerifyOutcome.CreateFailed(
                     failureMessage,
                     "系统内部验证工具不可用，当前步骤待修复。");
@@ -2319,16 +2306,6 @@ namespace SmartWord.Application.Orchestration
             }
 
             var verificationFailureMessage = BuildVerificationFailureMessage(executionResult);
-            await AppendAutoVerifyObservationAsync(
-                    documentPath,
-                    messages,
-                    pendingWriteStep,
-                    autoVerifyCall,
-                    executionResult,
-                    verificationFailureMessage,
-                    cancellationToken)
-                .ConfigureAwait(false);
-
             if (executionResult.Success && TryGetVerificationAllPassed(executionResult.Output, out var allPassed) && allPassed)
             {
                 return AutoVerifyOutcome.CreatePassed(
@@ -2349,16 +2326,14 @@ namespace SmartWord.Application.Orchestration
             string documentPath,
             IList<AgentMessage> messages,
             PendingWriteStep pendingWriteStep,
-            ToolCall autoVerifyCall,
-            ToolCallResult executionResult,
-            string verificationMessage,
+            AutoVerifyOutcome outcome,
+            AutoVerifyObservationDisposition disposition,
             CancellationToken cancellationToken)
         {
             var observation = BuildAutoVerifyObservationMessage(
                 pendingWriteStep,
-                autoVerifyCall,
-                executionResult,
-                verificationMessage);
+                outcome,
+                disposition);
 
             await AppendInternalObservationAsync(documentPath, messages, observation, cancellationToken)
                 .ConfigureAwait(false);
@@ -2366,22 +2341,31 @@ namespace SmartWord.Application.Orchestration
 
         private static string BuildAutoVerifyObservationMessage(
             PendingWriteStep pendingWriteStep,
-            ToolCall autoVerifyCall,
-            ToolCallResult executionResult,
-            string verificationMessage)
+            AutoVerifyOutcome outcome,
+            AutoVerifyObservationDisposition disposition)
         {
+            var autoVerifyCall = outcome == null ? null : outcome.ToolCall;
+            var executionResult = outcome == null ? null : outcome.Result;
+            var verificationMessage = outcome == null ? string.Empty : outcome.FailureMessage;
             var allPassed = executionResult != null
                 && executionResult.Success
                 && TryGetVerificationAllPassed(executionResult.Output, out var parsedAllPassed)
                 && parsedAllPassed;
             var builder = new StringBuilder();
             builder.AppendLine("[SmartWord 自动验证结果]");
+            var stepDescription = pendingWriteStep == null || string.IsNullOrWhiteSpace(pendingWriteStep.OperationDescription)
+                ? "当前写步骤"
+                : pendingWriteStep.OperationDescription.Trim();
+            if (allPassed && disposition == AutoVerifyObservationDisposition.Committed)
+            {
+                builder.AppendLine($"当前写步骤“{stepDescription}”已自动验证通过且已提交。请继续执行后续 Todo，不要重复该步骤。");
+                return builder.ToString();
+            }
+
             builder.AppendLine("系统已在写操作后执行自动验证。这不是用户的新需求，而是当前写步骤的内部观察结果。");
             builder.AppendLine();
             builder.AppendLine("当前写步骤：");
-            builder.AppendLine("- " + (pendingWriteStep == null || string.IsNullOrWhiteSpace(pendingWriteStep.OperationDescription)
-                ? "未提供操作说明"
-                : pendingWriteStep.OperationDescription.Trim()));
+            builder.AppendLine("- " + stepDescription);
             builder.AppendLine();
             builder.AppendLine("验证工具：");
             builder.AppendLine("- " + (autoVerifyCall == null || string.IsNullOrWhiteSpace(autoVerifyCall.Name)
@@ -2389,9 +2373,9 @@ namespace SmartWord.Application.Orchestration
                 : autoVerifyCall.Name.Trim()));
             builder.AppendLine();
             builder.AppendLine("验证状态：");
-            if (allPassed)
+            if (disposition == AutoVerifyObservationDisposition.RolledBack)
             {
-                builder.AppendLine("- 当前写步骤已自动验证通过并提交。");
+                builder.AppendLine("- 当前写步骤未通过验证，当前失败写步骤已回退，之前已验证通过的步骤保持不变。");
             }
             else if (executionResult == null)
             {
@@ -2422,18 +2406,9 @@ namespace SmartWord.Application.Orchestration
 
             builder.AppendLine();
             builder.AppendLine("下一步要求：");
-            if (allPassed)
-            {
-                builder.AppendLine("- 请继续执行后续 Todo，不要重复刚刚完成且已验证通过的修改。");
-            }
-            else
-            {
-                builder.AppendLine("- 当前失败写步骤已经或即将被系统回退，之前已验证通过的步骤保持不变。");
-                builder.AppendLine("- 请基于上面的验证结论和验证输出修复当前步骤。");
-                builder.AppendLine("- 修复时优先使用更小范围、更稳妥的写操作，不要重复已经完成的前序 Todo。");
-                builder.AppendLine("- 修复后仍必须通过验证。");
-            }
-
+            builder.AppendLine("- 请基于上面的验证结论和验证输出修复当前步骤。");
+            builder.AppendLine("- 修复时优先使用更小范围、更稳妥的写操作，不要重复已经完成的前序 Todo。");
+            builder.AppendLine("- 修复后仍必须通过验证。");
             return builder.ToString();
         }
 
@@ -2835,6 +2810,12 @@ namespace SmartWord.Application.Orchestration
         {
             AwaitingVerification = 0,
             RepairRequired = 1
+        }
+
+        private enum AutoVerifyObservationDisposition
+        {
+            Committed = 0,
+            RolledBack = 1
         }
 
         private sealed class AutoVerifyPlan

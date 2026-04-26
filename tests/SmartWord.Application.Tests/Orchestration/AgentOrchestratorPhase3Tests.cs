@@ -1216,7 +1216,10 @@ namespace SmartWord.Application.Tests.Orchestration
                 ToolCallResult.Ok(
                     "{\"all_passed\":true,\"results\":[]}",
                     new[] { 0 },
-                    operationDescription: "已完成改动验证。"));
+                    operationDescription: "已完成改动验证。"))
+            {
+                IsVisibleToModel = false
+            };
             var conversationStore = new InMemoryConversationStore();
             var orchestrator = CreateOrchestrator(
                 llmClient,
@@ -1237,6 +1240,8 @@ namespace SmartWord.Application.Tests.Orchestration
 
             Assert.Contains(events, item => item.Type == AgentEventType.ChangeApplied);
             Assert.Contains(events, item => item.Type == AgentEventType.TaskCompleted);
+            Assert.Equal(1, verifyTool.ExecutionCount);
+            Assert.DoesNotContain(llmClient.RequestToolSnapshots[0], item => item.Name == "verify_script");
             Assert.True(llmClient.RequestMessageSnapshots.Count >= 2);
             var nextRequestMessages = llmClient.RequestMessageSnapshots[1];
             Assert.DoesNotContain(nextRequestMessages, item =>
@@ -1245,12 +1250,19 @@ namespace SmartWord.Application.Tests.Orchestration
             Assert.Contains(nextRequestMessages, item =>
                 string.Equals(item.Role, "user", StringComparison.OrdinalIgnoreCase)
                 && item.Content.Contains("[SmartWord 自动验证结果]")
-                && item.Content.Contains("自动验证通过"));
+                && item.Content.Contains("自动验证通过")
+                && item.Content.Contains("已提交")
+                && item.IsInternalObservation
+                && item.InternalObservationKind == "auto_verify_result");
 
             var history = await conversationStore.GetHistoryAsync("doc1", CancellationToken.None);
             Assert.DoesNotContain(history, item =>
                 string.Equals(item.Role, "tool", StringComparison.OrdinalIgnoreCase)
                 && string.Equals(item.ToolCallId, "write-1__auto_verify", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(history, item =>
+                item.IsInternalObservation
+                && item.InternalObservationKind == "auto_verify_result"
+                && item.Content.Contains("自动验证通过"));
         }
 
         [Fact]
@@ -1279,7 +1291,10 @@ namespace SmartWord.Application.Tests.Orchestration
                 ToolCallResult.Ok(
                     failedVerificationOutput,
                     new[] { 2 },
-                    operationDescription: "验证标题样式。"));
+                    operationDescription: "验证标题样式。"))
+            {
+                IsVisibleToModel = false
+            };
             var orchestrator = CreateOrchestrator(
                 llmClient,
                 CreateWritableHydrator(),
@@ -1297,15 +1312,20 @@ namespace SmartWord.Application.Tests.Orchestration
                 CancellationToken.None));
 
             Assert.Contains(events, item => item.Type == AgentEventType.ChangeVerificationFailed);
+            Assert.Equal(1, verifyTool.ExecutionCount);
+            Assert.DoesNotContain(llmClient.RequestToolSnapshots[0], item => item.Name == "verify_script");
             Assert.True(llmClient.RequestMessageSnapshots.Count >= 2);
             var nextRequestMessages = llmClient.RequestMessageSnapshots[1];
             var observation = Assert.Single(nextRequestMessages.Where(item =>
                 string.Equals(item.Role, "user", StringComparison.OrdinalIgnoreCase)
                 && item.Content.Contains("[SmartWord 自动验证结果]")));
             Assert.Contains("未通过验证", observation.Content);
+            Assert.Contains("已回退", observation.Content);
             Assert.Contains("第 3 段样式未被改成标题 1", observation.Content);
             Assert.Contains("正文", observation.Content);
             Assert.Contains("标题 1", observation.Content);
+            Assert.True(observation.IsInternalObservation);
+            Assert.Equal("auto_verify_result", observation.InternalObservationKind);
             Assert.DoesNotContain(nextRequestMessages, item =>
                 string.Equals(item.Role, "tool", StringComparison.OrdinalIgnoreCase)
                 && string.Equals(item.ToolCallId, "write-1__auto_verify", StringComparison.OrdinalIgnoreCase));
@@ -1809,6 +1829,7 @@ namespace SmartWord.Application.Tests.Orchestration
         {
             private readonly Queue<AgentMessage> _responses = new Queue<AgentMessage>();
             public List<List<AgentMessage>> RequestMessageSnapshots { get; } = new List<List<AgentMessage>>();
+            public List<List<ToolDefinition>> RequestToolSnapshots { get; } = new List<List<ToolDefinition>>();
             public int CallCount { get; private set; }
 
             public FakeLlmClient(params AgentMessage[] responses)
@@ -1841,6 +1862,9 @@ namespace SmartWord.Application.Tests.Orchestration
                 RequestMessageSnapshots.Add(messages == null
                     ? new List<AgentMessage>()
                     : new List<AgentMessage>(messages.Select(CloneMessage)));
+                RequestToolSnapshots.Add(tools == null
+                    ? new List<ToolDefinition>()
+                    : new List<ToolDefinition>(tools));
                 CallCount++;
                 _ = model;
                 _ = tools;
