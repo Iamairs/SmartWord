@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Reflection;
 using Newtonsoft.Json.Linq;
@@ -118,6 +119,81 @@ namespace SmartWord.Application.Tests.Infrastructure
         }
 
         [Fact]
+        public void BuildRequestJson_MissingUserMessage_ThrowsBeforeSendingProviderRequest()
+        {
+            var messages = new List<AgentMessage>
+            {
+                new AgentMessage { Role = "system", Content = "system" },
+                new AgentMessage { Role = "assistant", Content = "准备执行。" },
+                new AgentMessage
+                {
+                    Role = "tool",
+                    ToolCallId = "call_1",
+                    Content = "{\"ok\":true}"
+                }
+            };
+
+            var exception = AssertBuildRequestJsonInvalid(messages);
+
+            Assert.Contains("role=user", exception.Message);
+        }
+
+        [Fact]
+        public void BuildRequestJson_OrphanToolMessage_ThrowsBeforeSendingProviderRequest()
+        {
+            var messages = new List<AgentMessage>
+            {
+                new AgentMessage { Role = "system", Content = "system" },
+                new AgentMessage { Role = "user", Content = "继续执行" },
+                new AgentMessage
+                {
+                    Role = "tool",
+                    ToolCallId = "call_1",
+                    Content = "{\"ok\":true}"
+                }
+            };
+
+            var exception = AssertBuildRequestJsonInvalid(messages);
+
+            Assert.Contains("孤立的 tool 消息", exception.Message);
+        }
+
+        [Fact]
+        public void BuildRequestJson_CompleteToolCallPair_SerializesRequest()
+        {
+            var messages = new List<AgentMessage>
+            {
+                new AgentMessage { Role = "system", Content = "system" },
+                new AgentMessage { Role = "user", Content = "继续执行" },
+                new AgentMessage
+                {
+                    Role = "assistant",
+                    Content = string.Empty,
+                    ToolCalls = new List<ToolCall>
+                    {
+                        new ToolCall
+                        {
+                            Id = "call_1",
+                            Name = "probe_document",
+                            Input = "{}"
+                        }
+                    }
+                },
+                new AgentMessage
+                {
+                    Role = "tool",
+                    ToolCallId = "call_1",
+                    Content = "{\"ok\":true}"
+                }
+            };
+
+            var requestJson = InvokeBuildRequestJson(messages);
+
+            Assert.Contains("\"role\":\"user\"", requestJson);
+            Assert.Contains("\"tool_call_id\":\"call_1\"", requestJson);
+        }
+
+        [Fact]
         public void SummarizeBody_LongBody_IsTruncated()
         {
             var method = typeof(OpenAiCompatibleClient).GetMethod(
@@ -151,6 +227,30 @@ namespace SmartWord.Application.Tests.Infrastructure
 
             var result = method.Invoke(null, new object[] { messages, capability });
             return Assert.IsType<JArray>(result);
+        }
+
+        private static string InvokeBuildRequestJson(IReadOnlyList<AgentMessage> messages)
+        {
+            var method = typeof(OpenAiCompatibleClient).GetMethod(
+                "BuildRequestJson",
+                BindingFlags.Static | BindingFlags.NonPublic);
+
+            Assert.NotNull(method);
+
+            var capability = new ModelCapability
+            {
+                Model = "Qwen/Qwen3.5-397B-A17B",
+                SupportsToolCalling = true
+            };
+
+            var result = method.Invoke(null, new object[] { "Qwen/Qwen3.5-397B-A17B", messages, null, capability });
+            return Assert.IsType<string>(result);
+        }
+
+        private static InvalidOperationException AssertBuildRequestJsonInvalid(IReadOnlyList<AgentMessage> messages)
+        {
+            var exception = Assert.Throws<TargetInvocationException>(() => InvokeBuildRequestJson(messages));
+            return Assert.IsType<InvalidOperationException>(exception.InnerException);
         }
     }
 }

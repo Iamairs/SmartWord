@@ -619,11 +619,14 @@ namespace SmartWord.Infrastructure.LlmClients
             IReadOnlyList<ToolDefinition> tools,
             ModelCapability capability)
         {
+            var normalizedMessages = NormalizeMessagesForProvider(messages);
+            ValidateMessagesForProvider(normalizedMessages);
+
             var payload = new JObject
             {
                 ["model"] = model,
                 ["stream"] = true,
-                ["messages"] = BuildMessagesPayload(messages, capability)
+                ["messages"] = BuildMessagesPayload(normalizedMessages, capability)
             };
 
             if (tools != null && tools.Count > 0)
@@ -633,6 +636,89 @@ namespace SmartWord.Infrastructure.LlmClients
             }
 
             return payload.ToString(Formatting.None);
+        }
+
+        private static void ValidateMessagesForProvider(IReadOnlyList<AgentMessage> messages)
+        {
+            if (messages == null || messages.Count == 0)
+            {
+                throw new InvalidOperationException("LLM 请求 messages 不能为空。");
+            }
+
+            var hasUserQuery = messages.Any(message =>
+                message != null
+                && string.Equals(message.Role, "user", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(message.Content));
+            if (!hasUserQuery)
+            {
+                throw new InvalidOperationException("LLM 请求 messages 缺少有效的 role=user 用户消息，已阻止发送非法请求。");
+            }
+
+            HashSet<string> pendingToolCallIds = null;
+            foreach (var message in messages)
+            {
+                if (message == null || string.IsNullOrWhiteSpace(message.Role))
+                {
+                    continue;
+                }
+
+                var role = message.Role.Trim().ToLowerInvariant();
+                if (string.Equals(role, "system", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (string.Equals(role, "assistant", StringComparison.OrdinalIgnoreCase))
+                {
+                    EnsureNoPendingToolCalls(pendingToolCallIds);
+                    var validToolCallIds = message.ToolCalls == null
+                        ? new List<string>()
+                        : message.ToolCalls
+                            .Where(toolCall => toolCall != null
+                                && !string.IsNullOrWhiteSpace(toolCall.Id)
+                                && !string.IsNullOrWhiteSpace(toolCall.Name))
+                            .Select(toolCall => toolCall.Id)
+                            .Distinct(StringComparer.Ordinal)
+                            .ToList();
+                    pendingToolCallIds = validToolCallIds.Count == 0
+                        ? null
+                        : new HashSet<string>(validToolCallIds, StringComparer.Ordinal);
+                    continue;
+                }
+
+                if (string.Equals(role, "tool", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (string.IsNullOrWhiteSpace(message.ToolCallId))
+                    {
+                        throw new InvalidOperationException("LLM 请求 messages 包含缺少 tool_call_id 的 tool 消息，已阻止发送非法请求。");
+                    }
+
+                    if (pendingToolCallIds == null || !pendingToolCallIds.Remove(message.ToolCallId))
+                    {
+                        throw new InvalidOperationException("LLM 请求 messages 包含孤立的 tool 消息，已阻止发送非法请求。");
+                    }
+
+                    if (pendingToolCallIds.Count == 0)
+                    {
+                        pendingToolCallIds = null;
+                    }
+
+                    continue;
+                }
+
+                EnsureNoPendingToolCalls(pendingToolCallIds);
+                pendingToolCallIds = null;
+            }
+
+            EnsureNoPendingToolCalls(pendingToolCallIds);
+        }
+
+        private static void EnsureNoPendingToolCalls(HashSet<string> pendingToolCallIds)
+        {
+            if (pendingToolCallIds != null && pendingToolCallIds.Count > 0)
+            {
+                throw new InvalidOperationException("LLM 请求 messages 包含未闭合的 assistant tool_calls，已阻止发送非法请求。");
+            }
         }
 
         private static JArray BuildMessagesPayload(
