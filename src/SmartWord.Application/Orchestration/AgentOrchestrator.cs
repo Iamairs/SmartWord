@@ -130,7 +130,12 @@ namespace SmartWord.Application.Orchestration
     if (_todoManager != null && safeOptions.Mode == AgentMode.Agent)
     {
         var prepareResult = await _todoManager
-            .PrepareBoardForRunAsync(documentPath, safeOptions.ActivePlan, cancellationToken)
+            .PrepareBoardForRunAsync(
+                documentPath,
+                safeOptions.ActivePlan,
+                forceRebuildFromActivePlan: safeOptions.ActivePlan != null
+                    && !safeOptions.StartupTodoBoardDecision.HasValue,
+                cancellationToken)
             .ConfigureAwait(false);
         currentTodoBoard = prepareResult.Board;
         activePlanFingerprint = string.IsNullOrWhiteSpace(prepareResult.ActivePlanFingerprint)

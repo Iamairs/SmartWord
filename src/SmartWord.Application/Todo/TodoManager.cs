@@ -48,14 +48,36 @@ namespace SmartWord.Application.Todo
             return NormalizeDocumentPath(_currentDocumentPath.Value);
         }
 
+        public Task<TodoBoardPreparationResult> PrepareBoardForRunAsync(
+            string documentPath,
+            ExecutionPlan activePlan,
+            CancellationToken cancellationToken)
+        {
+            return PrepareBoardForRunAsync(
+                documentPath,
+                activePlan,
+                forceRebuildFromActivePlan: false,
+                cancellationToken);
+        }
+
         public async Task<TodoBoardPreparationResult> PrepareBoardForRunAsync(
             string documentPath,
             ExecutionPlan activePlan,
+            bool forceRebuildFromActivePlan,
             CancellationToken cancellationToken)
         {
             var normalizedDocumentPath = NormalizeDocumentPath(documentPath);
             var planFingerprint = ComputePlanFingerprint(activePlan);
             TodoBoard board = null;
+
+            if (forceRebuildFromActivePlan && activePlan != null)
+            {
+                var rebuiltBoard = CreateBoardFromExecutionPlan(normalizedDocumentPath, activePlan);
+                rebuiltBoard.SourcePlanFingerprint = planFingerprint;
+                RefreshCommittedBoardSnapshot(rebuiltBoard);
+                await _todoStore.SaveBoardAsync(rebuiltBoard, cancellationToken).ConfigureAwait(false);
+                return CreateReadyPreparationResult(rebuiltBoard, activePlan, planFingerprint);
+            }
 
             try
             {

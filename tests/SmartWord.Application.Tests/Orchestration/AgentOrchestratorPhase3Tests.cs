@@ -392,6 +392,65 @@ namespace SmartWord.Application.Tests.Orchestration
         }
 
         [Fact]
+        public async Task RunAsync_PlanToAgentWithActivePlan_RebuildsBoardWithoutRecoveryPrompt()
+        {
+            var todoStore = new FakeTodoStore();
+            await todoStore.SaveBoardAsync(
+                new TodoBoard
+                {
+                    SchemaVersion = TodoBoard.CurrentSchemaVersion,
+                    BoardId = "board-old",
+                    DocumentPath = "doc1",
+                    ExecutionState = TodoBoardExecutionState.RecoveryRequired,
+                    LastRunOutcome = TodoBoardRunOutcome.Failed,
+                    RecoveryReason = "上一次任务异常中断，请先选择恢复方式。",
+                    LastErrorSummary = "模拟异常",
+                    Items = new List<TodoBoardItem>
+                    {
+                        new TodoBoardItem { Id = "O1", Content = "旧步骤", Status = TodoItemStatus.Completed, Order = 1 }
+                    }
+                },
+                CancellationToken.None);
+
+            var recoveryChannel = new FakeTodoRecoveryChannel(TodoBoardRecoveryDecision.RecoverExisting);
+            var orchestrator = CreateOrchestrator(
+                new FakeLlmClient(new AgentMessage
+                {
+                    Role = "assistant",
+                    Content = "已按当前计划执行。"
+                }),
+                CreateWritableHydrator(),
+                todoRecoveryChannel: recoveryChannel,
+                todoStore: todoStore);
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "请按照当前计划执行",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Agent,
+                    EnableToolCalling = true,
+                    ActivePlan = new ExecutionPlan
+                    {
+                        TaskDescription = "当前计划",
+                        TodoList = new List<TodoItem>
+                        {
+                            new TodoItem { Description = "新步骤一" },
+                            new TodoItem { Description = "新步骤二" }
+                        }
+                    }
+                },
+                CancellationToken.None));
+
+            var readyEvent = Assert.Single(events.Where(item => item.Type == AgentEventType.TodoBoardReady));
+            Assert.Contains("新步骤一", readyEvent.BoardJson);
+            Assert.DoesNotContain("旧步骤", readyEvent.BoardJson);
+            Assert.DoesNotContain(events, item => item.Type == AgentEventType.TodoBoardRecoveryRequired);
+            Assert.Equal(0, recoveryChannel.WaitCount);
+            Assert.Contains(events, item => item.Type == AgentEventType.TaskCompleted);
+            Assert.False(todoStore.Exists("doc1"));
+        }
+
+        [Fact]
         public async Task RunAsync_AgentModeCompleted_SucceedsAndDeletesTodoBoard()
         {
             var todoStore = new FakeTodoStore();
