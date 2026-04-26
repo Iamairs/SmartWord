@@ -1,31 +1,33 @@
-# 当前需求说明：Plan -> Agent 默认按当前计划重建 Todo Board
+# 当前需求说明：写步骤连续失败后的暂停决策简化
 
 ## 1. 背景
 
-此前 Agent 启动时，如果检测到历史 Todo Board 处于 `RecoveryRequired`、`Paused` 或疑似运行中残留状态，会先触发恢复/暂停决策面板，让用户选择恢复旧板、按当前计划重建或丢弃。
+Agent 模式采用“步骤级提交 + 当前步回滚 + 暂停决策”的写入策略。当前写步骤连续失败 3 次、模型在待修复状态下提前停止，或 Agent 命中固定轮次预算时，系统会保留之前已验证提交的文档修改，回滚当前失败步骤，并向前端展示暂停决策面板。
 
-这套策略适合“继续上次任务”的 Agent 入口，但不符合当前 Plan -> Agent 的目标体验。用户在 Plan 面板点击“开始执行”时，已经明确表达“按刚生成的当前计划执行”，此时继续弹恢复选择会打断流程，也可能让旧 Todo Board 污染新计划。
+旧版暂停面板把“继续执行当前任务 / 按当前计划重建 / 丢弃并新建空板”直接暴露给用户。对小白用户而言，“按当前计划重建”和“丢弃并新建空板”语义偏系统内部，容易误解为会影响文档内容，也会在失败时增加不必要的选择负担。
 
 ## 2. 当前需求
 
-Plan -> Agent 不再弹 Todo 恢复选择，直接总是按当前 `ActivePlan` 重建 Todo Board。
+将写步骤失败后的暂停面板简化为用户可理解的三种动作：
 
-具体要求：
+1. `继续尝试`：恢复最近可信任务板，让 Agent 换一种方法继续当前失败步骤。
+2. `跳过此步骤`：把当前失败或待处理 Todo 标记为 `Skipped`，自动推进到后续待办并继续执行。
+3. `停止任务`：结束本次暂停任务，保留已验证文档修改，清理当前文档的暂停 Todo Board，避免旧任务板下次再次干扰。
 
-1. 只要 Agent 请求携带 `ActivePlan`，且不是前端已经显式提交了暂停/恢复决策，就强制用当前计划重建 Todo Board。
-2. 历史 Todo Board 即使是 `RecoveryRequired`、`Paused`、`Running` 残留或旧计划，也不阻断 Plan -> Agent。
-3. 暂停面板里用户显式选择的 `recover_existing / rebuild_from_active_plan / discard_and_create_empty` 仍继续按用户选择执行，不能被自动重建逻辑覆盖。
-4. 更新测试和文档，保证行为稳定。
+本轮不增加“更多选项”，也不再在暂停面板展示“按当前计划重建”和“丢弃并新建空板”。
 
 ## 3. 设计决策
 
-- `ActivePlan` 在无显式恢复决策时代表当前用户意图，优先级高于历史 Todo Board。
-- 显式恢复/继续决策优先级高于自动策略，因为那是用户在异常/暂停面板上的直接选择。
-- 不修改前端 Plan 面板交互；前端已经传入 `activePlan`，本轮修复集中在后端启动准备逻辑。
+- 暂停面板面向“当前失败步骤”的恢复体验，按钮必须是业务语义，而不是底层 Todo Board 恢复语义。
+- `skip_current_todo` 作为新的后端恢复决策保留在协议中，由前端“跳过此步骤”触发。
+- “停止任务”不进入 LLM 主循环，不创建新的 Agent 请求，只调用宿主桥接清理当前文档 Todo Board 并关闭暂停面板。
+- 历史异常恢复面板 `TodoBoardRecoveryPanel` 暂不在本轮删除，因为它处理的是应用崩溃、JSON 损坏、旧运行残留等启动恢复场景，不等同于写步骤失败暂停场景。
 
 ## 4. 交付范围
 
-- `TodoManager.PrepareBoardForRunAsync` 增加强制按当前计划重建参数。
-- `AgentOrchestrator` 在 Plan -> Agent 这类携带 `ActivePlan` 且无显式决策的路径启用强制重建。
-- 补充 TodoManager 与 AgentOrchestrator 测试。
-- 更新 `docs/已实现的功能.md`。
+- Core：新增 `TodoBoardRecoveryDecision.SkipCurrentTodo`。
+- Application：`TodoManager.ResolveRecoveryAsync` 支持跳过当前 Todo，并维护可信快照；Agent 暂停提示文案改为继续/跳过/停止。
+- AddIn：WebViewBridge 支持解析 `skip_current_todo`，并提供停止暂停任务的 Todo 清理入口。
+- Web：暂停面板只展示 `继续尝试 / 跳过此步骤 / 停止任务`；停止任务时调用后端清理。
+- Tests：补充 TodoManager 与 AgentOrchestrator 的跳过当前 Todo 行为测试。
+- Docs：更新当前规划与已实现功能说明。

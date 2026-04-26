@@ -540,6 +540,40 @@ namespace SmartWord.Application.Tests.Tools
         }
 
         [Fact]
+        public async Task ResolveRecoveryAsync_SkipCurrentTodo_MarksCurrentSkippedAndAdvancesNextPending()
+        {
+            var manager = CreateManager();
+            await manager.InitializeFromExecutionPlanAsync(
+                "doc1",
+                new ExecutionPlan
+                {
+                    TodoList = new List<TodoItem>
+                    {
+                        new TodoItem { Description = "当前失败步骤" },
+                        new TodoItem { Description = "后续步骤" }
+                    }
+                },
+                CancellationToken.None);
+            await manager.MarkRunPausedAsync(
+                "doc1",
+                TodoBoardRunOutcome.RolledBack,
+                "当前步骤连续失败。",
+                CancellationToken.None);
+
+            var board = await manager.ResolveRecoveryAsync(
+                "doc1",
+                TodoBoardRecoveryDecision.SkipCurrentTodo,
+                null,
+                CancellationToken.None);
+
+            Assert.Equal(TodoBoardExecutionState.Idle, board.ExecutionState);
+            Assert.Equal(TodoItemStatus.Skipped, board.Items[0].Status);
+            Assert.Equal(TodoItemStatus.InProgress, board.Items[1].Status);
+            Assert.True(string.IsNullOrWhiteSpace(board.PauseReason));
+            Assert.True(string.IsNullOrWhiteSpace(board.RecoveryReason));
+        }
+
+        [Fact]
         public async Task JsonTodoStore_GetBoardAsync_InvalidJson_ThrowsControlledError()
         {
             var tempDirectory = Path.Combine(Path.GetTempPath(), "smartword-todo-tests", Guid.NewGuid().ToString("N"));

@@ -305,6 +305,25 @@ export const hostBridge = {
     pendingMockTodoRecovery = null;
   },
 
+  async stopPausedTodoRun() {
+    pendingMockTodoRecovery = null;
+
+    if (this.isAvailable) {
+      const raw = await callBridge('StopPausedTodoRun');
+      const result = JSON.parse(raw || '{}');
+      if (result.success === false) {
+        throw new Error(result.message || '停止任务失败');
+      }
+
+      return result;
+    }
+
+    return {
+      success: true,
+      message: '当前为浏览器降级模式，已模拟停止暂停任务。'
+    };
+  },
+
   async navigateToParagraph(paragraphIndex) {
     if (!this.isAvailable) {
       return;

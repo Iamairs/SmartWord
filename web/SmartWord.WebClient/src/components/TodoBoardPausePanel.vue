@@ -3,13 +3,13 @@
     <div class="todo-pause-panel__header">
       <div>
         <p class="todo-pause-panel__eyebrow">Paused</p>
-        <h2>任务已暂停</h2>
+        <h2>当前步骤连续失败</h2>
       </div>
       <span class="todo-pause-panel__outcome">{{ outcomeText }}</span>
     </div>
 
     <p class="todo-pause-panel__reason">
-      {{ pause?.message || '当前步骤已回退，已保留之前通过验证的成果，请选择继续方式。' }}
+      {{ pause?.message || '系统已回退当前失败步骤，之前已确认的修改仍然保留。你可以继续尝试、跳过此步骤，或停止本次任务。' }}
     </p>
 
     <p v-if="pause?.lastErrorSummary" class="todo-pause-panel__error">
@@ -37,23 +37,23 @@
         :disabled="pause?.isSubmitting || !pause?.canRecoverExisting"
         @click="$emit('resume', 'recover_existing')"
       >
-        继续执行当前任务
+        继续尝试
       </button>
       <button
         class="todo-pause-panel__button"
         type="button"
-        :disabled="pause?.isSubmitting || !pause?.hasActivePlan"
-        @click="$emit('resume', 'rebuild_from_active_plan')"
+        :disabled="pause?.isSubmitting || !pause?.canRecoverExisting"
+        @click="$emit('resume', 'skip_current_todo')"
       >
-        按当前计划重建
+        跳过此步骤
       </button>
       <button
         class="todo-pause-panel__button todo-pause-panel__button--danger"
         type="button"
         :disabled="pause?.isSubmitting"
-        @click="$emit('resume', 'discard_and_create_empty')"
+        @click="$emit('resume', 'stop_task')"
       >
-        丢弃并新建空板
+        停止任务
       </button>
     </div>
   </section>

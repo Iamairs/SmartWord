@@ -451,6 +451,55 @@ namespace SmartWord.Application.Tests.Orchestration
         }
 
         [Fact]
+        public async Task RunAsync_PausedBoardWithSkipDecision_SkipsCurrentTodoBeforeContinuing()
+        {
+            var todoStore = new FakeTodoStore();
+            await todoStore.SaveBoardAsync(
+                new TodoBoard
+                {
+                    SchemaVersion = TodoBoard.CurrentSchemaVersion,
+                    BoardId = "board-paused",
+                    DocumentPath = "doc1",
+                    ExecutionState = TodoBoardExecutionState.Paused,
+                    LastRunOutcome = TodoBoardRunOutcome.RolledBack,
+                    PauseReason = "当前步骤连续失败。",
+                    Items = new List<TodoBoardItem>
+                    {
+                        new TodoBoardItem { Id = "T1", Content = "当前失败步骤", Status = TodoItemStatus.InProgress, Order = 1 },
+                        new TodoBoardItem { Id = "T2", Content = "后续步骤", Status = TodoItemStatus.Pending, Order = 2 }
+                    }
+                },
+                CancellationToken.None);
+
+            var orchestrator = CreateOrchestrator(
+                new FakeLlmClient(new AgentMessage
+                {
+                    Role = "assistant",
+                    Content = "已跳过失败步骤并继续。"
+                }),
+                CreateWritableHydrator(),
+                todoStore: todoStore);
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "请跳过当前失败步骤并继续",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Agent,
+                    EnableToolCalling = true,
+                    StartupTodoBoardDecision = TodoBoardRecoveryDecision.SkipCurrentTodo
+                },
+                CancellationToken.None));
+
+            var readyEvent = Assert.Single(events.Where(item => item.Type == AgentEventType.TodoBoardReady));
+            Assert.Contains("\"id\":\"T1\"", readyEvent.BoardJson);
+            Assert.Contains("\"status\":\"Skipped\"", readyEvent.BoardJson);
+            Assert.Contains("\"id\":\"T2\"", readyEvent.BoardJson);
+            Assert.Contains("\"status\":\"InProgress\"", readyEvent.BoardJson);
+            Assert.DoesNotContain(events, item => item.Type == AgentEventType.TodoBoardPaused);
+            Assert.Contains(events, item => item.Type == AgentEventType.TaskCompleted);
+        }
+
+        [Fact]
         public async Task RunAsync_AgentModeCompleted_SucceedsAndDeletesTodoBoard()
         {
             var todoStore = new FakeTodoStore();

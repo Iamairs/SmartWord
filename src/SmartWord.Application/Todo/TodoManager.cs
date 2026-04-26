@@ -157,7 +157,7 @@ namespace SmartWord.Application.Todo
             {
                 if (string.IsNullOrWhiteSpace(board.PauseReason))
                 {
-                    board.PauseReason = "上一次 Agent 运行达到本轮预算上限，任务已暂停，可选择继续、重建或丢弃后重来。";
+                    board.PauseReason = "上一次 Agent 运行达到本轮预算上限，任务已暂停。你可以继续尝试、跳过当前步骤，或停止本次任务。";
                     await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
                 }
 
@@ -410,6 +410,35 @@ namespace SmartWord.Application.Todo
                         board.SourcePlanFingerprint = activePlanFingerprint;
                     }
 
+                    await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
+                    return board;
+                }
+                case TodoBoardRecoveryDecision.SkipCurrentTodo:
+                {
+                    var board = await GetBoardAsync(normalizedDocumentPath, cancellationToken).ConfigureAwait(false);
+                    if (board == null)
+                    {
+                        throw new InvalidOperationException("当前不存在可跳过的 Todo Board。");
+                    }
+
+                    if (HasInFlightWriteStep(board))
+                    {
+                        board = RestoreBestTrustedBoardSnapshot(board) ?? board;
+                    }
+
+                    SkipCurrentTodoItem(board);
+                    board.ExecutionState = TodoBoardExecutionState.Idle;
+                    board.RecoveryReason = string.Empty;
+                    board.PauseReason = string.Empty;
+                    board.LastRunOutcome = TodoBoardRunOutcome.None;
+                    board.LastErrorSummary = string.Empty;
+                    if (!string.IsNullOrWhiteSpace(activePlanFingerprint))
+                    {
+                        board.SourcePlanFingerprint = activePlanFingerprint;
+                    }
+
+                    StampBoard(board);
+                    RefreshCommittedBoardSnapshot(board);
                     await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
                     return board;
                 }
@@ -929,6 +958,34 @@ namespace SmartWord.Application.Todo
             }
 
             return item.Id;
+        }
+
+        private static void SkipCurrentTodoItem(TodoBoard board)
+        {
+            if (board == null || board.Items == null || board.Items.Count == 0)
+            {
+                return;
+            }
+
+            var current = board.Items
+                .OrderBy(item => item.Order)
+                .FirstOrDefault(item => item.Status == TodoItemStatus.InProgress);
+            if (current == null)
+            {
+                current = board.Items
+                    .OrderBy(item => item.Order)
+                    .FirstOrDefault(item => item.Status == TodoItemStatus.Pending);
+            }
+
+            if (current == null)
+            {
+                return;
+            }
+
+            current.Status = TodoItemStatus.Skipped;
+            current.CompletedAt = DateTime.UtcNow;
+            current.UpdatedAt = DateTime.UtcNow;
+            AutoAdvanceNextPending(board);
         }
 
         private string RemoveItem(TodoBoard board, TodoWriteRequest request)

@@ -491,13 +491,11 @@ function getCancellationMessage() {
 
 function buildResumePrompt(decision) {
   switch (decision) {
-    case 'rebuild_from_active_plan':
-      return '请按当前计划重建任务板，并继续执行尚未完成的任务。';
-    case 'discard_and_create_empty':
-      return '请丢弃旧任务板并新建空板，然后根据当前目标继续执行。';
+    case 'skip_current_todo':
+      return '请跳过当前失败步骤，继续执行后续未完成的任务。';
     case 'recover_existing':
     default:
-      return '请继续执行当前未完成的任务，保持已完成进度，不要重复已经完成的步骤。';
+      return '请换一种方法继续尝试当前失败步骤，保持已完成进度，不要重复已经完成的步骤。';
   }
 }
 
@@ -507,8 +505,17 @@ async function resumePausedTodoRun(decision) {
     return;
   }
 
-  if (decision === 'rebuild_from_active_plan' && !chatStore.lastApprovedPlan) {
-    chatStore.appendAssistantMessage('当前没有可用于重建的计划，请先重新规划或直接继续现有任务。');
+  if (decision === 'stop_task') {
+    chatStore.setPendingTodoPauseSubmitting(true);
+    try {
+      await hostBridge.stopPausedTodoRun();
+      chatStore.clearPendingTodoPause();
+      chatStore.clearTodoBoard();
+      chatStore.appendAssistantMessage('已停止当前任务。已验证的修改会保留，当前失败步骤已回退，暂停任务板已清理。');
+    } catch (error) {
+      chatStore.setPendingTodoPauseSubmitting(false);
+      chatStore.appendAssistantMessage(`停止任务失败：${error.message || '未知错误'}`);
+    }
     return;
   }
 

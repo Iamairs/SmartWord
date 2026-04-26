@@ -9,6 +9,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Serilog;
 using SmartWord.AddIn.DI;
+using SmartWord.Application.Todo;
 using SmartWord.Core.Enums;
 using SmartWord.Core.Interfaces;
 using SmartWord.Core.Models;
@@ -309,7 +310,7 @@ namespace SmartWord.AddIn.TaskPane
                 return JsonConvert.SerializeObject(new
                 {
                     success = false,
-                    message = "恢复决策非法。允许值：recover_existing、rebuild_from_active_plan、discard_and_create_empty。"
+                    message = "恢复决策非法。允许值：recover_existing、rebuild_from_active_plan、discard_and_create_empty、skip_current_todo。"
                 });
             }
 
@@ -328,6 +329,41 @@ namespace SmartWord.AddIn.TaskPane
                 recoveryRequestId,
                 decision = decision ?? string.Empty
             });
+        }
+
+        public string StopPausedTodoRun()
+        {
+            try
+            {
+                var wordWrapper = ServiceLocator.GetRequiredService<WordApplicationWrapper>();
+                var todoManager = ServiceLocator.GetRequiredService<TodoManager>();
+                var documentPath = wordWrapper.GetActiveDocumentPath().GetAwaiter().GetResult();
+
+                if (string.IsNullOrWhiteSpace(documentPath))
+                {
+                    documentPath = todoManager.GetCurrentDocumentPathOrDefault();
+                }
+
+                todoManager
+                    .DiscardBoardAsync(documentPath, CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    message = "已停止当前任务并清理暂停 Todo Board。"
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "停止暂停任务并清理 Todo Board 失败。");
+                return JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
         }
 
         public void PostEventToJs(object agentEvent)
@@ -763,6 +799,11 @@ namespace SmartWord.AddIn.TaskPane
                     return true;
                 case "discard_and_create_empty":
                     decision = TodoBoardRecoveryDecision.DiscardAndCreateEmpty;
+                    return true;
+                case "skip_current_todo":
+                case "skip_current":
+                case "skip":
+                    decision = TodoBoardRecoveryDecision.SkipCurrentTodo;
                     return true;
                 default:
                     return false;

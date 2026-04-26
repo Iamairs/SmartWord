@@ -460,7 +460,7 @@ namespace SmartWord.Application.Orchestration
 
                 if (pendingWriteStep != null)
                 {
-                    var pauseMessage = "模型在当前写步骤仍待修复时提前停止输出，系统已回退当前步骤并暂停，等待你决定继续、重建或放弃。";
+                    var pauseMessage = "模型在当前写步骤仍待修复时提前停止输出，系统已回退当前步骤并暂停。你可以继续尝试、跳过此步骤，或停止本次任务。";
                     yield return CreatePendingWriteStateEvent(pendingWriteStep);
                     if (safeOptions.Mode == AgentMode.Agent && runStarted && _todoManager != null)
                     {
@@ -1033,7 +1033,7 @@ namespace SmartWord.Application.Orchestration
 
                             if (pendingWriteStep.RepairAttempts >= WriteRepairAttemptLimit)
                             {
-                                var pauseMessage = "当前写步骤已连续失败 3 次，系统已回退当前步骤并暂停，等待你决定继续、重建或放弃。";
+                                var pauseMessage = "当前写步骤已连续失败 3 次，系统已回退当前步骤并暂停。你可以继续尝试、跳过此步骤，或停止本次任务。";
                                 if (safeOptions.Mode == AgentMode.Agent && runStarted && _todoManager != null)
                                 {
                                     currentTodoBoard = await _todoManager
@@ -1144,7 +1144,7 @@ namespace SmartWord.Application.Orchestration
 
                         if (pendingWriteStep.RepairAttempts >= WriteRepairAttemptLimit)
                         {
-                            var pauseMessage = "当前写步骤已连续失败 3 次，系统已回退当前步骤并暂停，等待你决定继续、重建或放弃。";
+                            var pauseMessage = "当前写步骤已连续失败 3 次，系统已回退当前步骤并暂停。你可以继续尝试、跳过此步骤，或停止本次任务。";
                             if (safeOptions.Mode == AgentMode.Agent && runStarted && _todoManager != null)
                             {
                                 currentTodoBoard = await _todoManager
@@ -1318,7 +1318,7 @@ namespace SmartWord.Application.Orchestration
 
         if (pendingWriteStep != null)
         {
-            var pauseMessage = "当前写步骤尚未修复，系统已回退当前步骤并暂停，等待你决定继续、重建或放弃。";
+            var pauseMessage = "当前写步骤尚未修复，系统已回退当前步骤并暂停。你可以继续尝试、跳过此步骤，或停止本次任务。";
             yield return CreatePendingWriteStateEvent(pendingWriteStep);
             if (safeOptions.Mode == AgentMode.Agent && runStarted && _todoManager != null)
             {
@@ -1732,7 +1732,7 @@ namespace SmartWord.Application.Orchestration
             switch (mode)
             {
                 case AgentMode.Agent:
-                    return $"当前任务已达到本轮 {maxIterations} 轮预算上限，系统已暂停并保留 Todo Board。确认后可继续执行、按当前计划重建，或丢弃后重新开始。";
+                    return $"当前任务已达到本轮 {maxIterations} 轮预算上限，系统已暂停并保留 Todo Board。你可以继续尝试、跳过当前步骤，或停止本次任务。";
                 case AgentMode.Plan:
                     return $"当前规划已达到本轮 {maxIterations} 轮预算上限，但尚未生成最终计划。你可以继续补充信息后再次规划。";
                 case AgentMode.Ask:

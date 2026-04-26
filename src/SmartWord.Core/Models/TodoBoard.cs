@@ -35,7 +35,8 @@ namespace SmartWord.Core.Models
     {
         RecoverExisting = 0,
         RebuildFromActivePlan = 1,
-        DiscardAndCreateEmpty = 2
+        DiscardAndCreateEmpty = 2,
+        SkipCurrentTodo = 3
     }
 
     /// <summary>
