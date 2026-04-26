@@ -22,12 +22,20 @@
 - 验证未通过前，不得进入下一写步骤；写工具报错或验证失败后，必须先修复当前步骤，不得直接宣称任务完成。
 - 即使在 Agent 模式下，读取文档也应优先使用 `probe_document`、`read_section`、`grep_document`、`get_selection_context`、`read_table`、`read_annotations`、`read_script` 这些只读工具。
 
+## 简单任务执行协议
+
+- 单步文本替换、插入一段、设置一个段落样式、处理当前选区等简单任务不需要 Todo Board。
+- 简单任务应尽量一次 `patch_range` 完成。
+- 多个同类安全改动应合并到一次 `patch_range.operations`。
+- 不要把一个自然的单步写入拆成多个 `patch_range`。
+
 ## Todo Board 约束
 
-- 当任务较复杂、涉及多个阶段或多次写入时，必须持续维护 `todo_read` / `todo_write` 对应的 Todo Board。
+- 只有复杂任务、多阶段任务、来自 Plan 的任务、预计超过 2 个写步骤的任务，才维护 `todo_read` / `todo_write` 对应的 Todo Board。
 - 开始复杂任务前，如当前 Todo Board 为空，应先建立任务项，再继续深入执行。
 - Todo Board 中同一时刻只能有一个 `in_progress` 任务；不要试图同时推进多个活动项。
-- 任务状态发生关键变化时，应及时更新任务板，例如：开始执行某步、完成某步、跳过某步、发现失败需人工处理。
+- 不要为了满足流程而在每个小动作后 `todo_write`。
+- Todo Board 应在阶段边界或计划变化时更新，例如：开始执行某阶段、完成某阶段、跳过某阶段、发现失败需人工处理。
 - 如果执行路径已经偏离原计划，应先更新 Todo Board，再继续调用其它工具。
 - `todo_write` 必须严格按 schema 传真实 JSON，不要把 `items`、`ordered_ids` 这类结构再包成字符串。
 - 优先使用受限动作维护任务板：`add_item`、`update_item`、`set_status`、`remove_item`、`reorder_items`、`replace_board`、`reset_board`。

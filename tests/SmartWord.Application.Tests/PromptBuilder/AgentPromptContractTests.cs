@@ -30,6 +30,22 @@ namespace SmartWord.Application.Tests.PromptBuilder
             Assert.Contains("Convert.ToBoolean(...)", prompt);
         }
 
+        [Fact]
+        public void PromptFiles_包含工具克制和简单任务协议()
+        {
+            var systemPrompt = ReadPromptFile("SYSTEM.md");
+            var agentPrompt = ReadPromptFile("AGENT.md");
+            var askPrompt = ReadPromptFile("ASK.md");
+            var planPrompt = ReadPromptFile("PLAN.md");
+
+            Assert.Contains("能直接回答时不要调用工具", systemPrompt);
+            Assert.Contains("简单任务不需要 Todo Board", agentPrompt);
+            Assert.Contains("同类安全改动应合并到一次 `patch_range.operations`", agentPrompt);
+            Assert.Contains("不要把它当作所有问题的固定第一步", askPrompt);
+            Assert.DoesNotContain("每次新任务必须首先调用 probe_document", agentPrompt);
+            Assert.Contains("不要把微小操作拆成过细 Todo", planPrompt);
+        }
+
         private static string ReadPromptFile(string fileName)
         {
             var current = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
