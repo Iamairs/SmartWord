@@ -1,33 +1,42 @@
-# 当前需求说明：自动验证结果改为内部观察消息
+# 当前需求说明：验证托管与内部观察架构完善
 
 ## 1. 背景
 
-Agent 写入链路会在 `patch_range` / `execute_script` 成功后执行系统自动验证，确保写步骤只有在验证通过后才提交。此前自动验证结果通过 `AppendToolResultAsync` 写入对话历史，导致它被保存为 `role=tool` 消息。
+SmartWord Agent 写入链路已经从“模型自由写入”升级为“写步骤级提交 + 系统自动验证 + 当前步回滚 + 暂停决策”。最近已修复自动验证结果被写成孤立 `role=tool` 的协议问题，改为用 `role=user` 内部观察消息反馈给模型。
 
-这与 OpenAI 兼容工具协议冲突：`role=tool` 必须回应上一条模型生成的 `assistant.tool_calls`。自动验证是系统内部动作，不是模型主动发起的工具调用，因此会形成孤立 tool 消息，并在下一轮 LLM 请求前触发保护错误。
+但当前实现仍有几个架构边界需要收敛：
 
-## 2. 当前需求
+1. 内部观察在领域层仍只是普通 `user` 消息，缺少语义标记。
+2. 自动验证失败观察在回滚前生成，文案只能写“已经或即将回退”，不够确定。
+3. 自动验证成功和失败使用同一套较长消息，成功路径上下文成本偏高。
+4. `verify_script` 应保持“系统内部工具”定位，模型只提交写入和验证计划，不直接调用验证工具。
 
-采用方案 A：自动验证结果作为 `role=user` 内部观察消息进入 LLM 上下文。
+## 2. 当前目标
 
-具体要求：
+一次性落实 8 条改进建议：
 
-1. 模型真实发起的 `patch_range` / `execute_script` 工具结果继续按 `role=tool` 写入。
-2. 系统自动验证结果不再调用 `AppendToolResultAsync`，不再产生 `__auto_verify` 的 tool 历史。
-3. 自动验证通过时，向模型提示当前写步骤已验证通过并提交，要求继续后续 Todo。
-4. 自动验证失败或验证工具执行失败时，向模型提供验证结论、验证输出和下一步修复要求。
-5. 补充测试，确认下一轮 LLM messages 中没有孤立 `__auto_verify` tool 消息，且模型能看到失败原因。
+1. 保留自动验证结果进入 LLM 上下文的方案 A。
+2. 保留模型真实工具调用继续使用合法 `role=tool`。
+3. 保留严格 tool 协议校验，不放宽孤立 tool 检查。
+4. 确认并测试 `verify_script` 只作为系统内部工具，不暴露给模型工具列表。
+5. 明确 `execute_script` / `patch_range` 的验证计划契约：模型提交写入和验证计划，系统执行验证。
+6. 自动验证成功消息短，失败/异常消息详细。
+7. 引入 `InternalObservation` 元数据，避免系统内部观察在领域层被误认为普通用户输入。
+8. 失败观察在当前步回滚完成后再写入，成功观察在提交完成后再写入，给模型确定的文档状态。
 
 ## 3. 设计决策
 
-- 内部观察使用 `role=user`，而不是中途插入 `role=system`，以兼容更多 OpenAI-compatible 服务。
-- 不伪造 synthetic `assistant.tool_calls`，避免把系统内部动作伪装成模型行为。
-- 观察消息保留结构化标题 `[SmartWord 自动验证结果]`，便于模型识别这不是用户新增需求。
-- 验证输出做长度截断，避免异常堆栈或验证 JSON 过长污染上下文。
+- SmartWord 内部消息语义新增 `IsInternalObservation` 与 `InternalObservationKind`，Provider 适配层仍把它映射为 `role=user`。
+- 自动验证执行方法只返回 `AutoVerifyOutcome`，不直接写上下文；外层根据提交/回滚结果追加观察。
+- 自动验证通过观察只保留“已提交 + 继续后续 Todo”的短提示。
+- 自动验证失败观察保留验证结论、验证输出和“当前失败步骤已回退”的确定性提示。
+- `verify_script` 继续注册到 `ToolRegistry`，以便系统内部调用；但必须保持 `IsVisibleToModel=false`，不出现在 LLM tools payload 中。
 
 ## 4. 交付范围
 
-- 修改 `AgentOrchestrator.ExecuteAutoVerifyAsync` 的历史写入方式。
-- 新增内部观察消息追加和自动验证观察消息构建逻辑。
-- 补充 AgentOrchestrator 自动验证通过/失败的协议安全测试。
-- 更新 `docs/plan_cur.md` 和 `docs/已实现的功能.md`。
+- Core：扩展 `AgentMessage` 内部观察元数据。
+- Infrastructure / Application 测试辅助：复制消息时保留内部观察元数据。
+- Application：重构自动验证观察写入时机与内容；保持真实工具调用协议不变。
+- Prompt / 文档：明确模型不调用 `verify_script`，而是在写工具中提交验证计划。
+- Tests：覆盖内部观察元数据、验证通过/失败上下文、`verify_script` 模型不可见。
+- Docs：更新当前计划与已实现功能。

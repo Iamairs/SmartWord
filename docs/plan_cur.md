@@ -1,45 +1,95 @@
 # Todo List
 
-- [x] P0 定位孤立 tool 消息来源
-- [x] P1 将自动验证结果改为 `role=user` 内部观察消息
-- [x] P2 保留模型真实工具调用的 `role=tool` 写入
-- [x] P3 自动验证失败时向模型暴露验证结论与输出
-- [x] P4 补充自动验证协议安全测试
-- [x] P5 运行后端测试
-- [x] P6 更新已实现功能文档
-- [x] P7 精准提交本需求相关文件
+- [x] P0 写入本轮需求说明和总体实施计划
+- [ ] P1 引入内部观察消息元数据并更新复制链路
+- [ ] P2 重构自动验证观察写入时机：提交/回滚完成后再追加
+- [ ] P3 调整自动验证观察内容：成功短消息、失败详细消息
+- [ ] P4 确认并测试 `verify_script` 模型不可见但系统可调用
+- [ ] P5 补强写工具验证计划契约文档和提示词
+- [ ] P6 补充/更新自动化测试
+- [ ] P7 运行后端测试与必要构建检查
+- [ ] P8 更新 `docs/已实现的功能.md`
+- [ ] P9 按子目标分多次精准提交 git
 
-# 实施计划：自动验证结果不再写成 tool 消息
+# 实施计划：验证托管与内部观察架构完善
 
-## 1. 目标
+## 1. 总体目标
 
-修复自动验证结果被保存为孤立 `role=tool` 消息的问题，避免下一轮 LLM 请求被协议校验拦截，同时保留模型对验证结果的可见性。
+把验证链路正式收敛为：
 
-## 2. 实施步骤
+```text
+模型提交写入方案 + 验证计划
+系统执行写入
+系统执行验证
+系统提交或回滚当前步骤
+系统把确定的验证观察反馈给模型
+模型继续后续步骤或修复当前步骤
+```
 
-1. 在 `AgentOrchestrator` 中新增内部观察消息追加方法。
-2. 修改 `ExecuteAutoVerifyAsync`：
-   - 自动验证通过时，追加 `[SmartWord 自动验证结果]` 用户观察消息。
-   - 自动验证未通过时，追加验证结论和验证输出。
-   - 验证工具不可用、缺少验证计划或验证无法执行时，也追加可读原因。
-   - 不再对自动验证调用 `AppendToolResultAsync`。
-3. 新增自动验证观察消息构建方法，统一输出：
-   - 当前写步骤。
-   - 验证工具。
-   - 验证状态。
-   - 验证结论。
-   - 验证输出。
-   - 下一步要求。
-4. 补充测试：
-   - 自动验证通过后，下一轮请求不包含 `write-1__auto_verify` tool 消息，并包含内部观察。
-   - 自动验证失败后，下一轮请求能看到失败 hint / actual / expected，并且没有孤立 tool。
+模型不直接操作 `verify_script`；`verify_script` 是系统内部只读验证执行器。
 
-## 3. 验证
+## 2. 子提交规划
 
-- `dotnet test tests\SmartWord.Application.Tests\SmartWord.Application.Tests.csproj --no-restore`
+### Commit 1：文档计划
 
-## 4. 注意事项
+- 写入 `docs/project_cur.md`。
+- 写入 `docs/plan_cur.md`。
 
-- 本轮不放宽 `OpenAiCompatibleClient` 的 tool 协议校验。
-- 本轮不伪造 synthetic assistant tool call。
-- 已存在于旧运行内存历史中的孤立 tool 需要重启插件或清理会话才能完全消除；本次修复保证新运行不再继续制造该类消息。
+### Commit 2：内部观察元数据
+
+- 在 `AgentMessage` 增加：
+  - `IsInternalObservation`
+  - `InternalObservationKind`
+- 更新消息克隆路径：
+  - `AgentOrchestrator.CloneMessage`
+  - `InMemoryConversationStore.CloneMessage`
+  - `ConversationCompressor.CloneMessage`
+  - 测试里的 Fake store / Fake LLM clone。
+- `AppendInternalObservationAsync` 设置元数据：
+  - `Role = "user"`
+  - `IsInternalObservation = true`
+  - `InternalObservationKind = "auto_verify_result"`
+
+### Commit 3：自动验证提交/回滚后观察
+
+- `ExecuteAutoVerifyAsync` 只执行验证并返回 `AutoVerifyOutcome`，不直接追加观察。
+- 自动验证通过：
+  - 先提交写步骤 Undo。
+  - 再追加短内部观察：该步骤已验证通过并提交，继续后续 Todo。
+- 自动验证失败：
+  - 先回滚当前写步骤。
+  - 再追加详细内部观察：当前失败步骤已回退、验证结论、验证输出、修复要求。
+- 无验证计划 / 验证工具不可用等失败也走详细观察。
+
+### Commit 4：工具可见性与契约
+
+- 确认 `VerifyScriptTool.IsVisibleToModel == false`。
+- 增加或强化测试：Agent 模式工具定义不包含 `verify_script`，但编排器仍能内部执行 `verify_script`。
+- 更新 AGENT prompt 和功能文档，明确：
+  - 不主动调用 `verify_script`。
+  - `execute_script` 必须提供 `write_code + verify_code`。
+  - `patch_range` 默认由系统构建基础验证；复杂/不可靠验证场景应改用 `execute_script + verify_code`。
+
+### Commit 5：测试与功能文档
+
+- 更新自动验证通过/失败测试，断言：
+  - 下一轮请求没有 `__auto_verify` tool。
+  - 内部观察含 `IsInternalObservation=true`。
+  - 成功观察简短且包含“已提交”。
+  - 失败观察包含“已回退”和详细失败原因。
+- 运行：
+  - `dotnet test tests\SmartWord.Application.Tests\SmartWord.Application.Tests.csproj --no-restore`
+- 更新 `docs/已实现的功能.md`。
+
+## 3. 验证要求
+
+- 不放宽 `OpenAiCompatibleClient` 的 tool 协议校验。
+- 不伪造 synthetic assistant tool call。
+- 保证真实模型工具调用仍以 `assistant.tool_calls -> tool` 成对进入历史。
+- 保证自动验证内部结果不再生成 `role=tool`。
+
+## 4. 风险与边界
+
+- 旧运行内存里已经存在的孤立 `__auto_verify` tool 消息无法靠本次代码自动清除；需要重启插件或清理当前会话。
+- 本轮不改变前端展示内部观察的策略；内部观察主要用于 LLM 上下文，不作为普通用户气泡主动展示。
+- 本轮不改变 Word 文档内容比对策略，只完善写后验证和状态反馈链路。
