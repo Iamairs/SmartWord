@@ -1,33 +1,33 @@
-# 当前需求说明：写步骤连续失败后的暂停决策简化
+# 当前需求说明：自动验证结果改为内部观察消息
 
 ## 1. 背景
 
-Agent 模式采用“步骤级提交 + 当前步回滚 + 暂停决策”的写入策略。当前写步骤连续失败 3 次、模型在待修复状态下提前停止，或 Agent 命中固定轮次预算时，系统会保留之前已验证提交的文档修改，回滚当前失败步骤，并向前端展示暂停决策面板。
+Agent 写入链路会在 `patch_range` / `execute_script` 成功后执行系统自动验证，确保写步骤只有在验证通过后才提交。此前自动验证结果通过 `AppendToolResultAsync` 写入对话历史，导致它被保存为 `role=tool` 消息。
 
-旧版暂停面板把“继续执行当前任务 / 按当前计划重建 / 丢弃并新建空板”直接暴露给用户。对小白用户而言，“按当前计划重建”和“丢弃并新建空板”语义偏系统内部，容易误解为会影响文档内容，也会在失败时增加不必要的选择负担。
+这与 OpenAI 兼容工具协议冲突：`role=tool` 必须回应上一条模型生成的 `assistant.tool_calls`。自动验证是系统内部动作，不是模型主动发起的工具调用，因此会形成孤立 tool 消息，并在下一轮 LLM 请求前触发保护错误。
 
 ## 2. 当前需求
 
-将写步骤失败后的暂停面板简化为用户可理解的三种动作：
+采用方案 A：自动验证结果作为 `role=user` 内部观察消息进入 LLM 上下文。
 
-1. `继续尝试`：恢复最近可信任务板，让 Agent 换一种方法继续当前失败步骤。
-2. `跳过此步骤`：把当前失败或待处理 Todo 标记为 `Skipped`，自动推进到后续待办并继续执行。
-3. `停止任务`：结束本次暂停任务，保留已验证文档修改，清理当前文档的暂停 Todo Board，避免旧任务板下次再次干扰。
+具体要求：
 
-本轮不增加“更多选项”，也不再在暂停面板展示“按当前计划重建”和“丢弃并新建空板”。
+1. 模型真实发起的 `patch_range` / `execute_script` 工具结果继续按 `role=tool` 写入。
+2. 系统自动验证结果不再调用 `AppendToolResultAsync`，不再产生 `__auto_verify` 的 tool 历史。
+3. 自动验证通过时，向模型提示当前写步骤已验证通过并提交，要求继续后续 Todo。
+4. 自动验证失败或验证工具执行失败时，向模型提供验证结论、验证输出和下一步修复要求。
+5. 补充测试，确认下一轮 LLM messages 中没有孤立 `__auto_verify` tool 消息，且模型能看到失败原因。
 
 ## 3. 设计决策
 
-- 暂停面板面向“当前失败步骤”的恢复体验，按钮必须是业务语义，而不是底层 Todo Board 恢复语义。
-- `skip_current_todo` 作为新的后端恢复决策保留在协议中，由前端“跳过此步骤”触发。
-- “停止任务”不进入 LLM 主循环，不创建新的 Agent 请求，只调用宿主桥接清理当前文档 Todo Board 并关闭暂停面板。
-- 历史异常恢复面板 `TodoBoardRecoveryPanel` 暂不在本轮删除，因为它处理的是应用崩溃、JSON 损坏、旧运行残留等启动恢复场景，不等同于写步骤失败暂停场景。
+- 内部观察使用 `role=user`，而不是中途插入 `role=system`，以兼容更多 OpenAI-compatible 服务。
+- 不伪造 synthetic `assistant.tool_calls`，避免把系统内部动作伪装成模型行为。
+- 观察消息保留结构化标题 `[SmartWord 自动验证结果]`，便于模型识别这不是用户新增需求。
+- 验证输出做长度截断，避免异常堆栈或验证 JSON 过长污染上下文。
 
 ## 4. 交付范围
 
-- Core：新增 `TodoBoardRecoveryDecision.SkipCurrentTodo`。
-- Application：`TodoManager.ResolveRecoveryAsync` 支持跳过当前 Todo，并维护可信快照；Agent 暂停提示文案改为继续/跳过/停止。
-- AddIn：WebViewBridge 支持解析 `skip_current_todo`，并提供停止暂停任务的 Todo 清理入口。
-- Web：暂停面板只展示 `继续尝试 / 跳过此步骤 / 停止任务`；停止任务时调用后端清理。
-- Tests：补充 TodoManager 与 AgentOrchestrator 的跳过当前 Todo 行为测试。
-- Docs：更新当前规划与已实现功能说明。
+- 修改 `AgentOrchestrator.ExecuteAutoVerifyAsync` 的历史写入方式。
+- 新增内部观察消息追加和自动验证观察消息构建逻辑。
+- 补充 AgentOrchestrator 自动验证通过/失败的协议安全测试。
+- 更新 `docs/plan_cur.md` 和 `docs/已实现的功能.md`。

@@ -1193,6 +1193,125 @@ namespace SmartWord.Application.Tests.Orchestration
         }
 
         [Fact]
+        public async Task RunAsync_AutoVerifyPassed_AppendsUserObservationWithoutOrphanToolMessage()
+        {
+            var llmClient = new FakeLlmClient(
+                CreateToolCallMessage(
+                    CreateToolCall("write-1", "execute_script", "{\"description\":\"调整标题\",\"write_code\":\"ok\",\"verify_code\":\"return new { all_passed = true, results = new object[0] };\"}")),
+                new AgentMessage
+                {
+                    Role = "assistant",
+                    Content = "继续后续任务。"
+                });
+            var writeTool = new FakeTool(
+                "execute_script",
+                ToolPermission.Write,
+                ToolCallResult.Ok(
+                    "{\"success\":true}",
+                    new[] { 0 },
+                    operationDescription: "已调整标题。"));
+            var verifyTool = new FakeTool(
+                "verify_script",
+                ToolPermission.ReadOnly,
+                ToolCallResult.Ok(
+                    "{\"all_passed\":true,\"results\":[]}",
+                    new[] { 0 },
+                    operationDescription: "已完成改动验证。"));
+            var conversationStore = new InMemoryConversationStore();
+            var orchestrator = CreateOrchestrator(
+                llmClient,
+                CreateWritableHydrator(),
+                new ITool[] { writeTool, verifyTool },
+                new FakeConfirmationChannel(true, true),
+                conversationStore: conversationStore);
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "请调整标题格式",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Agent,
+                    EnableToolCalling = true,
+                    RequireConfirmationForScripts = true
+                },
+                CancellationToken.None));
+
+            Assert.Contains(events, item => item.Type == AgentEventType.ChangeApplied);
+            Assert.Contains(events, item => item.Type == AgentEventType.TaskCompleted);
+            Assert.True(llmClient.RequestMessageSnapshots.Count >= 2);
+            var nextRequestMessages = llmClient.RequestMessageSnapshots[1];
+            Assert.DoesNotContain(nextRequestMessages, item =>
+                string.Equals(item.Role, "tool", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(item.ToolCallId, "write-1__auto_verify", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(nextRequestMessages, item =>
+                string.Equals(item.Role, "user", StringComparison.OrdinalIgnoreCase)
+                && item.Content.Contains("[SmartWord 自动验证结果]")
+                && item.Content.Contains("自动验证通过"));
+
+            var history = await conversationStore.GetHistoryAsync("doc1", CancellationToken.None);
+            Assert.DoesNotContain(history, item =>
+                string.Equals(item.Role, "tool", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(item.ToolCallId, "write-1__auto_verify", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
+        public async Task RunAsync_AutoVerifyFailed_ExposesFailureReasonToNextModelTurn()
+        {
+            var failedVerificationOutput =
+                "{\"all_passed\":false,\"results\":[{\"check_key\":\"heading_style\",\"passed\":false,\"actual\":\"正文\",\"expected\":\"标题 1\",\"hint\":\"第 3 段样式未被改成标题 1\"}]}";
+            var llmClient = new FakeLlmClient(
+                CreateToolCallMessage(
+                    CreateToolCall("write-1", "execute_script", "{\"description\":\"调整标题\",\"write_code\":\"ok\",\"verify_code\":\"return new { all_passed = false };\"}")),
+                new AgentMessage
+                {
+                    Role = "assistant",
+                    Content = "需要修复。"
+                });
+            var writeTool = new FakeTool(
+                "execute_script",
+                ToolPermission.Write,
+                ToolCallResult.Ok(
+                    "{\"success\":true}",
+                    new[] { 2 },
+                    operationDescription: "已调整标题。"));
+            var verifyTool = new FakeTool(
+                "verify_script",
+                ToolPermission.ReadOnly,
+                ToolCallResult.Ok(
+                    failedVerificationOutput,
+                    new[] { 2 },
+                    operationDescription: "验证标题样式。"));
+            var orchestrator = CreateOrchestrator(
+                llmClient,
+                CreateWritableHydrator(),
+                new ITool[] { writeTool, verifyTool },
+                new FakeConfirmationChannel(true, true));
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "请调整标题格式",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Agent,
+                    EnableToolCalling = true,
+                    RequireConfirmationForScripts = true
+                },
+                CancellationToken.None));
+
+            Assert.Contains(events, item => item.Type == AgentEventType.ChangeVerificationFailed);
+            Assert.True(llmClient.RequestMessageSnapshots.Count >= 2);
+            var nextRequestMessages = llmClient.RequestMessageSnapshots[1];
+            var observation = Assert.Single(nextRequestMessages.Where(item =>
+                string.Equals(item.Role, "user", StringComparison.OrdinalIgnoreCase)
+                && item.Content.Contains("[SmartWord 自动验证结果]")));
+            Assert.Contains("未通过验证", observation.Content);
+            Assert.Contains("第 3 段样式未被改成标题 1", observation.Content);
+            Assert.Contains("正文", observation.Content);
+            Assert.Contains("标题 1", observation.Content);
+            Assert.DoesNotContain(nextRequestMessages, item =>
+                string.Equals(item.Role, "tool", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(item.ToolCallId, "write-1__auto_verify", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
         public async Task RunAsync_FirstWriteCommitted_SecondWriteFailed_OnlyCurrentStepRollsBack()
         {
             var llmClient = new FakeLlmClient(

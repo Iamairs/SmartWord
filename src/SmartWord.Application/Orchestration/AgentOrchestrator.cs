@@ -1425,6 +1425,31 @@ namespace SmartWord.Application.Orchestration
             });
         }
 
+        private async Task AppendInternalObservationAsync(
+            string documentPath,
+            IList<AgentMessage> messages,
+            string content,
+            CancellationToken cancellationToken)
+        {
+            // 系统内部观察不是模型发起的工具结果，必须用普通消息进入上下文，避免产生孤立 tool 消息。
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                return;
+            }
+
+            var message = new AgentMessage
+            {
+                Role = "user",
+                Content = content.Trim()
+            };
+
+            await _conversationStore
+                .AppendUserMessageAsync(documentPath, message, cancellationToken)
+                .ConfigureAwait(false);
+
+            messages.Add(CloneMessage(message));
+        }
+
         private async Task AppendSkippedRemainingToolCallsAsync(
             string documentPath,
             IList<AgentMessage> messages,
@@ -2201,13 +2226,32 @@ namespace SmartWord.Application.Orchestration
 
             if (pendingWriteStep.State != PendingWriteState.AwaitingVerification)
             {
+                var failureMessage = "当前写步骤不处于待验证状态，无法自动补验证。";
+                await AppendAutoVerifyObservationAsync(
+                        documentPath,
+                        messages,
+                        pendingWriteStep,
+                        null,
+                        null,
+                        failureMessage,
+                        cancellationToken)
+                    .ConfigureAwait(false);
                 return AutoVerifyOutcome.CreateFailed(
-                    "当前写步骤不处于待验证状态，无法自动补验证。",
+                    failureMessage,
                     "当前写步骤状态异常，任务已中止。");
             }
 
             if (!pendingWriteStep.HasAutoVerifyPlan)
             {
+                await AppendAutoVerifyObservationAsync(
+                        documentPath,
+                        messages,
+                        pendingWriteStep,
+                        null,
+                        null,
+                        pendingWriteStep.VerificationFailureReason,
+                        cancellationToken)
+                    .ConfigureAwait(false);
                 return AutoVerifyOutcome.CreateFailed(
                     pendingWriteStep.VerificationFailureReason,
                     "当前写步骤缺少可执行的验证输入，当前步骤待修复。");
@@ -2216,8 +2260,18 @@ namespace SmartWord.Application.Orchestration
             var verifyTool = _toolRegistry.GetTool(pendingWriteStep.VerificationToolName);
             if (verifyTool == null)
             {
+                var failureMessage = "系统未找到内部验证工具实现，当前步骤待修复。";
+                await AppendAutoVerifyObservationAsync(
+                        documentPath,
+                        messages,
+                        pendingWriteStep,
+                        null,
+                        null,
+                        failureMessage,
+                        cancellationToken)
+                    .ConfigureAwait(false);
                 return AutoVerifyOutcome.CreateFailed(
-                    "系统未找到内部验证工具实现，当前步骤待修复。",
+                    failureMessage,
                     "系统内部验证工具不可用，当前步骤待修复。");
             }
 
@@ -2262,7 +2316,15 @@ namespace SmartWord.Application.Orchestration
                     Truncate(ex.ToString(), ToolErrorMessageMaxLength));
             }
 
-            await AppendToolResultAsync(documentPath, messages, autoVerifyCall, executionResult, cancellationToken)
+            var verificationFailureMessage = BuildVerificationFailureMessage(executionResult);
+            await AppendAutoVerifyObservationAsync(
+                    documentPath,
+                    messages,
+                    pendingWriteStep,
+                    autoVerifyCall,
+                    executionResult,
+                    verificationFailureMessage,
+                    cancellationToken)
                 .ConfigureAwait(false);
 
             if (executionResult.Success && TryGetVerificationAllPassed(executionResult.Output, out var allPassed) && allPassed)
@@ -2274,11 +2336,103 @@ namespace SmartWord.Application.Orchestration
             }
 
             return AutoVerifyOutcome.CreateFailed(
-                BuildVerificationFailureMessage(executionResult),
+                verificationFailureMessage,
                 "当前写步骤的验证未通过，当前步骤待修复。",
                 autoVerifyCall,
                 executionResult,
                 pendingWriteStep.VerificationOperationDescription);
+        }
+
+        private async Task AppendAutoVerifyObservationAsync(
+            string documentPath,
+            IList<AgentMessage> messages,
+            PendingWriteStep pendingWriteStep,
+            ToolCall autoVerifyCall,
+            ToolCallResult executionResult,
+            string verificationMessage,
+            CancellationToken cancellationToken)
+        {
+            var observation = BuildAutoVerifyObservationMessage(
+                pendingWriteStep,
+                autoVerifyCall,
+                executionResult,
+                verificationMessage);
+
+            await AppendInternalObservationAsync(documentPath, messages, observation, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        private static string BuildAutoVerifyObservationMessage(
+            PendingWriteStep pendingWriteStep,
+            ToolCall autoVerifyCall,
+            ToolCallResult executionResult,
+            string verificationMessage)
+        {
+            var allPassed = executionResult != null
+                && executionResult.Success
+                && TryGetVerificationAllPassed(executionResult.Output, out var parsedAllPassed)
+                && parsedAllPassed;
+            var builder = new StringBuilder();
+            builder.AppendLine("[SmartWord 自动验证结果]");
+            builder.AppendLine("系统已在写操作后执行自动验证。这不是用户的新需求，而是当前写步骤的内部观察结果。");
+            builder.AppendLine();
+            builder.AppendLine("当前写步骤：");
+            builder.AppendLine("- " + (pendingWriteStep == null || string.IsNullOrWhiteSpace(pendingWriteStep.OperationDescription)
+                ? "未提供操作说明"
+                : pendingWriteStep.OperationDescription.Trim()));
+            builder.AppendLine();
+            builder.AppendLine("验证工具：");
+            builder.AppendLine("- " + (autoVerifyCall == null || string.IsNullOrWhiteSpace(autoVerifyCall.Name)
+                ? "未执行"
+                : autoVerifyCall.Name.Trim()));
+            builder.AppendLine();
+            builder.AppendLine("验证状态：");
+            if (allPassed)
+            {
+                builder.AppendLine("- 当前写步骤已自动验证通过并提交。");
+            }
+            else if (executionResult == null)
+            {
+                builder.AppendLine("- 自动验证未能执行。");
+            }
+            else if (!executionResult.Success)
+            {
+                builder.AppendLine("- 验证工具执行失败。");
+            }
+            else
+            {
+                builder.AppendLine("- 验证工具已执行，但当前写步骤未通过验证。");
+            }
+
+            if (!string.IsNullOrWhiteSpace(verificationMessage))
+            {
+                builder.AppendLine();
+                builder.AppendLine("验证结论：");
+                builder.AppendLine(verificationMessage.Trim());
+            }
+
+            if (executionResult != null && !string.IsNullOrWhiteSpace(executionResult.Output))
+            {
+                builder.AppendLine();
+                builder.AppendLine("验证输出：");
+                builder.AppendLine(Truncate(executionResult.Output, 2000));
+            }
+
+            builder.AppendLine();
+            builder.AppendLine("下一步要求：");
+            if (allPassed)
+            {
+                builder.AppendLine("- 请继续执行后续 Todo，不要重复刚刚完成且已验证通过的修改。");
+            }
+            else
+            {
+                builder.AppendLine("- 当前失败写步骤已经或即将被系统回退，之前已验证通过的步骤保持不变。");
+                builder.AppendLine("- 请基于上面的验证结论和验证输出修复当前步骤。");
+                builder.AppendLine("- 修复时优先使用更小范围、更稳妥的写操作，不要重复已经完成的前序 Todo。");
+                builder.AppendLine("- 修复后仍必须通过验证。");
+            }
+
+            return builder.ToString();
         }
 
         private static string BuildPatchRangeAutoVerifyInput(JArray checks)
