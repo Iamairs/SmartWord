@@ -146,6 +146,14 @@ namespace SmartWord.Application.Todo
                 await _todoStore.SaveBoardAsync(board, cancellationToken).ConfigureAwait(false);
             }
 
+            if (ShouldRebuildIdleBoardFromActivePlan(board, activePlan, planFingerprint))
+            {
+                var rebuiltBoard = CreateBoardFromExecutionPlan(normalizedDocumentPath, activePlan);
+                rebuiltBoard.SourcePlanFingerprint = planFingerprint;
+                await _todoStore.SaveBoardAsync(rebuiltBoard, cancellationToken).ConfigureAwait(false);
+                return CreateReadyPreparationResult(rebuiltBoard, activePlan, planFingerprint);
+            }
+
             return CreateReadyPreparationResult(board, activePlan, planFingerprint);
         }
 
@@ -1220,6 +1228,29 @@ namespace SmartWord.Application.Todo
             return ex != null
                 && !string.IsNullOrWhiteSpace(ex.Message)
                 && ex.Message.IndexOf(CorruptedBoardMessage, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool ShouldRebuildIdleBoardFromActivePlan(
+            TodoBoard board,
+            ExecutionPlan activePlan,
+            string activePlanFingerprint)
+        {
+            if (board == null
+                || activePlan == null
+                || string.IsNullOrWhiteSpace(activePlanFingerprint))
+            {
+                return false;
+            }
+
+            if (board.ExecutionState != TodoBoardExecutionState.Idle)
+            {
+                return false;
+            }
+
+            return !string.Equals(
+                board.SourcePlanFingerprint ?? string.Empty,
+                activePlanFingerprint,
+                StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool HasInFlightWriteStep(TodoBoard board)

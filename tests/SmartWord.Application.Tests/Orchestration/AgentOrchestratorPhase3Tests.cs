@@ -196,6 +196,61 @@ namespace SmartWord.Application.Tests.Orchestration
         }
 
         [Fact]
+        public async Task RunAsync_AgentModeWithNewActivePlan_DoesNotReuseCompletedIdleTodoBoard()
+        {
+            var todoStore = new FakeTodoStore();
+            await todoStore.SaveBoardAsync(
+                new TodoBoard
+                {
+                    SchemaVersion = TodoBoard.CurrentSchemaVersion,
+                    BoardId = "board-old",
+                    DocumentPath = "doc1",
+                    ExecutionState = TodoBoardExecutionState.Idle,
+                    SourcePlanFingerprint = "old-plan-fingerprint",
+                    Items = new List<TodoBoardItem>
+                    {
+                        new TodoBoardItem { Id = "O1", Content = "旧任务一", Status = TodoItemStatus.Completed, Order = 1 },
+                        new TodoBoardItem { Id = "O2", Content = "旧任务二", Status = TodoItemStatus.Completed, Order = 2 }
+                    }
+                },
+                CancellationToken.None);
+
+            var orchestrator = CreateOrchestrator(
+                new FakeLlmClient(new AgentMessage
+                {
+                    Role = "assistant",
+                    Content = "任务已执行完成。"
+                }),
+                CreateWritableHydrator(),
+                todoStore: todoStore);
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "请执行当前新计划",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Agent,
+                    EnableToolCalling = true,
+                    ActivePlan = new ExecutionPlan
+                    {
+                        TaskDescription = "新计划",
+                        TodoList = new List<TodoItem>
+                        {
+                            new TodoItem { Description = "新步骤一" },
+                            new TodoItem { Description = "新步骤二" }
+                        }
+                    }
+                },
+                CancellationToken.None));
+
+            var readyEvent = Assert.Single(events.Where(item => item.Type == AgentEventType.TodoBoardReady));
+            Assert.Equal("T1", readyEvent.CurrentTodoId);
+            Assert.Contains("新步骤一", readyEvent.BoardJson);
+            Assert.DoesNotContain("旧任务一", readyEvent.BoardJson);
+            Assert.Contains(events, item => item.Type == AgentEventType.TaskCompleted);
+            Assert.False(todoStore.Exists("doc1"));
+        }
+
+        [Fact]
         public async Task RunAsync_AskModeHitsIterationBudget_EmitsMaxIterationsReachedAndDoesNotEmitTaskCompleted()
         {
             var llmClient = new LoopingToolLlmClient("probe_document", "{}");

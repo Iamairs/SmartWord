@@ -228,6 +228,60 @@ namespace SmartWord.Application.Tests.Tools
         }
 
         [Fact]
+        public async Task PrepareBoardForRunAsync_ExistingIdleBoardWithDifferentPlan_RebuildsFromCurrentPlan()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), "smartword-todo-tests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+            try
+            {
+                var store = new JsonTodoStore(tempDirectory);
+                var manager = new TodoManager(store);
+                await store.SaveBoardAsync(
+                    new TodoBoard
+                    {
+                        SchemaVersion = TodoBoard.CurrentSchemaVersion,
+                        BoardId = "board-old",
+                        DocumentPath = "doc1",
+                        ExecutionState = TodoBoardExecutionState.Idle,
+                        SourcePlanFingerprint = "old-plan-fingerprint",
+                        Items = new List<TodoBoardItem>
+                        {
+                            new TodoBoardItem { Id = "O1", Content = "旧任务一", Status = TodoItemStatus.Completed, Order = 1 },
+                            new TodoBoardItem { Id = "O2", Content = "旧任务二", Status = TodoItemStatus.Completed, Order = 2 }
+                        }
+                    },
+                    CancellationToken.None);
+
+                var currentPlan = new ExecutionPlan
+                {
+                    TaskDescription = "新计划",
+                    TodoList = new List<TodoItem>
+                    {
+                        new TodoItem { Description = "新步骤一" },
+                        new TodoItem { Description = "新步骤二" }
+                    }
+                };
+
+                var result = await manager.PrepareBoardForRunAsync("doc1", currentPlan, CancellationToken.None);
+
+                Assert.Equal(TodoBoardPreparationStatus.Ready, result.Status);
+                Assert.NotNull(result.Board);
+                Assert.Equal("T1", result.Board.Items[0].Id);
+                Assert.Equal("新步骤一", result.Board.Items[0].Content);
+                Assert.Equal(TodoItemStatus.InProgress, result.Board.Items[0].Status);
+                Assert.DoesNotContain(result.Board.Items, item => item.Id == "O1");
+                Assert.Equal(manager.ComputePlanFingerprint(currentPlan), result.Board.SourcePlanFingerprint);
+            }
+            finally
+            {
+                if (Directory.Exists(tempDirectory))
+                {
+                    Directory.Delete(tempDirectory, true);
+                }
+            }
+        }
+
+        [Fact]
         public async Task MarkRunPausedAsync_AfterBoardExists_PersistsPausedState()
         {
             var manager = CreateManager();
