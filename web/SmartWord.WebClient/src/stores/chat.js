@@ -56,6 +56,45 @@ function createChangeRecord(change) {
   };
 }
 
+function normalizeChangeStatus(item) {
+  const statusMessage = item?.statusMessage || '';
+  if (statusMessage.includes('已通过验证') || statusMessage.includes('确认改动生效')) {
+    return 'verified';
+  }
+
+  return item?.status || 'executed';
+}
+
+function normalizeChangeKey(item) {
+  return [
+    item?.toolName || '',
+    item?.operationDescription || ''
+  ].join('\n').trim();
+}
+
+function compactCompletedChanges(changes) {
+  const normalizedChanges = changes.map((item) => ({
+    ...item,
+    status: normalizeChangeStatus(item),
+    affectedParagraphs: [...(item.affectedParagraphs || [])]
+  }));
+  const verifiedKeys = new Set(
+    normalizedChanges
+      .filter((item) => item.status === 'verified')
+      .map((item) => normalizeChangeKey(item))
+      .filter(Boolean)
+  );
+
+  return normalizedChanges.filter((item) => {
+    if (item.status === 'verified') {
+      return true;
+    }
+
+    const key = normalizeChangeKey(item);
+    return !key || !verifiedKeys.has(key);
+  });
+}
+
 export const useChatStore = defineStore('chat', {
   state: () => ({
     messages: [],
@@ -81,9 +120,17 @@ export const useChatStore = defineStore('chat', {
       this.messages.push(createMessage('user', content));
     },
     appendAssistantMessage(content) {
+      if (!String(content || '').trim()) {
+        return;
+      }
+
       this.messages.push(createMessage('assistant', content));
     },
     appendAssistantChunk(content) {
+      if (!content) {
+        return;
+      }
+
       const lastMessage = this.messages[this.messages.length - 1];
 
       if (!lastMessage || lastMessage.role !== 'assistant') {
@@ -199,12 +246,10 @@ export const useChatStore = defineStore('chat', {
       this.upsertTaskChange(change, 'repair_required');
     },
     finalizeTaskChanges() {
-      this.completedTaskChanges = this.currentTaskChanges.map((item) => ({
-        ...item,
-        affectedParagraphs: [...item.affectedParagraphs]
-      }));
+      this.completedTaskChanges = compactCompletedChanges(this.currentTaskChanges);
       this.currentTaskChanges = [];
       this.pendingConfirmation = null;
+      this.todoBoardNotice = null;
     },
     findCitation(ref) {
       return this.citations.find((item) => item.ref === ref) || null;

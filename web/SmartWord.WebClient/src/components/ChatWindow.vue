@@ -130,7 +130,7 @@
         @resume="resumePausedTodoRun"
       />
       <TodoBoardPanel
-        v-if="chatStore.todoBoardVisible && chatStore.currentMode === 'agent' && chatStore.activeTodoBoard"
+        v-if="shouldShowTodoBoard"
         :board="chatStore.activeTodoBoard"
         :current-todo-id="chatStore.currentTodoId"
         :notice="chatStore.todoBoardNotice"
@@ -318,6 +318,14 @@ const settingsSummary = computed(() => {
 
   const permission = permissionOptions.find((item) => item.value === settingsStore.form.permissionMode);
   return `轻量：${settingsStore.form.lightModel} / 重量：${settingsStore.form.heavyModel} / ${permission?.label || '写入前确认'}`;
+});
+
+const shouldShowTodoBoard = computed(() => {
+  if (!chatStore.todoBoardVisible || chatStore.currentMode !== 'agent' || !chatStore.activeTodoBoard) {
+    return false;
+  }
+
+  return Array.isArray(chatStore.activeTodoBoard.items) && chatStore.activeTodoBoard.items.length > 0;
 });
 
 const environmentHint = computed(() => {
