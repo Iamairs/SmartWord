@@ -85,6 +85,27 @@ namespace SmartWord.AddIn.TaskPane
             }
         }
 
+        public string TestModelConnection(string settingsJson)
+        {
+            try
+            {
+                return TestModelConnectionAsync(settingsJson)
+                    .GetAwaiter()
+                    .GetResult();
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "SmartWord 模型连接诊断失败。");
+                return JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    serviceReachable = false,
+                    supportsToolCalling = false,
+                    message = ex.Message
+                });
+            }
+        }
+
         public void SendMessageAsync(string requestJson)
         {
             Task.Run(async () =>
@@ -718,6 +739,104 @@ namespace SmartWord.AddIn.TaskPane
                 hasActivePlan = agentEvent.HasActivePlan,
                 canRecoverExisting = agentEvent.CanRecoverExisting,
                 todoBoardUpdateKind = agentEvent.TodoBoardUpdateKind
+            };
+        }
+
+        private static async Task<string> TestModelConnectionAsync(string settingsJson)
+        {
+            var incomingSettings = JsonConvert.DeserializeObject<SmartWordSettings>(settingsJson ?? "{}")
+                ?? new SmartWordSettings();
+            var options = ServiceLocator.CreateLlmClientOptionsPreview(incomingSettings);
+            var askRoute = options.ResolveModelRoute(AgentMode.Ask);
+            var planRoute = options.ResolveModelRoute(AgentMode.Plan);
+            var agentRoute = options.ResolveModelRoute(AgentMode.Agent);
+            var routes = new[]
+            {
+                BuildRoutePayload("ask", askRoute),
+                BuildRoutePayload("plan", planRoute),
+                BuildRoutePayload("agent", agentRoute)
+            };
+            var supportsToolCalling =
+                askRoute.EnableToolCalling
+                && planRoute.EnableToolCalling
+                && agentRoute.EnableToolCalling;
+            var selectedModel = askRoute.SelectedModel;
+            var selectedApiKey = options.GetApiKeyForModel(selectedModel);
+            if (string.IsNullOrWhiteSpace(selectedApiKey))
+            {
+                return JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    serviceReachable = false,
+                    supportsToolCalling,
+                    usedFallbackModel = askRoute.UsedFallbackModel || planRoute.UsedFallbackModel || agentRoute.UsedFallbackModel,
+                    message = "尚未配置可用于测试的 API Key。",
+                    routes
+                });
+            }
+
+            var messages = new[]
+            {
+                new AgentMessage
+                {
+                    Role = "system",
+                    Content = "You are a connection test endpoint for SmartWord. Reply with ok."
+                },
+                new AgentMessage
+                {
+                    Role = "user",
+                    Content = "SmartWord connection test. Reply with ok."
+                }
+            };
+            var serviceReachable = false;
+            var responsePreview = string.Empty;
+            using (var client = new OpenAiCompatibleClient(options))
+            using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30)))
+            {
+                await foreach (var chunk in client.ChatCompletionStreamAsync(messages, selectedModel, cts.Token))
+                {
+                    if (!string.IsNullOrEmpty(chunk))
+                    {
+                        serviceReachable = true;
+                        responsePreview += chunk;
+                    }
+
+                    if (responsePreview.Length >= 80)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            return JsonConvert.SerializeObject(new
+            {
+                success = serviceReachable,
+                serviceReachable,
+                supportsToolCalling,
+                usedFallbackModel = askRoute.UsedFallbackModel || planRoute.UsedFallbackModel || agentRoute.UsedFallbackModel,
+                message = serviceReachable
+                    ? "连接测试通过。"
+                    : "连接已建立，但未收到有效响应内容。",
+                responsePreview = responsePreview,
+                routes
+            });
+        }
+
+        private static object BuildRoutePayload(string mode, ModelRoutingDecision decision)
+        {
+            return new
+            {
+                mode,
+                selectedModel = decision == null ? string.Empty : decision.SelectedModel,
+                enableToolCalling = decision != null && decision.EnableToolCalling,
+                usedFallbackModel = decision != null && decision.UsedFallbackModel,
+                routingMessage = decision == null ? string.Empty : decision.RoutingMessage,
+                capabilitySource = decision == null || decision.SelectedCapability == null
+                    ? string.Empty
+                    : decision.SelectedCapability.CapabilitySource,
+                requiresReasoningContentReplay = decision != null
+                    && decision.SelectedCapability != null
+                    && decision.SelectedCapability.RequiresReasoningContentReplay
             };
         }
 

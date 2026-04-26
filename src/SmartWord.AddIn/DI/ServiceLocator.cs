@@ -25,6 +25,7 @@ namespace SmartWord.AddIn.DI
     /// </summary>
     public static class ServiceLocator
     {
+        private const string MaskedSecretValue = "********";
         private static readonly object SettingsSyncRoot = new object();
         private static ServiceProvider _serviceProvider;
         private static WebViewConfirmationChannel _confirmationChannel;
@@ -136,22 +137,17 @@ namespace SmartWord.AddIn.DI
             {
                 var persistedSettings = GetRequiredService<SmartWordSettings>();
                 var llmOptions = GetRequiredService<LlmClientOptions>();
+                return CreateUiSettingsSnapshot(persistedSettings, llmOptions);
+            }
+        }
 
-                return new SmartWordSettings
-                {
-                    ApiBaseUrl = llmOptions.BaseUrl,
-                    BaseUrl = llmOptions.BaseUrl,
-                    ApiKey = llmOptions.ApiKey,
-                    BaseUrlHeavy = llmOptions.BaseUrlHeavy,
-                    ApiKeyHeavy = llmOptions.ApiKeyHeavy,
-                    BaseUrlLight = llmOptions.BaseUrlLight,
-                    ApiKeyLight = llmOptions.ApiKeyLight,
-                    LightModel = llmOptions.LightModel,
-                    HeavyModel = llmOptions.HeavyModel,
-                    PermissionMode = persistedSettings.PermissionMode,
-                    RequireConfirmationForScripts = persistedSettings.RequireConfirmationForScripts,
-                    CustomInstructions = persistedSettings.CustomInstructions
-                };
+        public static LlmClientOptions CreateLlmClientOptionsPreview(SmartWordSettings incomingSettings)
+        {
+            lock (SettingsSyncRoot)
+            {
+                var existingSettings = GetRequiredService<SmartWordSettings>();
+                var normalizedSettings = NormalizeSettings(incomingSettings, existingSettings);
+                return CreateLlmClientOptions(normalizedSettings);
             }
         }
 
@@ -164,7 +160,9 @@ namespace SmartWord.AddIn.DI
 
             lock (SettingsSyncRoot)
             {
-                var normalizedSettings = NormalizeSettings(incomingSettings);
+                var persistedSettings = GetRequiredService<SmartWordSettings>();
+                var normalizedSettings = NormalizeSettings(incomingSettings, persistedSettings);
+                var settingsToPersist = CreatePersistedSettings(normalizedSettings);
                 var settingsPath = GetSettingsPath();
                 var settingsDirectory = Path.GetDirectoryName(settingsPath);
                 if (!string.IsNullOrWhiteSpace(settingsDirectory))
@@ -174,16 +172,15 @@ namespace SmartWord.AddIn.DI
 
                 File.WriteAllText(
                     settingsPath,
-                    JsonConvert.SerializeObject(normalizedSettings, Formatting.Indented));
+                    JsonConvert.SerializeObject(settingsToPersist, Formatting.Indented));
 
-                var persistedSettings = GetRequiredService<SmartWordSettings>();
                 ApplySettings(normalizedSettings, persistedSettings);
 
                 var llmOptions = GetRequiredService<LlmClientOptions>();
                 ApplySettingsToLlmOptions(normalizedSettings, llmOptions);
 
                 Log.Information("SmartWord 设置已保存到 {SettingsPath}", settingsPath);
-                return CloneSettings(persistedSettings);
+                return CreateUiSettingsSnapshot(persistedSettings, llmOptions);
             }
         }
 
@@ -246,7 +243,42 @@ namespace SmartWord.AddIn.DI
 
         private static SmartWordSettings NormalizeSettings(SmartWordSettings settings)
         {
+            return NormalizeSettings(settings, null);
+        }
+
+        private static SmartWordSettings NormalizeSettings(
+            SmartWordSettings settings,
+            SmartWordSettings existingSettings)
+        {
             var normalized = CloneSettings(settings ?? new SmartWordSettings());
+            NormalizeSecret(
+                normalized.ApiKey,
+                normalized.ProtectedApiKey,
+                existingSettings == null ? string.Empty : existingSettings.ApiKey,
+                existingSettings == null ? string.Empty : existingSettings.ProtectedApiKey,
+                out var apiKey,
+                out var protectedApiKey);
+            NormalizeSecret(
+                normalized.ApiKeyHeavy,
+                normalized.ProtectedApiKeyHeavy,
+                existingSettings == null ? string.Empty : existingSettings.ApiKeyHeavy,
+                existingSettings == null ? string.Empty : existingSettings.ProtectedApiKeyHeavy,
+                out var apiKeyHeavy,
+                out var protectedApiKeyHeavy);
+            NormalizeSecret(
+                normalized.ApiKeyLight,
+                normalized.ProtectedApiKeyLight,
+                existingSettings == null ? string.Empty : existingSettings.ApiKeyLight,
+                existingSettings == null ? string.Empty : existingSettings.ProtectedApiKeyLight,
+                out var apiKeyLight,
+                out var protectedApiKeyLight);
+
+            normalized.ApiKey = apiKey;
+            normalized.ProtectedApiKey = protectedApiKey;
+            normalized.ApiKeyHeavy = apiKeyHeavy;
+            normalized.ProtectedApiKeyHeavy = protectedApiKeyHeavy;
+            normalized.ApiKeyLight = apiKeyLight;
+            normalized.ProtectedApiKeyLight = protectedApiKeyLight;
             if (string.IsNullOrWhiteSpace(normalized.BaseUrl))
             {
                 normalized.BaseUrl = string.IsNullOrWhiteSpace(normalized.ApiBaseUrl)
@@ -266,6 +298,7 @@ namespace SmartWord.AddIn.DI
                 normalized.RequireConfirmationForScripts);
             normalized.RequireConfirmationForScripts =
                 IsLegacyConfirmationRequired(normalized.PermissionMode);
+            ApplySecretDisplayFlags(normalized);
             return normalized;
         }
 
@@ -276,15 +309,24 @@ namespace SmartWord.AddIn.DI
                 ApiBaseUrl = settings.ApiBaseUrl,
                 BaseUrl = settings.BaseUrl,
                 ApiKey = settings.ApiKey,
+                ProtectedApiKey = settings.ProtectedApiKey,
                 BaseUrlHeavy = settings.BaseUrlHeavy,
                 ApiKeyHeavy = settings.ApiKeyHeavy,
+                ProtectedApiKeyHeavy = settings.ProtectedApiKeyHeavy,
                 BaseUrlLight = settings.BaseUrlLight,
                 ApiKeyLight = settings.ApiKeyLight,
+                ProtectedApiKeyLight = settings.ProtectedApiKeyLight,
                 LightModel = settings.LightModel,
                 HeavyModel = settings.HeavyModel,
                 PermissionMode = settings.PermissionMode,
                 RequireConfirmationForScripts = settings.RequireConfirmationForScripts,
-                CustomInstructions = settings.CustomInstructions
+                CustomInstructions = settings.CustomInstructions,
+                HasApiKey = settings.HasApiKey,
+                HasApiKeyHeavy = settings.HasApiKeyHeavy,
+                HasApiKeyLight = settings.HasApiKeyLight,
+                ApiKeyDisplay = settings.ApiKeyDisplay,
+                ApiKeyHeavyDisplay = settings.ApiKeyHeavyDisplay,
+                ApiKeyLightDisplay = settings.ApiKeyLightDisplay
             };
         }
 
@@ -293,15 +335,24 @@ namespace SmartWord.AddIn.DI
             target.ApiBaseUrl = source.ApiBaseUrl;
             target.BaseUrl = source.BaseUrl;
             target.ApiKey = source.ApiKey;
+            target.ProtectedApiKey = source.ProtectedApiKey;
             target.BaseUrlHeavy = source.BaseUrlHeavy;
             target.ApiKeyHeavy = source.ApiKeyHeavy;
+            target.ProtectedApiKeyHeavy = source.ProtectedApiKeyHeavy;
             target.BaseUrlLight = source.BaseUrlLight;
             target.ApiKeyLight = source.ApiKeyLight;
+            target.ProtectedApiKeyLight = source.ProtectedApiKeyLight;
             target.LightModel = source.LightModel;
             target.HeavyModel = source.HeavyModel;
             target.PermissionMode = source.PermissionMode;
             target.RequireConfirmationForScripts = source.RequireConfirmationForScripts;
             target.CustomInstructions = source.CustomInstructions;
+            target.HasApiKey = source.HasApiKey;
+            target.HasApiKeyHeavy = source.HasApiKeyHeavy;
+            target.HasApiKeyLight = source.HasApiKeyLight;
+            target.ApiKeyDisplay = source.ApiKeyDisplay;
+            target.ApiKeyHeavyDisplay = source.ApiKeyHeavyDisplay;
+            target.ApiKeyLightDisplay = source.ApiKeyLightDisplay;
         }
 
         private static void ApplySettingsToLlmOptions(SmartWordSettings settings, LlmClientOptions options)
@@ -314,6 +365,124 @@ namespace SmartWord.AddIn.DI
             options.ApiKeyLight = settings.ApiKeyLight;
             options.LightModel = settings.LightModel;
             options.HeavyModel = settings.HeavyModel;
+        }
+
+        private static SmartWordSettings CreatePersistedSettings(SmartWordSettings normalizedSettings)
+        {
+            var persisted = CloneSettings(normalizedSettings);
+            persisted.ApiKey = string.Empty;
+            persisted.ApiKeyHeavy = string.Empty;
+            persisted.ApiKeyLight = string.Empty;
+            persisted.HasApiKey = false;
+            persisted.HasApiKeyHeavy = false;
+            persisted.HasApiKeyLight = false;
+            persisted.ApiKeyDisplay = string.Empty;
+            persisted.ApiKeyHeavyDisplay = string.Empty;
+            persisted.ApiKeyLightDisplay = string.Empty;
+            return persisted;
+        }
+
+        private static SmartWordSettings CreateUiSettingsSnapshot(
+            SmartWordSettings runtimeSettings,
+            LlmClientOptions llmOptions)
+        {
+            var snapshot = new SmartWordSettings
+            {
+                ApiBaseUrl = llmOptions.BaseUrl,
+                BaseUrl = llmOptions.BaseUrl,
+                ApiKey = string.Empty,
+                ProtectedApiKey = string.Empty,
+                BaseUrlHeavy = llmOptions.BaseUrlHeavy,
+                ApiKeyHeavy = string.Empty,
+                ProtectedApiKeyHeavy = string.Empty,
+                BaseUrlLight = llmOptions.BaseUrlLight,
+                ApiKeyLight = string.Empty,
+                ProtectedApiKeyLight = string.Empty,
+                LightModel = llmOptions.LightModel,
+                HeavyModel = llmOptions.HeavyModel,
+                PermissionMode = runtimeSettings.PermissionMode,
+                RequireConfirmationForScripts = runtimeSettings.RequireConfirmationForScripts,
+                CustomInstructions = runtimeSettings.CustomInstructions,
+                HasApiKey = SecretProtector.HasSecret(runtimeSettings.ApiKey, runtimeSettings.ProtectedApiKey),
+                HasApiKeyHeavy = SecretProtector.HasSecret(runtimeSettings.ApiKeyHeavy, runtimeSettings.ProtectedApiKeyHeavy),
+                HasApiKeyLight = SecretProtector.HasSecret(runtimeSettings.ApiKeyLight, runtimeSettings.ProtectedApiKeyLight)
+            };
+            ApplySecretDisplayFlags(snapshot);
+            return snapshot;
+        }
+
+        private static void ApplySecretDisplayFlags(SmartWordSettings settings)
+        {
+            settings.HasApiKey = SecretProtector.HasSecret(settings.ApiKey, settings.ProtectedApiKey);
+            settings.HasApiKeyHeavy = SecretProtector.HasSecret(settings.ApiKeyHeavy, settings.ProtectedApiKeyHeavy);
+            settings.HasApiKeyLight = SecretProtector.HasSecret(settings.ApiKeyLight, settings.ProtectedApiKeyLight);
+            settings.ApiKeyDisplay = settings.HasApiKey ? MaskedSecretValue : string.Empty;
+            settings.ApiKeyHeavyDisplay = settings.HasApiKeyHeavy ? MaskedSecretValue : string.Empty;
+            settings.ApiKeyLightDisplay = settings.HasApiKeyLight ? MaskedSecretValue : string.Empty;
+        }
+
+        private static void NormalizeSecret(
+            string incomingPlainText,
+            string incomingProtectedText,
+            string existingPlainText,
+            string existingProtectedText,
+            out string normalizedPlainText,
+            out string normalizedProtectedText)
+        {
+            if (!string.IsNullOrWhiteSpace(incomingPlainText)
+                && !IsMaskedSecret(incomingPlainText))
+            {
+                normalizedPlainText = incomingPlainText;
+                normalizedProtectedText = SecretProtector.Protect(incomingPlainText);
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(incomingProtectedText))
+            {
+                normalizedProtectedText = incomingProtectedText;
+                normalizedPlainText = TryUnprotectSecret(incomingProtectedText);
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(existingPlainText))
+            {
+                normalizedPlainText = existingPlainText;
+                normalizedProtectedText = string.IsNullOrWhiteSpace(existingProtectedText)
+                    ? SecretProtector.Protect(existingPlainText)
+                    : existingProtectedText;
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(existingProtectedText))
+            {
+                normalizedProtectedText = existingProtectedText;
+                normalizedPlainText = TryUnprotectSecret(existingProtectedText);
+                return;
+            }
+
+            normalizedPlainText = string.Empty;
+            normalizedProtectedText = string.Empty;
+        }
+
+        private static bool IsMaskedSecret(string value)
+        {
+            var normalized = (value ?? string.Empty).Trim();
+            return normalized == MaskedSecretValue
+                || normalized == "******"
+                || normalized == "已保存";
+        }
+
+        private static string TryUnprotectSecret(string protectedText)
+        {
+            try
+            {
+                return SecretProtector.Unprotect(protectedText);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "解密 SmartWord 本地密钥失败，将按空密钥继续。");
+                return string.Empty;
+            }
         }
 
         private static string GetSettingsPath()
