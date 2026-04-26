@@ -143,3 +143,34 @@ P0 的核心不是新增高风险 Word 写入能力，而是把已有 Agent 技�
 - 写入确认面板无需展开原始 JSON 也能判断风险与影响范围。
 - 前端构建通过。
 - 可构建项目和相关测试尽量通过；不能运行的 VSTO 宿主构建需记录环境原因。
+
+## 实施结果
+
+### 已完成范围
+
+- 已完成 API Key 本地保护：新增 DPAPI 保护器，保存设置时把默认/轻量/重量 API Key 写入受保护字段，返回前端设置快照时只暴露脱敏状态，不回传完整密钥。
+- 已完成旧配置兼容：运行时仍可读取旧明文 API Key；再次保存时会迁移到受保护字段，并清理前端展示字段，避免把 mask 或明文错误持久化。
+- 已完成模型连接诊断：宿主 bridge 新增连接测试接口，前端设置页可触发诊断；诊断请求只发送固定短测试文本，不注入当前 Word 文档内容。
+- 已完成设置面板分层：基础区聚焦服务商、默认密钥、默认模型、权限模式、连接测试；高级区折叠展示轻量/重量专用模型、自定义系统指令等低频配置。
+- 已完成权限解释与风险提示：四档权限均提供用户化说明，`FullAuto` 作为高风险选项展示额外提示，默认体验继续推荐写入前确认。
+- 已完成普通界面去工程化：欢迎语改为任务导向，Ask/Plan/Agent 模式选择移动到高级执行选项，WebView2/浏览器环境提示不再占据普通用户主界面。
+- 已完成快捷任务入口：新增问文档、改文字、审文档、整格式四类常用任务，可直接发起总结、解释选区、润色选区、压缩选区、文档体检、统一格式等操作。
+- 已完成选区优先策略：选区类快捷任务的 prompt 明确要求优先读取当前选区；没有选区时先说明无法安全限定范围，避免误改全文。
+- 已完成业务化写入确认：确认面板默认展示业务目的、影响范围、风险等级、验证能力、撤销能力与操作列表，原始工具 JSON/脚本保留在技术详情中。
+- 已完成工具轨迹用户化：工具调用轨迹新增用户可理解的动作名，技术工具名仍保留但不再作为唯一展示信息。
+
+### 实现边界
+
+- 本轮只完成 P0 基础体验与安全需求，不实现 P1 的真实前后 diff、逐条接受/拒绝、Word 修订模式、SQLite 长期历史和可编辑 Plan 面板。
+- `execute_script` 仍是高风险后备路径，本轮只在确认层做高风险标识，没有把脚本能力包装成新的默认产品功能。
+- 连接诊断会发起一次真实模型服务请求，前端文案和后端实现均控制为固定短文本，不读取当前 Word 文档。
+
+### 验证记录
+
+- `dotnet build src\SmartWord.Core\SmartWord.Core.csproj`：通过。
+- `dotnet build src\SmartWord.Infrastructure\SmartWord.Infrastructure.csproj`：通过。
+- `dotnet build src\SmartWord.Application\SmartWord.Application.csproj`：通过。
+- `dotnet build src\SmartWord.OfficeIntegration\SmartWord.OfficeIntegration.csproj`：通过。
+- `dotnet test tests\SmartWord.Application.Tests\SmartWord.Application.Tests.csproj`：通过，151 个测试通过。
+- `npm run build`（目录：`web\SmartWord.WebClient`）：通过。
+- `dotnet build src\SmartWord.AddIn\SmartWord.AddIn.csproj /p:VSToolsPath=`：未通过，当前机器缺少 VSTO/Office/WebView2 等宿主构建依赖；该结果属于本机 Office 插件构建环境限制，需要在安装完整 Visual Studio Office 开发组件与 Word/Office 依赖的机器上补做真宿主验证。
