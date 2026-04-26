@@ -2,7 +2,6 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using SmartWord.Core.Enums;
@@ -19,11 +18,7 @@ namespace SmartWord.OfficeIntegration.Tools
     /// </summary>
     public sealed class ProbeDocumentTool : ITool
     {
-        private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-        };
+        private static readonly JsonSerializerOptions JsonOptions = ToolJsonOptions.Default;
 
         private readonly WordApplicationWrapper _wordApplicationWrapper;
         private readonly JsonElement _inputSchema;

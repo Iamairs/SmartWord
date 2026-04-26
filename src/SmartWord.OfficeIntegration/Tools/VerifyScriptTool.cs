@@ -1,6 +1,5 @@
 using System;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis.Scripting;
@@ -17,11 +16,7 @@ namespace SmartWord.OfficeIntegration.Tools
     /// </summary>
     public sealed class VerifyScriptTool : ITool
     {
-        private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-        };
+        private static readonly JsonSerializerOptions JsonOptions = ToolJsonOptions.Default;
 
         private readonly WordApplicationWrapper _wordApplicationWrapper;
         private readonly CSharpScriptExecutor _scriptExecutor;

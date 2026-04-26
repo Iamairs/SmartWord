@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using SmartWord.Core.Enums;
@@ -17,11 +16,7 @@ namespace SmartWord.OfficeIntegration.Tools
     /// </summary>
     public sealed class ReadAnnotationsTool : ITool
     {
-        private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-        };
+        private static readonly JsonSerializerOptions JsonOptions = ToolJsonOptions.Default;
 
         private readonly JsonElement _inputSchema;
         private readonly WordApplicationWrapper _wordApplicationWrapper;
