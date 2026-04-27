@@ -48,6 +48,7 @@ namespace SmartWord.Application.Orchestration
         private readonly ITodoRecoveryChannel _todoRecoveryChannel;
         private readonly TodoManager _todoManager;
         private readonly TodoReminderService _todoReminderService;
+        private readonly ITaskHistoryStore _taskHistoryStore;
 
         public AgentOrchestrator(
             ILlmClient llmClient,
@@ -62,7 +63,8 @@ namespace SmartWord.Application.Orchestration
             IQuestionChannel questionChannel = null,
             ITodoRecoveryChannel todoRecoveryChannel = null,
             TodoManager todoManager = null,
-            TodoReminderService todoReminderService = null)
+            TodoReminderService todoReminderService = null,
+            ITaskHistoryStore taskHistoryStore = null)
         {
             _llmClient = llmClient;
             _contextHydrator = contextHydrator;
@@ -77,6 +79,7 @@ namespace SmartWord.Application.Orchestration
             _todoRecoveryChannel = todoRecoveryChannel;
             _todoManager = todoManager;
             _todoReminderService = todoReminderService;
+            _taskHistoryStore = taskHistoryStore;
         }
 
         /// <summary>
@@ -97,10 +100,28 @@ namespace SmartWord.Application.Orchestration
         ? "__active_document__"
         : documentContext.DocumentPath;
     _todoManager?.SetCurrentDocumentPath(documentPath);
+    var auditRun = await TryStartTaskRunAsync(
+            documentPath,
+            userInput,
+            safeOptions,
+            cancellationToken)
+        .ConfigureAwait(false);
+    TaskRunCompletion auditCompletion = null;
+    var auditRunCompleted = false;
 
     if (safeOptions.Mode == AgentMode.Agent
         && (documentContext.DocumentStatus == null || !documentContext.DocumentStatus.IsWritable))
     {
+        auditCompletion = CreateTaskRunCompletion(
+            TaskRunStatus.Failed,
+            documentContext.DocumentStatus == null
+                ? "文档当前不可写，系统已停止执行。"
+                : documentContext.DocumentStatus.GetUserFriendlyMessage(),
+            0,
+            ResolveTotalSteps(safeOptions));
+        await TryCompleteTaskRunAsync(auditRun, auditCompletion, CancellationToken.None)
+            .ConfigureAwait(false);
+        auditRunCompleted = true;
         yield return new AgentEvent
         {
             Type = AgentEventType.DocumentNotWritable,
@@ -255,6 +276,8 @@ namespace SmartWord.Application.Orchestration
     var interruptedOutcome = TodoBoardRunOutcome.None;
     var interruptedReason = string.Empty;
     var runPaused = false;
+    var completedStepsForAudit = 0;
+    var totalStepsForAudit = ResolveTotalSteps(safeOptions);
 
     try
     {
@@ -469,7 +492,14 @@ namespace SmartWord.Application.Orchestration
                 if (pendingWriteStep != null)
                 {
                     var pauseMessage = "模型在当前写步骤仍待修复时提前停止输出，系统已回退当前步骤并暂停。你可以继续尝试、跳过此步骤，或停止本次任务。";
-                    yield return CreatePendingWriteStateEvent(pendingWriteStep);
+                    var pendingWriteStateEvent = CreatePendingWriteStateEvent(pendingWriteStep);
+                    await TryRecordTaskChangeAsync(
+                            auditRun?.Id,
+                            pendingWriteStateEvent,
+                            pendingWriteStateEvent.Type == AgentEventType.ChangeUnverified ? "unverified" : "repair_required",
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    yield return pendingWriteStateEvent;
                     if (safeOptions.Mode == AgentMode.Agent && runStarted && _todoManager != null)
                     {
                         currentTodoBoard = await _todoManager
@@ -480,6 +510,11 @@ namespace SmartWord.Application.Orchestration
                                 CancellationToken.None)
                             .ConfigureAwait(false);
                         runPaused = true;
+                        auditCompletion = CreateTaskRunCompletion(
+                            TaskRunStatus.Paused,
+                            pauseMessage,
+                            completedStepsForAudit,
+                            totalStepsForAudit);
                         yield return CreateTodoBoardPausedEvent(
                             currentTodoBoard,
                             _todoManager,
@@ -733,7 +768,7 @@ namespace SmartWord.Application.Orchestration
                 if (!permissionDecision.IsAllowed)
                 {
                     var deniedResult = ToolCallResult.Denied(toolCall.Name, permissionDecision.Reason);
-                    await AppendToolResultAsync(documentPath, messages, toolCall, deniedResult, cancellationToken)
+                    await AppendToolResultAsync(documentPath, messages, toolCall, deniedResult, cancellationToken, auditRun?.Id, operationDescription)
                         .ConfigureAwait(false);
 
                     yield return new AgentEvent
@@ -773,7 +808,7 @@ namespace SmartWord.Application.Orchestration
 
                 if (inputParseError != null)
                 {
-                    await AppendToolResultAsync(documentPath, messages, toolCall, inputParseError, cancellationToken)
+                    await AppendToolResultAsync(documentPath, messages, toolCall, inputParseError, cancellationToken, auditRun?.Id, operationDescription)
                         .ConfigureAwait(false);
 
                     yield return CreateToolCompletedEvent(toolCall, inputParseError);
@@ -809,7 +844,7 @@ namespace SmartWord.Application.Orchestration
                         var unavailableResult = ToolCallResult.Denied(
                             toolCall.Name,
                             "当前未连接确认通道，系统已拒绝执行写操作。");
-                        await AppendToolResultAsync(documentPath, messages, toolCall, unavailableResult, cancellationToken)
+                        await AppendToolResultAsync(documentPath, messages, toolCall, unavailableResult, cancellationToken, auditRun?.Id, operationDescription)
                             .ConfigureAwait(false);
 
                         yield return new AgentEvent
@@ -853,7 +888,7 @@ namespace SmartWord.Application.Orchestration
                     if (!confirmed)
                     {
                         var skippedResult = ToolCallResult.Skipped(toolCall.Name, "用户选择跳过本次写操作。");
-                        await AppendToolResultAsync(documentPath, messages, toolCall, skippedResult, cancellationToken)
+                        await AppendToolResultAsync(documentPath, messages, toolCall, skippedResult, cancellationToken, auditRun?.Id, operationDescription)
                             .ConfigureAwait(false);
 
                         yield return new AgentEvent
@@ -982,7 +1017,7 @@ namespace SmartWord.Application.Orchestration
                     executionResult.OperationDescription = operationDescription;
                 }
 
-                await AppendToolResultAsync(documentPath, messages, toolCall, executionResult, cancellationToken)
+                await AppendToolResultAsync(documentPath, messages, toolCall, executionResult, cancellationToken, auditRun?.Id, operationDescription)
                     .ConfigureAwait(false);
 
                 yield return CreateToolCompletedEvent(toolCall, executionResult);
@@ -1013,10 +1048,13 @@ namespace SmartWord.Application.Orchestration
                         var executedWriteStep = pendingWriteStep != null
                             ? pendingWriteStep.MarkWriteExecuted(toolCall, executionResult, autoVerifyPlan)
                             : PendingWriteStep.CreateAwaitingVerification(toolCall, executionResult, autoVerifyPlan);
-                        yield return CreateChangeEvent(
+                        var changeExecutedEvent = CreateChangeEvent(
                             AgentEventType.ChangeExecuted,
                             executedWriteStep,
                             "写入已执行，系统正在执行验证步骤。");
+                        await TryRecordTaskChangeAsync(auditRun?.Id, changeExecutedEvent, "executed", cancellationToken)
+                            .ConfigureAwait(false);
+                        yield return changeExecutedEvent;
 
                         var autoVerifyOutcome = await ExecuteAutoVerifyAsync(
                                 executedWriteStep,
@@ -1029,6 +1067,13 @@ namespace SmartWord.Application.Orchestration
                             yield return CreateToolStartedEvent(
                                 autoVerifyOutcome.ToolCall,
                                 autoVerifyOutcome.OperationDescription);
+                            await TryRecordTaskToolAsync(
+                                    auditRun?.Id,
+                                    autoVerifyOutcome.ToolCall,
+                                    autoVerifyOutcome.Result,
+                                    autoVerifyOutcome.OperationDescription,
+                                    cancellationToken)
+                                .ConfigureAwait(false);
                             yield return CreateToolCompletedEvent(autoVerifyOutcome.ToolCall, autoVerifyOutcome.Result);
                         }
 
@@ -1066,11 +1111,14 @@ namespace SmartWord.Application.Orchestration
                                     cancellationToken)
                                 .ConfigureAwait(false);
 
-                            yield return CreateChangeEvent(
+                            var verificationFailedEvent = CreateChangeEvent(
                                 AgentEventType.ChangeVerificationFailed,
                                 pendingWriteStep,
                                 pendingWriteStep.LastFailureMessage,
                                 autoVerifyOutcome.Result == null ? string.Empty : autoVerifyOutcome.Result.Output);
+                            await TryRecordTaskChangeAsync(auditRun?.Id, verificationFailedEvent, "verification_failed", cancellationToken)
+                                .ConfigureAwait(false);
+                            yield return verificationFailedEvent;
 
                             if (pendingWriteStep.RepairAttempts >= WriteRepairAttemptLimit)
                             {
@@ -1083,8 +1131,13 @@ namespace SmartWord.Application.Orchestration
                                             TodoBoardRunOutcome.RolledBack,
                                             pauseMessage,
                                             CancellationToken.None)
-                                        .ConfigureAwait(false);
+                                    .ConfigureAwait(false);
                                     runPaused = true;
+                                    auditCompletion = CreateTaskRunCompletion(
+                                        TaskRunStatus.Paused,
+                                        pauseMessage,
+                                        completedStepsForAudit,
+                                        totalStepsForAudit);
                                     yield return CreateTodoBoardPausedEvent(
                                         currentTodoBoard,
                                         _todoManager,
@@ -1134,11 +1187,15 @@ namespace SmartWord.Application.Orchestration
                                 hasSuccessfulDocumentWriteOccurredInRun = true;
                             }
 
-                            yield return CreateChangeEvent(
+                            var changeAppliedEvent = CreateChangeEvent(
                                 AgentEventType.ChangeApplied,
                                 executedWriteStep,
                                 "已通过验证步骤确认改动生效。",
                                 autoVerifyOutcome.Result == null ? string.Empty : autoVerifyOutcome.Result.Output);
+                            completedStepsForAudit++;
+                            await TryRecordTaskChangeAsync(auditRun?.Id, changeAppliedEvent, "verified", cancellationToken)
+                                .ConfigureAwait(false);
+                            yield return changeAppliedEvent;
                             consecutiveFailures = 0;
                         }
 
@@ -1186,11 +1243,14 @@ namespace SmartWord.Application.Orchestration
                                 "当前写步骤已回退，Todo Board 已恢复到最近可信检查点。");
                         }
 
-                        yield return CreateChangeEvent(
+                        var repairRequiredEvent = CreateChangeEvent(
                             AgentEventType.ChangeRepairRequired,
                             pendingWriteStep,
                             pendingWriteStep.LastFailureMessage,
                             executionResult.Output);
+                        await TryRecordTaskChangeAsync(auditRun?.Id, repairRequiredEvent, "repair_required", cancellationToken)
+                            .ConfigureAwait(false);
+                        yield return repairRequiredEvent;
 
                         if (pendingWriteStep.RepairAttempts >= WriteRepairAttemptLimit)
                         {
@@ -1203,8 +1263,13 @@ namespace SmartWord.Application.Orchestration
                                         TodoBoardRunOutcome.RolledBack,
                                         pauseMessage,
                                         CancellationToken.None)
-                                    .ConfigureAwait(false);
+                                .ConfigureAwait(false);
                                 runPaused = true;
+                                auditCompletion = CreateTaskRunCompletion(
+                                    TaskRunStatus.Paused,
+                                    pauseMessage,
+                                    completedStepsForAudit,
+                                    totalStepsForAudit);
                                 yield return CreateTodoBoardPausedEvent(
                                     currentTodoBoard,
                                     _todoManager,
@@ -1373,7 +1438,14 @@ namespace SmartWord.Application.Orchestration
         if (pendingWriteStep != null)
         {
             var pauseMessage = "当前写步骤尚未修复，系统已回退当前步骤并暂停。你可以继续尝试、跳过此步骤，或停止本次任务。";
-            yield return CreatePendingWriteStateEvent(pendingWriteStep);
+            var pendingWriteStateEvent = CreatePendingWriteStateEvent(pendingWriteStep);
+            await TryRecordTaskChangeAsync(
+                    auditRun?.Id,
+                    pendingWriteStateEvent,
+                    pendingWriteStateEvent.Type == AgentEventType.ChangeUnverified ? "unverified" : "repair_required",
+                    cancellationToken)
+                .ConfigureAwait(false);
+            yield return pendingWriteStateEvent;
             if (safeOptions.Mode == AgentMode.Agent && runStarted && _todoManager != null)
             {
                 currentTodoBoard = await _todoManager
@@ -1384,6 +1456,11 @@ namespace SmartWord.Application.Orchestration
                         CancellationToken.None)
                     .ConfigureAwait(false);
                 runPaused = true;
+                auditCompletion = CreateTaskRunCompletion(
+                    TaskRunStatus.Paused,
+                    pauseMessage,
+                    completedStepsForAudit,
+                    totalStepsForAudit);
                 yield return CreateTodoBoardPausedEvent(
                     currentTodoBoard,
                     _todoManager,
@@ -1404,6 +1481,11 @@ namespace SmartWord.Application.Orchestration
                     .MarkRunPausedAsync(documentPath, maxIterationsMessage, CancellationToken.None)
                     .ConfigureAwait(false);
                 runPaused = true;
+                auditCompletion = CreateTaskRunCompletion(
+                    TaskRunStatus.Paused,
+                    maxIterationsMessage,
+                    completedStepsForAudit,
+                    totalStepsForAudit);
                 yield return CreateTodoBoardPausedEvent(
                     currentTodoBoard,
                     _todoManager,
@@ -1428,6 +1510,24 @@ namespace SmartWord.Application.Orchestration
                 .MarkRunInterruptedAsync(documentPath, interruptedOutcome, interruptedReason, CancellationToken.None)
                 .ConfigureAwait(false);
         }
+
+        if (auditRun != null && !auditRunCompleted)
+        {
+            if (auditCompletion == null)
+            {
+                auditCompletion = ResolveTaskRunCompletion(
+                    completedSuccessfully,
+                    runPaused,
+                    interruptedOutcome,
+                    interruptedReason,
+                    completedStepsForAudit,
+                    totalStepsForAudit);
+            }
+
+            await TryCompleteTaskRunAsync(auditRun, auditCompletion, CancellationToken.None)
+                .ConfigureAwait(false);
+            auditRunCompleted = true;
+        }
     }
 
     if (runStarted && completedSuccessfully && _todoManager != null && safeOptions.Mode == AgentMode.Agent)
@@ -1450,12 +1550,145 @@ namespace SmartWord.Application.Orchestration
     };
 }
 
+        private async Task<TaskRunRecord> TryStartTaskRunAsync(
+            string documentPath,
+            string userInput,
+            AgentRunOptions options,
+            CancellationToken cancellationToken)
+        {
+            if (_taskHistoryStore == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                return await _taskHistoryStore
+                    .StartRunAsync(
+                        new TaskRunStartRequest
+                        {
+                            DocumentPath = documentPath,
+                            UserGoal = userInput ?? string.Empty,
+                            Mode = ToTaskHistoryMode(options == null ? AgentMode.Ask : options.Mode),
+                            PermissionMode = ToTaskHistoryPermissionMode(ResolvePermissionMode(options)),
+                            Model = options == null ? string.Empty : options.Model ?? string.Empty,
+                            TotalSteps = ResolveTotalSteps(options)
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "创建任务历史运行记录失败，主流程将继续。");
+                return null;
+            }
+        }
+
+        private async Task TryRecordTaskToolAsync(
+            string taskRunId,
+            ToolCall toolCall,
+            ToolCallResult result,
+            string operationDescription,
+            CancellationToken cancellationToken)
+        {
+            if (_taskHistoryStore == null || string.IsNullOrWhiteSpace(taskRunId) || toolCall == null)
+            {
+                return;
+            }
+
+            try
+            {
+                await _taskHistoryStore
+                    .RecordToolAsync(
+                        taskRunId,
+                        new TaskToolRecord
+                        {
+                            ToolCallId = toolCall.Id ?? string.Empty,
+                            ToolName = toolCall.Name ?? string.Empty,
+                            OperationDescription = string.IsNullOrWhiteSpace(operationDescription)
+                                ? toolCall.Description ?? string.Empty
+                                : operationDescription,
+                            RawInput = toolCall.Input ?? string.Empty,
+                            Output = result == null ? string.Empty : result.Output ?? string.Empty,
+                            Success = result != null && result.Success,
+                            CreatedAtUtc = DateTimeOffset.UtcNow
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "记录任务工具审计失败。TaskRunId={TaskRunId}, ToolName={ToolName}", taskRunId, toolCall.Name);
+            }
+        }
+
+        private async Task TryRecordTaskChangeAsync(
+            string taskRunId,
+            AgentEvent changeEvent,
+            string status,
+            CancellationToken cancellationToken)
+        {
+            if (_taskHistoryStore == null || string.IsNullOrWhiteSpace(taskRunId) || changeEvent == null)
+            {
+                return;
+            }
+
+            try
+            {
+                await _taskHistoryStore
+                    .RecordChangeAsync(
+                        taskRunId,
+                        new TaskChangeRecord
+                        {
+                            ToolCallId = changeEvent.ToolCallId ?? string.Empty,
+                            ToolName = changeEvent.ToolName ?? string.Empty,
+                            OperationDescription = changeEvent.OperationDescription ?? string.Empty,
+                            AffectedParagraphs = changeEvent.AffectedParagraphs ?? new int[0],
+                            Status = status ?? string.Empty,
+                            Message = string.IsNullOrWhiteSpace(changeEvent.Message)
+                                ? changeEvent.ToolOutput ?? string.Empty
+                                : changeEvent.Message,
+                            CreatedAtUtc = DateTimeOffset.UtcNow
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "记录任务改动审计失败。TaskRunId={TaskRunId}, Status={Status}", taskRunId, status);
+            }
+        }
+
+        private async Task TryCompleteTaskRunAsync(
+            TaskRunRecord auditRun,
+            TaskRunCompletion completion,
+            CancellationToken cancellationToken)
+        {
+            if (_taskHistoryStore == null || auditRun == null || string.IsNullOrWhiteSpace(auditRun.Id))
+            {
+                return;
+            }
+
+            try
+            {
+                await _taskHistoryStore
+                    .CompleteRunAsync(auditRun.Id, completion, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "完成任务历史运行记录失败。TaskRunId={TaskRunId}", auditRun.Id);
+            }
+        }
+
         private async Task AppendToolResultAsync(
             string documentPath,
             IList<AgentMessage> messages,
             ToolCall toolCall,
             ToolCallResult result,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            string taskRunId = null,
+            string operationDescription = null)
         {
             await _conversationStore
                 .AppendToolResultAsync(
@@ -1464,6 +1697,14 @@ namespace SmartWord.Application.Orchestration
                     toolCall.Name,
                     toolCall.Input ?? string.Empty,
                     result,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            await TryRecordTaskToolAsync(
+                    taskRunId,
+                    toolCall,
+                    result,
+                    operationDescription,
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -2947,6 +3188,106 @@ namespace SmartWord.Application.Orchestration
             return options != null && !options.RequireConfirmationForScripts
                 ? AgentPermissionMode.AutoSafeWrites
                 : AgentPermissionMode.ConfirmWrites;
+        }
+
+        private static int ResolveTotalSteps(AgentRunOptions options)
+        {
+            return options == null || options.ActivePlan == null || options.ActivePlan.TodoList == null
+                ? 0
+                : options.ActivePlan.TodoList.Count;
+        }
+
+        private static TaskRunCompletion ResolveTaskRunCompletion(
+            bool completedSuccessfully,
+            bool runPaused,
+            TodoBoardRunOutcome interruptedOutcome,
+            string interruptedReason,
+            int completedSteps,
+            int totalSteps)
+        {
+            if (completedSuccessfully)
+            {
+                return CreateTaskRunCompletion(
+                    TaskRunStatus.Completed,
+                    "任务已完成。",
+                    completedSteps,
+                    totalSteps);
+            }
+
+            if (runPaused)
+            {
+                return CreateTaskRunCompletion(
+                    TaskRunStatus.Paused,
+                    string.IsNullOrWhiteSpace(interruptedReason) ? "任务已暂停。" : interruptedReason,
+                    completedSteps,
+                    totalSteps);
+            }
+
+            if (interruptedOutcome == TodoBoardRunOutcome.Cancelled)
+            {
+                return CreateTaskRunCompletion(
+                    TaskRunStatus.Cancelled,
+                    string.IsNullOrWhiteSpace(interruptedReason) ? "用户取消任务。" : interruptedReason,
+                    completedSteps,
+                    totalSteps);
+            }
+
+            return CreateTaskRunCompletion(
+                TaskRunStatus.Failed,
+                string.IsNullOrWhiteSpace(interruptedReason) ? "任务未完成，系统已停止执行。" : interruptedReason,
+                completedSteps,
+                totalSteps);
+        }
+
+        private static TaskRunCompletion CreateTaskRunCompletion(
+            TaskRunStatus status,
+            string message,
+            int completedSteps,
+            int totalSteps)
+        {
+            var safeMessage = Truncate(message ?? string.Empty, 300);
+            return new TaskRunCompletion
+            {
+                Status = status,
+                Summary = status == TaskRunStatus.Completed
+                    ? "已完成任务。"
+                    : safeMessage,
+                FailureReason = status == TaskRunStatus.Failed ? safeMessage : string.Empty,
+                CancelReason = status == TaskRunStatus.Cancelled ? safeMessage : string.Empty,
+                CompletedSteps = completedSteps,
+                TotalSteps = totalSteps,
+                EndedAtUtc = DateTimeOffset.UtcNow
+            };
+        }
+
+        private static string ToTaskHistoryMode(AgentMode mode)
+        {
+            switch (mode)
+            {
+                case AgentMode.Plan:
+                    return "plan";
+                case AgentMode.Agent:
+                    return "agent";
+                case AgentMode.Ask:
+                default:
+                    return "ask";
+            }
+        }
+
+        private static string ToTaskHistoryPermissionMode(AgentPermissionMode mode)
+        {
+            switch (mode)
+            {
+                case AgentPermissionMode.ReadOnly:
+                    return "read_only";
+                case AgentPermissionMode.AutoSafeWrites:
+                    return "auto_safe_writes";
+                case AgentPermissionMode.FullAuto:
+                    return "full_auto";
+                case AgentPermissionMode.ConfirmWrites:
+                default:
+                    return "confirm_writes";
+            }
         }
 
         private enum PendingWriteState

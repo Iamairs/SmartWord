@@ -271,6 +271,99 @@ namespace SmartWord.AddIn.TaskPane
             });
         }
 
+        public string GetRecentTaskRunsJson(int limit)
+        {
+            try
+            {
+                var safeLimit = Math.Max(1, Math.Min(50, limit <= 0 ? 20 : limit));
+                var documentPath = GetCurrentDocumentPathForHistory();
+                var store = ServiceLocator.GetRequiredService<ITaskHistoryStore>();
+                var items = store
+                    .GetRecentRunsAsync(documentPath, safeLimit, CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+
+                var payloadItems = new object[items.Count];
+                for (var index = 0; index < items.Count; index++)
+                {
+                    payloadItems[index] = ToTaskRunPayload(items[index]);
+                }
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    items = payloadItems
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "读取最近任务历史失败。");
+                return JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+        }
+
+        public string GetTaskRunDetailJson(string taskRunId)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(taskRunId))
+                {
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = false,
+                        message = "taskRunId 不能为空。"
+                    });
+                }
+
+                var store = ServiceLocator.GetRequiredService<ITaskHistoryStore>();
+                var detail = store
+                    .GetRunDetailAsync(taskRunId, CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+                if (detail == null || detail.Run == null)
+                {
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = false,
+                        message = "未找到对应任务历史。"
+                    });
+                }
+
+                var tools = new object[detail.Tools.Count];
+                for (var index = 0; index < detail.Tools.Count; index++)
+                {
+                    tools[index] = ToTaskToolPayload(detail.Tools[index]);
+                }
+
+                var changes = new object[detail.Changes.Count];
+                for (var index = 0; index < detail.Changes.Count; index++)
+                {
+                    changes[index] = ToTaskChangePayload(detail.Changes[index]);
+                }
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    run = ToTaskRunPayload(detail.Run),
+                    tools,
+                    changes
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "读取任务历史详情失败。TaskRunId={TaskRunId}", taskRunId);
+                return JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+        }
+
         public void NavigateToParagraph(int paragraphIndex)
         {
             Task.Run(async () =>
@@ -837,6 +930,72 @@ namespace SmartWord.AddIn.TaskPane
                 requiresReasoningContentReplay = decision != null
                     && decision.SelectedCapability != null
                     && decision.SelectedCapability.RequiresReasoningContentReplay
+            };
+        }
+
+        private string GetCurrentDocumentPathForHistory()
+        {
+            try
+            {
+                var wordWrapper = ServiceLocator.GetRequiredService<WordApplicationWrapper>();
+                var documentPath = wordWrapper.GetActiveDocumentPath().GetAwaiter().GetResult();
+                return string.IsNullOrWhiteSpace(documentPath) ? "__active_document__" : documentPath;
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "获取当前文档路径失败，历史查询将使用活动文档兜底键。");
+                return "__active_document__";
+            }
+        }
+
+        private static object ToTaskRunPayload(TaskRunRecord run)
+        {
+            return new
+            {
+                id = run == null ? string.Empty : run.Id,
+                startedAtUtc = run == null ? string.Empty : run.StartedAtUtc.ToString("O"),
+                endedAtUtc = run == null || !run.EndedAtUtc.HasValue ? string.Empty : run.EndedAtUtc.Value.ToString("O"),
+                userGoal = run == null ? string.Empty : run.UserGoal,
+                mode = run == null ? string.Empty : run.Mode,
+                permissionMode = run == null ? string.Empty : run.PermissionMode,
+                model = run == null ? string.Empty : run.Model,
+                status = run == null ? string.Empty : run.Status.ToString(),
+                summary = run == null ? string.Empty : run.Summary,
+                failureReason = run == null ? string.Empty : run.FailureReason,
+                cancelReason = run == null ? string.Empty : run.CancelReason,
+                completedSteps = run == null ? 0 : run.CompletedSteps,
+                totalSteps = run == null ? 0 : run.TotalSteps,
+                toolCount = run == null ? 0 : run.ToolCount,
+                changeCount = run == null ? 0 : run.ChangeCount,
+                verifiedChangeCount = run == null ? 0 : run.VerifiedChangeCount
+            };
+        }
+
+        private static object ToTaskToolPayload(TaskToolRecord tool)
+        {
+            return new
+            {
+                toolCallId = tool == null ? string.Empty : tool.ToolCallId,
+                toolName = tool == null ? string.Empty : tool.ToolName,
+                operationDescription = tool == null ? string.Empty : tool.OperationDescription,
+                rawInput = tool == null ? string.Empty : tool.RawInput,
+                output = tool == null ? string.Empty : tool.Output,
+                success = tool != null && tool.Success,
+                createdAtUtc = tool == null ? string.Empty : tool.CreatedAtUtc.ToString("O")
+            };
+        }
+
+        private static object ToTaskChangePayload(TaskChangeRecord change)
+        {
+            return new
+            {
+                toolCallId = change == null ? string.Empty : change.ToolCallId,
+                toolName = change == null ? string.Empty : change.ToolName,
+                operationDescription = change == null ? string.Empty : change.OperationDescription,
+                affectedParagraphs = change == null ? new int[0] : change.AffectedParagraphs ?? new int[0],
+                status = change == null ? string.Empty : change.Status,
+                message = change == null ? string.Empty : change.Message,
+                createdAtUtc = change == null ? string.Empty : change.CreatedAtUtc.ToString("O")
             };
         }
 

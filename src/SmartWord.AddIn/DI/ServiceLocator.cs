@@ -58,7 +58,9 @@ namespace SmartWord.AddIn.DI
             services.AddSingleton(provider => CreateLlmClientOptions(
                 provider.GetRequiredService<SmartWordSettings>()));
             services.AddSingleton<ILlmClient, OpenAiCompatibleClient>();
-            services.AddSingleton<IConversationStore, InMemoryConversationStore>();
+            services.AddSingleton<SmartWordSqliteDatabase>();
+            services.AddSingleton<IConversationStore, SqliteConversationStore>();
+            services.AddSingleton<ITaskHistoryStore, SqliteTaskHistoryStore>();
             services.AddSingleton<ITodoStore, JsonTodoStore>();
             services.AddSingleton<IContextHydrator, ContextHydrator>();
             services.AddSingleton<TodoManager>();
@@ -108,7 +110,8 @@ namespace SmartWord.AddIn.DI
                 provider.GetRequiredService<IQuestionChannel>(),
                 provider.GetRequiredService<ITodoRecoveryChannel>(),
                 provider.GetRequiredService<TodoManager>(),
-                provider.GetRequiredService<TodoReminderService>()));
+                provider.GetRequiredService<TodoReminderService>(),
+                provider.GetRequiredService<ITaskHistoryStore>()));
             services.AddSingleton<StreamingResponseHandler>();
 
             _serviceProvider = services.BuildServiceProvider();
