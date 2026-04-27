@@ -1,4 +1,5 @@
 using SmartWord.Core.Enums;
+using System.Collections.Generic;
 
 namespace SmartWord.Core.Models
 {
@@ -24,6 +25,11 @@ namespace SmartWord.Core.Models
         public string ModelRoutingMessage { get; set; } = string.Empty;
 
         public string CustomSystemInstructions { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 前端显式选择的 Skill 名称。这里只保存标识符，不保存路径。
+        /// </summary>
+        public IReadOnlyList<string> SelectedSkillNames { get; set; } = new List<string>();
 
         /// <summary>Plan→Agent 切换时传入的执行计划，用于进度追踪</summary>
         public ExecutionPlan ActivePlan { get; set; }

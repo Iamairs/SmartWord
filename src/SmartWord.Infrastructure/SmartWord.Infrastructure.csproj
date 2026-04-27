@@ -90,6 +90,9 @@
     <Compile Include="Persistence\SmartWordSqliteDatabase.cs" />
     <Compile Include="Persistence\SqliteConversationStore.cs" />
     <Compile Include="Persistence\SqliteTaskHistoryStore.cs" />
+    <Compile Include="Skills\FileSystemSkillStore.cs" />
+    <Compile Include="Skills\SkillFrontmatterParser.cs" />
+    <Compile Include="Skills\SkillPathGuard.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>

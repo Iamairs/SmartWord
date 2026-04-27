@@ -59,6 +59,8 @@
     <Compile Include="Interfaces\IQuestionChannel.cs" />
     <Compile Include="Interfaces\IContextHydrator.cs" />
     <Compile Include="Interfaces\IConversationStore.cs" />
+    <Compile Include="Interfaces\ISkillPromptResolver.cs" />
+    <Compile Include="Interfaces\ISkillStore.cs" />
     <Compile Include="Interfaces\ITaskHistoryStore.cs" />
     <Compile Include="Interfaces\ILlmClient.cs" />
     <Compile Include="Interfaces\ITodoRecoveryChannel.cs" />
@@ -76,6 +78,7 @@
     <Compile Include="Models\DocumentStatus.cs" />
     <Compile Include="Models\ExecutionPlan.cs" />
     <Compile Include="Models\PermissionDecision.cs" />
+    <Compile Include="Models\SkillModels.cs" />
     <Compile Include="Models\TodoBoard.cs" />
     <Compile Include="Models\TaskHistoryModels.cs" />
     <Compile Include="Models\ToolCall.cs" />
