@@ -1,54 +1,23 @@
-# SmartWord Skill 能力包管理
+# 当前需求：Skill scripts 执行支持
 
-## 背景
+## 需求目标
 
-SmartWord 已具备 Word 文档读取、写入、验证、撤销、任务历史审计和前端侧边栏交互能力。下一步需要引入类似 Claude Code / Codex 的 Skill 机制，让用户能把稳定的文档处理流程沉淀为本地能力包。
+为 SmartWord 增加受控的 `skill_run_script` 工具，让 Agent 模式可以执行 Skill 包 `scripts/` 目录下的 C# 或 Python 脚本，用于本地分析、格式转换、术语提取和生成结构化建议。脚本不能直接修改 Word 文档；任何 Word 写入仍必须继续使用 `patch_range` 或 `execute_script` 并走现有确认、Undo、验证和任务历史审计流程。
 
-主流 coding agent 的 Skill 通常是一个包含 `SKILL.md` 的文件夹，`SKILL.md` frontmatter 中的 `name` 和 `description` 用于发现和触发，正文在需要时加载，`references/`、`assets/`、`scripts/` 作为可选资源。SmartWord 的使用背景不同：它处理 Word 文档，而不是代码仓库，因此首版 Skill 不应成为任意脚本执行入口，而应成为“文档工作流上下文包”。
+## 关键约束
 
-## 用户目标
+- 工具仅在 Agent 模式向模型暴露，Ask / Plan 模式不得暴露或执行。
+- 脚本路径必须位于指定 Skill 的 `scripts/` 目录内，拒绝绝对路径、`..` 越界和跨 Skill 访问。
+- 支持 `csharp` 与 `python` runtime；首版不支持 Bash、PowerShell、Node。
+- Python 从 `PATH` 自动探测解释器，不自动安装依赖，不注入 API Key。
+- 默认禁止联网；首版通过静态扫描和收敛环境变量防护，不声称具备内核级沙箱。
+- 用户确认的输入路径复制到每次运行的 workspace `inputs/`，脚本只在 workspace 中读写，输出收集自 `outputs/`。
+- 授权记忆按 `skillName + relativeScriptPath + scriptHash + runtime + permissionSet` 细化；脚本内容、路径、runtime 或权限变化后必须重新确认。
+- 脚本结果必须进入对话历史和 SQLite 任务历史审计。
 
-- 查看当前可用 Skill。
-- 创建自定义 Skill。
-- 查看和编辑用户 Skill 的 `SKILL.md`。
-- 删除用户 Skill。
-- 启用或禁用 Skill。
-- 在一次 Ask / Plan / Agent 请求中选择 Skill，让 Agent 按 Skill 的文档工作流处理当前 Word 文档。
-- 保证 Skill 不绕过现有权限确认、Undo、验证和 SQLite 审计。
+## 风险点
 
-## 非目标
-
-- 不实现 Skill 市场。
-- 不实现第三方 Skill 在线安装。
-- 不执行 `scripts/` 下脚本。
-- 不让 Skill 直接调用 Word COM 或文件系统。
-- 不做跨设备同步。
-- 不做企业签名验证。
-- 不把 Skill 内容写入 SQLite；Skill 仍以文件系统为真实来源。
-
-## 设计原则
-
-- 兼容主流目录结构：`skill-name/SKILL.md`，可选 `references/`、`assets/`、`scripts/`。
-- 仅允许用户删除 `%AppData%\SmartWord\skills` 下的用户 Skill。
-- 内置 Skill 位于 AddIn `Resources\Skills`，只读、不可删除。
-- Skill 名称必须匹配 `^[a-z0-9][a-z0-9-]{0,63}$`。
-- `SKILL.md` 最大 64KB，提示词注入时每个 Skill 最多 12KB，避免撑爆上下文。
-- 创建 Skill 时使用固定模板，模仿 skill-creator 的渐进披露设计：简洁 `SKILL.md`，详细材料放引用文件。
-- 安全优先：`scripts/` 只作为资源显示；提示词明确禁止模型请求执行 Skill 脚本或把脚本作为 Word 修改通道。
-
-## 数据位置
-
-```text
-内置 Skill: <AddInBase>\Resources\Skills\
-用户 Skill: %AppData%\SmartWord\skills\
-用户禁用清单: %AppData%\SmartWord\skills\skills-state.json
-```
-
-## 安全边界
-
-- Skill store 只接受规范化 Skill 名，不接受任意路径。
-- 删除操作必须验证目标目录位于用户 Skill 根目录内。
-- 读取资源时仅列出相对路径，不读取 `scripts/` 内容。
-- `SKILL.md` 中疑似密钥写入前会脱敏。
-- Frontend 不暴露脚本执行按钮。
-- Agent prompt 注入安全规则：Skill 不提供新工具权限；所有 Word 修改仍必须通过 `patch_range` / `execute_script` 等现有工具，并受 PermissionGuard、确认面板、UndoScope、验证和任务历史约束。
+- .NET Framework 4.7.2 传统 csproj 需要手动维护 Compile 项。
+- Roslyn 脚本执行要使用专用 globals，不能复用 Word COM 的 `execute_script` globals。
+- Python 只能做应用层防护，无法阻止可信边界之外的所有系统级行为，因此 UI 和 Prompt 必须明确说明安全边界。
+- 前端确认通道当前只有布尔确认，需要扩展“记住授权”的语义，同时保持旧写入工具兼容。
