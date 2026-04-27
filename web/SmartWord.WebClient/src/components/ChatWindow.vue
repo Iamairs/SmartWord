@@ -34,6 +34,7 @@
         v-if="chatStore.pendingConfirmation"
         :confirmation="chatStore.pendingConfirmation"
         @confirm="confirmPendingToolCall"
+        @remember="rememberPendingToolCall"
         @skip="skipPendingToolCall"
         @cancel="cancelCurrentRun"
       />
@@ -354,14 +355,14 @@ async function sendMessage(content, manualMode, permissionModeOverride = '') {
   }
 }
 
-async function respondToPendingToolCall(confirmed) {
+async function respondToPendingToolCall(confirmed, options = {}) {
   if (!chatStore.pendingConfirmation) {
     return;
   }
 
   chatStore.setPendingConfirmationSubmitting(true);
   try {
-    await hostBridge.confirmToolCall(chatStore.pendingConfirmation.toolCallId, confirmed);
+    await hostBridge.confirmToolCall(chatStore.pendingConfirmation.toolCallId, confirmed, options);
   } catch (error) {
     chatStore.appendAssistantMessage(`确认写操作失败：${error.message || '未知错误'}`);
     chatStore.clearPendingConfirmation();
@@ -372,6 +373,10 @@ async function respondToPendingToolCall(confirmed) {
 
 async function confirmPendingToolCall() {
   await respondToPendingToolCall(true);
+}
+
+async function rememberPendingToolCall() {
+  await respondToPendingToolCall(true, { remember: true });
 }
 
 async function skipPendingToolCall() {

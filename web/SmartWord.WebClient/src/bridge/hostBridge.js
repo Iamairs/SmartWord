@@ -285,7 +285,17 @@ enabled: true
 # 文档终检
 
 检查占位符、TODO、编号、标题层级和低风险格式问题。`,
-      resources: []
+      resources: [],
+      scripts: [
+        {
+          skillName: 'document-finalizer',
+          relativePath: 'scripts/final_check.py',
+          runtime: 'python',
+          sizeBytes: 128,
+          sha256: 'mock-finalizer-script',
+          isApproved: false
+        }
+      ]
     },
     {
       name: 'business-report-polish',
@@ -371,7 +381,7 @@ enabled: true
 
 ## 安全边界
 
-- 不执行 scripts/ 下的脚本。
+- scripts/ 下的脚本只能通过 skill_run_script 执行。
 - 不绕过 SmartWord 的写入确认和任务审计。
 `;
 }
@@ -501,9 +511,14 @@ export const hostBridge = {
     });
   },
 
-  async confirmToolCall(toolCallId, confirmed) {
+  async confirmToolCall(toolCallId, confirmed, options = {}) {
     if (this.isAvailable) {
-      await callBridge('ConfirmToolCall', toolCallId, confirmed === true);
+      await callBridge(
+        'ConfirmToolCallWithOptions',
+        toolCallId,
+        confirmed === true,
+        options?.remember === true
+      );
       return;
     }
 
@@ -657,12 +672,13 @@ export const hostBridge = {
       throw new Error('未找到指定 Skill');
     }
 
-    const { content, resources, ...summary } = skill;
+    const { content, resources, scripts, ...summary } = skill;
     return {
       success: true,
       skill: summary,
       content,
-      resources: resources || []
+      resources: resources || [],
+      scripts: scripts || []
     };
   },
 
@@ -695,12 +711,13 @@ export const hostBridge = {
       isBuiltIn: false,
       updatedAtUtc: new Date().toISOString(),
       content: request?.content || createSkillTemplate(name, request?.displayName, request?.description),
-      resources: []
+      resources: [],
+      scripts: []
     };
     skills.push(skill);
     saveMockSkills(skills);
     const { content, resources, ...summary } = skill;
-    return { success: true, skill: summary, content, resources };
+    return { success: true, skill: summary, content, resources, scripts: skill.scripts || [] };
   },
 
   async saveSkill(name, content) {
@@ -723,9 +740,41 @@ export const hostBridge = {
     skill.content = content || '';
     skill.updatedAtUtc = new Date().toISOString();
     saveMockSkills(skills);
-    const { resources, ...summaryWithContent } = skill;
+    const { resources, scripts, ...summaryWithContent } = skill;
     const { content: savedContent, ...summary } = summaryWithContent;
-    return { success: true, skill: summary, content: savedContent, resources: resources || [] };
+    return { success: true, skill: summary, content: savedContent, resources: resources || [], scripts: scripts || [] };
+  },
+
+  async getSkillScriptApprovals() {
+    if (this.isAvailable) {
+      const raw = await callBridge('GetSkillScriptApprovalsJson');
+      const result = JSON.parse(raw || '{}');
+      if (result.success === false) {
+        throw new Error(result.message || '脚本授权读取失败');
+      }
+
+      return Array.isArray(result.items) ? result.items : [];
+    }
+
+    return JSON.parse(window.localStorage.getItem('smartword-script-approvals') || '[]');
+  },
+
+  async revokeSkillScriptApproval(key) {
+    if (this.isAvailable) {
+      const raw = await callBridge('RevokeSkillScriptApprovalJson', JSON.stringify(key || {}));
+      const result = JSON.parse(raw || '{}');
+      if (result.success === false) {
+        throw new Error(result.message || '脚本授权撤销失败');
+      }
+
+      return result;
+    }
+
+    const stableKey = JSON.stringify(key || {});
+    const approvals = JSON.parse(window.localStorage.getItem('smartword-script-approvals') || '[]')
+      .filter((item) => JSON.stringify(item.key || {}) !== stableKey);
+    window.localStorage.setItem('smartword-script-approvals', JSON.stringify(approvals));
+    return { success: true };
   },
 
   async deleteSkill(name) {

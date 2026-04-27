@@ -11,6 +11,8 @@ export const useSkillsStore = defineStore('skills', {
     selectedSkill: null,
     selectedContent: '',
     resources: [],
+    scripts: [],
+    approvals: [],
     errorMessage: '',
     successMessage: '',
     createForm: {
@@ -58,6 +60,8 @@ export const useSkillsStore = defineStore('skills', {
         this.selectedSkill = detail.skill;
         this.selectedContent = detail.content || '';
         this.resources = Array.isArray(detail.resources) ? detail.resources : [];
+        this.scripts = Array.isArray(detail.scripts) ? detail.scripts : [];
+        this.approvals = await hostBridge.getSkillScriptApprovals();
       } catch (error) {
         this.errorMessage = error.message || 'Skill 详情读取失败';
       } finally {
@@ -89,6 +93,7 @@ export const useSkillsStore = defineStore('skills', {
         this.selectedSkill = detail.skill;
         this.selectedContent = detail.content || '';
         this.resources = Array.isArray(detail.resources) ? detail.resources : [];
+        this.scripts = Array.isArray(detail.scripts) ? detail.scripts : [];
         this.createForm = { name: '', displayName: '', description: '' };
         await this.loadSkills();
         this.successMessage = 'Skill 已创建。';
@@ -109,6 +114,7 @@ export const useSkillsStore = defineStore('skills', {
         this.selectedSkill = detail.skill;
         this.selectedContent = detail.content || '';
         this.resources = Array.isArray(detail.resources) ? detail.resources : [];
+        this.scripts = Array.isArray(detail.scripts) ? detail.scripts : [];
         await this.loadSkills();
         this.successMessage = 'Skill 已保存。';
       } catch (error) {
@@ -130,6 +136,7 @@ export const useSkillsStore = defineStore('skills', {
         this.selectedSkill = null;
         this.selectedContent = '';
         this.resources = [];
+        this.scripts = [];
         await this.loadSkills();
         this.successMessage = 'Skill 已删除。';
       } catch (error) {
@@ -150,6 +157,31 @@ export const useSkillsStore = defineStore('skills', {
       } catch (error) {
         this.errorMessage = error.message || 'Skill 启停设置失败';
       }
+    },
+
+    async revokeScriptApproval(record) {
+      this.errorMessage = '';
+      this.successMessage = '';
+      try {
+        await hostBridge.revokeSkillScriptApproval(record?.key || {});
+        this.approvals = await hostBridge.getSkillScriptApprovals();
+        this.successMessage = '脚本授权已撤销。';
+      } catch (error) {
+        this.errorMessage = error.message || '脚本授权撤销失败';
+      }
+    },
+
+    isScriptApproved(script) {
+      return this.approvals.some((record) => {
+        const key = record.key || record.Key || {};
+        return (
+          String(key.skillName || key.SkillName || '').toLowerCase() === String(script.skillName || '').toLowerCase() &&
+          String(key.relativeScriptPath || key.RelativeScriptPath || '').toLowerCase() ===
+            String(script.relativePath || '').toLowerCase() &&
+          String(key.scriptHash || key.ScriptHash || '').toLowerCase() === String(script.sha256 || '').toLowerCase() &&
+          String(key.runtime || key.Runtime || '').toLowerCase() === String(script.runtime || '').toLowerCase()
+        );
+      });
     }
   }
 });

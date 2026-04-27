@@ -30,6 +30,16 @@
       </ol>
     </div>
 
+    <div v-if="preview.scriptDetails.length" class="preview-panel__script">
+      <p>脚本信息</p>
+      <dl>
+        <template v-for="item in preview.scriptDetails" :key="item.label">
+          <dt>{{ item.label }}</dt>
+          <dd>{{ item.value }}</dd>
+        </template>
+      </dl>
+    </div>
+
     <details class="preview-panel__details">
       <summary>查看技术详情</summary>
       <pre>{{ confirmation.toolInput || '{}' }}</pre>
@@ -43,6 +53,15 @@
         @click="$emit('confirm')"
       >
         {{ confirmation.isSubmitting ? '提交中...' : '确认执行' }}
+      </button>
+      <button
+        v-if="preview.canRemember"
+        class="preview-panel__button preview-panel__button--remember"
+        type="button"
+        :disabled="confirmation.isSubmitting"
+        @click="$emit('remember')"
+      >
+        记住授权
       </button>
       <button
         class="preview-panel__button preview-panel__button--skip"
@@ -74,7 +93,7 @@ const props = defineProps({
   }
 });
 
-defineEmits(['confirm', 'skip', 'cancel']);
+defineEmits(['confirm', 'remember', 'skip', 'cancel']);
 
 const parsedInput = computed(() => {
   try {
@@ -94,13 +113,19 @@ const preview = computed(() => {
     return buildScriptPreview(parsedInput.value);
   }
 
+  if (toolName === 'skill_run_script') {
+    return buildSkillScriptPreview(parsedInput.value);
+  }
+
   return {
     title: getToolDisplayName(toolName),
     riskLevel: 'medium',
     riskLabel: '中风险',
     scopeLabel: '待确认',
     safetyLabel: '系统会尽量验证改动结果；如果当前步骤失败，会回滚本步。',
-    operations: []
+    operations: [],
+    scriptDetails: [],
+    canRemember: false
   };
 });
 
@@ -117,6 +142,9 @@ function buildPatchRangePreview(input) {
       : '由工具输入决定',
     safetyLabel: '系统会自动验证改动结果；如果当前步骤失败，会回滚本步。',
     operations: operations.map(formatPatchOperation)
+    ,
+    scriptDetails: [],
+    canRemember: false
   };
 }
 
@@ -135,7 +163,34 @@ function buildScriptPreview(input) {
     operations: [
       '执行受控脚本完成上述文档修改。',
       input.verify_code ? '写入后执行只读验证脚本。' : '当前输入未提供可展示的验证脚本。'
-    ]
+    ],
+    scriptDetails: [],
+    canRemember: false
+  };
+}
+
+function buildSkillScriptPreview(input) {
+  const paths = Array.isArray(input.confirmed_input_paths) ? input.confirmed_input_paths : [];
+  const outputs = Array.isArray(input.expected_outputs) ? input.expected_outputs : [];
+  const hash = summarizeHash(input.script_hash || '');
+  return {
+    title: 'Skill 本地脚本',
+    riskLevel: 'high',
+    riskLabel: '需授权',
+    scopeLabel: paths.length ? `${paths.length} 个输入路径副本` : '无外部输入路径',
+    safetyLabel: '脚本在临时 workspace 中运行，默认禁止联网；Python 首版是应用层防护，不是系统级沙箱。',
+    operations: [
+      `执行 ${input.runtime || 'unknown'} 脚本 ${input.normalized_script_path || input.script_path || ''}。`,
+      outputs.length ? `计划输出：${outputs.join(', ')}` : '脚本输出将收集自 workspace/outputs。'
+    ],
+    scriptDetails: [
+      { label: 'Skill', value: input.skill_name || '未知' },
+      { label: 'Runtime', value: input.runtime || '未知' },
+      { label: 'Hash', value: hash || '待解析' },
+      { label: '网络', value: input.network === 'disabled_by_default' ? '默认禁止' : '默认禁止' },
+      { label: '超时', value: `${input.timeout_seconds || 30}s` }
+    ],
+    canRemember: Boolean(input.script_hash)
   };
 }
 
@@ -180,6 +235,11 @@ function formatPatchOperation(operation) {
 function summarizeText(text) {
   const normalized = String(text || '').replace(/\s+/g, ' ').trim();
   return normalized.length > 36 ? `${normalized.slice(0, 36)}...` : normalized;
+}
+
+function summarizeHash(hash) {
+  const value = String(hash || '').trim();
+  return value.length > 16 ? `${value.slice(0, 12)}...${value.slice(-6)}` : value;
 }
 
 function getToolDisplayName(toolName) {
@@ -279,6 +339,38 @@ function getToolDisplayName(toolName) {
   background: rgba(255, 255, 255, 0.72);
 }
 
+.preview-panel__script {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.preview-panel__script p {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #7a3110;
+}
+
+.preview-panel__script dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 5px 8px;
+  font-size: 11px;
+}
+
+.preview-panel__script dt {
+  color: #8a5a35;
+}
+
+.preview-panel__script dd {
+  margin: 0;
+  color: #5f3d27;
+  word-break: break-word;
+}
+
 .preview-panel__operations p {
   margin: 0 0 6px;
   font-size: 12px;
@@ -324,7 +416,7 @@ function getToolDisplayName(toolName) {
 .preview-panel__actions {
   margin-top: 12px;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -345,6 +437,11 @@ function getToolDisplayName(toolName) {
 
 .preview-panel__button--confirm {
   background: linear-gradient(135deg, #d96f32 0%, #ee8d32 100%);
+  color: #ffffff;
+}
+
+.preview-panel__button--remember {
+  background: #244464;
   color: #ffffff;
 }
 

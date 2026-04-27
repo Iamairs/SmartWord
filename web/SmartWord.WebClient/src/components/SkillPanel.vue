@@ -89,6 +89,24 @@
         </span>
       </div>
 
+      <div v-if="skillsStore.scripts.length" class="skill-resources">
+        <p>scripts/</p>
+        <span v-for="script in skillsStore.scripts" :key="script.relativePath">
+          {{ script.runtime }} / {{ script.relativePath }} / {{ formatHash(script.sha256) }}
+          · {{ skillsStore.isScriptApproved(script) ? '已授权' : '未授权' }}
+        </span>
+      </div>
+
+      <div v-if="matchingApprovals.length" class="skill-resources">
+        <p>已授权脚本</p>
+        <span v-for="record in matchingApprovals" :key="approvalKey(record)">
+          {{ approvalLabel(record) }}
+          <button class="ghost-button ghost-button--tiny" type="button" @click="skillsStore.revokeScriptApproval(record)">
+            撤销
+          </button>
+        </span>
+      </div>
+
       <div class="skill-detail__actions">
         <button
           v-if="!skillsStore.selectedSkill.isBuiltIn"
@@ -114,10 +132,41 @@
 </template>
 
 <script setup>
-import { onMounted } from 'vue';
+import { computed, onMounted } from 'vue';
 import { useSkillsStore } from '../stores/skills';
 
 const skillsStore = useSkillsStore();
+
+const matchingApprovals = computed(() => {
+  const skillName = skillsStore.selectedSkill?.name || '';
+  return skillsStore.approvals.filter((record) => {
+    const key = record.key || record.Key || {};
+    return String(key.skillName || key.SkillName || '').toLowerCase() === skillName.toLowerCase();
+  });
+});
+
+function formatHash(hash) {
+  const value = String(hash || '');
+  return value.length > 14 ? `${value.slice(0, 10)}...` : value;
+}
+
+function approvalKey(record) {
+  const key = record.key || record.Key || {};
+  return [
+    key.skillName || key.SkillName,
+    key.relativeScriptPath || key.RelativeScriptPath,
+    key.scriptHash || key.ScriptHash,
+    key.runtime || key.Runtime,
+    key.permissionSet || key.PermissionSet
+  ].join('|');
+}
+
+function approvalLabel(record) {
+  const key = record.key || record.Key || {};
+  return `${key.runtime || key.Runtime} / ${key.relativeScriptPath || key.RelativeScriptPath} / ${formatHash(
+    key.scriptHash || key.ScriptHash
+  )}`;
+}
 
 onMounted(() => {
   if (!skillsStore.items.length) {
