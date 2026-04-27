@@ -171,6 +171,98 @@ function createMockResponse(request, notify) {
   );
 }
 
+function createMockTaskRuns() {
+  const now = new Date();
+  return [
+    {
+      id: 'mock-completed-agent',
+      startedAtUtc: new Date(now.getTime() - 1000 * 60 * 18).toISOString(),
+      endedAtUtc: new Date(now.getTime() - 1000 * 60 * 15).toISOString(),
+      userGoal: '统一合同正文标题层级，并修正第三章格式。',
+      mode: 'agent',
+      permissionMode: 'confirm_writes',
+      model: 'gpt-4.1',
+      status: 'Completed',
+      summary: '已完成任务，记录 3 个工具调用，2 项文档改动，2 项已验证。',
+      failureReason: '',
+      toolCount: 3,
+      changeCount: 2,
+      verifiedChangeCount: 2
+    },
+    {
+      id: 'mock-failed-tool',
+      startedAtUtc: new Date(now.getTime() - 1000 * 60 * 80).toISOString(),
+      endedAtUtc: new Date(now.getTime() - 1000 * 60 * 78).toISOString(),
+      userGoal: '批量替换表格中的过期条款。',
+      mode: 'agent',
+      permissionMode: 'auto_safe_writes',
+      model: 'gpt-4.1',
+      status: 'Failed',
+      summary: '连续多次工具调用失败，系统已触发熔断停止。',
+      failureReason: '目标表格定位失败。',
+      toolCount: 4,
+      changeCount: 0,
+      verifiedChangeCount: 0
+    },
+    {
+      id: 'mock-paused-budget',
+      startedAtUtc: new Date(now.getTime() - 1000 * 60 * 140).toISOString(),
+      endedAtUtc: new Date(now.getTime() - 1000 * 60 * 120).toISOString(),
+      userGoal: '审阅全文并逐段改写为正式商务表达。',
+      mode: 'agent',
+      permissionMode: 'confirm_writes',
+      model: 'gpt-4.1',
+      status: 'Paused',
+      summary: '达到本轮执行预算，任务已暂停。',
+      failureReason: '',
+      toolCount: 18,
+      changeCount: 7,
+      verifiedChangeCount: 6
+    }
+  ];
+}
+
+function createMockTaskDetail(taskRunId) {
+  const run = createMockTaskRuns().find((item) => item.id === taskRunId) || createMockTaskRuns()[0];
+  return {
+    success: true,
+    run,
+    tools: [
+      {
+        toolCallId: `${run.id}-tool-1`,
+        toolName: 'probe_document',
+        operationDescription: '读取文档结构。',
+        rawInput: '{"include_stats":true}',
+        output: '{"paragraph_count":86}',
+        success: true,
+        createdAtUtc: run.startedAtUtc
+      },
+      {
+        toolCallId: `${run.id}-tool-2`,
+        toolName: run.status === 'Failed' ? 'patch_range' : 'verify_script',
+        operationDescription: run.status === 'Failed' ? '尝试定位并修改表格条款。' : '验证写入结果。',
+        rawInput: '{}',
+        output: run.status === 'Failed' ? '[ERROR] 目标表格定位失败。' : '{"all_passed":true}',
+        success: run.status !== 'Failed',
+        createdAtUtc: run.endedAtUtc || run.startedAtUtc
+      }
+    ],
+    changes: run.changeCount
+      ? [
+          {
+            toolCallId: `${run.id}-change-1`,
+            toolName: 'patch_range',
+            operationDescription: '修正第三章标题格式。',
+            affectedParagraphs: [12, 13],
+            status: 'verified',
+            message: '已通过验证步骤确认改动生效。',
+            createdAtUtc: run.endedAtUtc || run.startedAtUtc
+          }
+        ]
+      : []
+  };
+}
+
 const listeners = new Set();
 
 function emitEvent(payload) {
@@ -392,6 +484,34 @@ export const hostBridge = {
       success: true,
       message: '当前为浏览器降级模式，已模拟停止暂停任务。'
     };
+  },
+
+  async getRecentTaskRuns(limit = 20) {
+    if (this.isAvailable) {
+      const raw = await callBridge('GetRecentTaskRunsJson', limit);
+      const result = JSON.parse(raw || '{}');
+      if (result.success === false) {
+        throw new Error(result.message || '历史读取失败');
+      }
+
+      return Array.isArray(result.items) ? result.items : [];
+    }
+
+    return createMockTaskRuns().slice(0, Math.max(1, Math.min(50, limit || 20)));
+  },
+
+  async getTaskRunDetail(taskRunId) {
+    if (this.isAvailable) {
+      const raw = await callBridge('GetTaskRunDetailJson', taskRunId || '');
+      const result = JSON.parse(raw || '{}');
+      if (result.success === false) {
+        throw new Error(result.message || '历史详情读取失败');
+      }
+
+      return result;
+    }
+
+    return createMockTaskDetail(taskRunId);
   },
 
   async navigateToParagraph(paragraphIndex) {

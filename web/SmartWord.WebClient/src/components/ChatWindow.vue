@@ -7,6 +7,9 @@
         <p class="settings-summary">{{ settingsSummary }}</p>
       </div>
       <div class="header-actions">
+        <button class="ghost-button" type="button" @click="taskHistoryStore.togglePanel()">
+          {{ taskHistoryStore.isPanelOpen ? '收起历史' : '历史' }}
+        </button>
         <button class="ghost-button" type="button" @click="settingsStore.togglePanel()">
           {{ settingsStore.isPanelOpen ? '收起设置' : '设置' }}
         </button>
@@ -15,6 +18,10 @@
     </header>
 
     <SettingsPanel v-if="settingsStore.isPanelOpen" />
+    <TaskHistoryPanel
+      v-if="taskHistoryStore.isPanelOpen"
+      @navigate="navigateToParagraph"
+    />
     <QuickActionsPanel v-if="!chatStore.isLoading" @select="submitQuickAction" />
 
     <section class="message-list" ref="messageListRef" @click="handleMessageListClick">
@@ -171,11 +178,13 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { marked } from 'marked';
 import { useChatStore } from '../stores/chat';
 import { useSettingsStore } from '../stores/settings';
+import { useTaskHistoryStore } from '../stores/taskHistory';
 import { hostBridge } from '../bridge/hostBridge';
 import ChangesSummaryPanel from './ChangesSummaryPanel.vue';
 import ContentPreviewPanel from './ContentPreviewPanel.vue';
 import QuickActionsPanel from './QuickActionsPanel.vue';
 import SettingsPanel from './SettingsPanel.vue';
+import TaskHistoryPanel from './TaskHistoryPanel.vue';
 import ThoughtActionTrace from './ThoughtActionTrace.vue';
 import TodoBoardPanel from './TodoBoardPanel.vue';
 import TodoBoardPausePanel from './TodoBoardPausePanel.vue';
@@ -183,6 +192,7 @@ import TodoBoardRecoveryPanel from './TodoBoardRecoveryPanel.vue';
 
 const chatStore = useChatStore();
 const settingsStore = useSettingsStore();
+const taskHistoryStore = useTaskHistoryStore();
 const draft = ref('');
 const messageListRef = ref(null);
 const customQuestionAnswer = ref('');
@@ -586,6 +596,9 @@ function handleAgentEvent(event) {
       chatStore.clearPendingTodoPause();
       chatStore.finishLoading();
       chatStore.finalizeTaskChanges();
+      if (taskHistoryStore.isPanelOpen) {
+        taskHistoryStore.loadRecentTasks();
+      }
       isCancelling.value = false;
       if (event.message) {
         chatStore.appendAssistantMessage(event.message);
@@ -597,6 +610,9 @@ function handleAgentEvent(event) {
       chatStore.finishLoading();
       chatStore.finalizeTaskChanges();
       chatStore.appendAssistantMessage(getCancellationMessage());
+      if (taskHistoryStore.isPanelOpen) {
+        taskHistoryStore.loadRecentTasks();
+      }
       isCancelling.value = false;
       break;
     case 'document_not_writable':
@@ -610,6 +626,9 @@ function handleAgentEvent(event) {
       isCancelling.value = false;
       if (event.message) {
         chatStore.appendAssistantMessage(event.message);
+      }
+      if (taskHistoryStore.isPanelOpen) {
+        taskHistoryStore.loadRecentTasks();
       }
       break;
     default:
