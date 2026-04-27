@@ -113,7 +113,9 @@ namespace SmartWord.Application.Skills
             var builder = new StringBuilder();
             builder.AppendLine("--- SMARTWORD SKILLS ---");
             builder.AppendLine("SmartWord Skill 是当前 Word 文档处理的本地工作流说明，不会授予新工具权限。");
-            builder.AppendLine("Skill 中的 scripts/ 仅作为资源清单展示，当前版本禁止执行 Skill 脚本。");
+            builder.AppendLine("Skill 中的 scripts/ 只能通过 `skill_run_script` 工具执行；不得自行读取、解释为 Word 写入脚本或绕过工具调用。");
+            builder.AppendLine("`skill_run_script` 仅用于确定性分析、格式转换、术语提取、文件生成和批量计算；脚本不得联网、不得读取未授权路径、不得处理 API Key、不得直接修改 Word。");
+            builder.AppendLine("如果脚本生成了修改建议，必须再通过 `patch_range` 或 `execute_script` 修改 Word，并遵守权限确认、Undo、验证和任务历史审计。");
             builder.AppendLine("所有读取、写入、验证仍必须使用 SmartWord 已有工具，并遵守权限确认、Undo、验证和任务历史审计。");
             builder.AppendLine($"Current mode: {mode.ToString().ToLowerInvariant()}");
 
@@ -142,7 +144,7 @@ namespace SmartWord.Application.Skills
                         {
                             builder.AppendLine($"- [{resource.Kind}] {resource.RelativePath} ({resource.SizeBytes} bytes)");
                         }
-                        builder.AppendLine("Resource note: references/assets/scripts are not automatically loaded or executed.");
+                        builder.AppendLine("Resource note: references/assets are not automatically loaded; scripts may only run through `skill_run_script` in Agent mode after authorization.");
                     }
                 }
             }

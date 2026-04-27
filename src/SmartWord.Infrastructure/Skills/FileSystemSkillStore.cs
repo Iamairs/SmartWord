@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
@@ -12,7 +14,7 @@ using SmartWord.Infrastructure.Persistence;
 namespace SmartWord.Infrastructure.Skills
 {
     /// <summary>
-    /// 基于本地文件夹管理 SmartWord Skill。首版只加载资源，不执行 scripts。
+    /// 基于本地文件夹管理 SmartWord Skill，并为受控脚本执行提供路径解析。
     /// </summary>
     public sealed class FileSystemSkillStore : ISkillStore
     {
@@ -175,6 +177,40 @@ namespace SmartWord.Infrastructure.Skills
             }, cancellationToken);
         }
 
+        public async Task<IReadOnlyList<SkillScriptInfo>> GetSkillScriptsAsync(
+            string name,
+            CancellationToken cancellationToken)
+        {
+            var definition = await FindSkillAsync(name, cancellationToken).ConfigureAwait(false);
+            if (definition == null)
+            {
+                return new List<SkillScriptInfo>();
+            }
+
+            return await Task.Run(
+                    () => ListScripts(definition, cancellationToken),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        public async Task<SkillScriptResolution> ResolveScriptAsync(
+            string skillName,
+            string scriptPath,
+            string runtime,
+            CancellationToken cancellationToken)
+        {
+            var definition = await FindSkillAsync(skillName, cancellationToken).ConfigureAwait(false);
+            if (definition == null || !definition.Enabled)
+            {
+                throw new InvalidOperationException("未找到可用的 Skill。");
+            }
+
+            return await Task.Run(
+                    () => ResolveScript(definition, scriptPath, runtime, cancellationToken),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         private async Task<SkillDefinition> FindSkillAsync(string name, CancellationToken cancellationToken)
         {
             var safeName = SkillPathGuard.NormalizeSkillName(name);
@@ -267,7 +303,8 @@ namespace SmartWord.Infrastructure.Skills
             {
                 Definition = definition,
                 Content = ReadSkillContent(definition.SkillFilePath),
-                Resources = ListResources(definition.RootPath, cancellationToken)
+                Resources = ListResources(definition.RootPath, cancellationToken),
+                Scripts = ListScripts(definition, cancellationToken)
             };
         }
 
@@ -279,7 +316,7 @@ namespace SmartWord.Infrastructure.Skills
                 throw new InvalidOperationException("SKILL.md 超过 64KB，已拒绝加载。");
             }
 
-            return File.ReadAllText(skillFilePath);
+            return File.ReadAllText(skillFilePath, Encoding.UTF8);
         }
 
         private static IReadOnlyList<SkillResource> ListResources(string root, CancellationToken cancellationToken)
@@ -310,6 +347,155 @@ namespace SmartWord.Infrastructure.Skills
                 .OrderBy(resource => resource.Kind)
                 .ThenBy(resource => resource.RelativePath)
                 .ToList();
+        }
+
+        private static IReadOnlyList<SkillScriptInfo> ListScripts(
+            SkillDefinition definition,
+            CancellationToken cancellationToken)
+        {
+            var scripts = new List<SkillScriptInfo>();
+            var scriptsRoot = Path.Combine(definition.RootPath, "scripts");
+            if (!Directory.Exists(scriptsRoot))
+            {
+                return scripts;
+            }
+
+            SkillPathGuard.EnsureInsideRoot(definition.RootPath, scriptsRoot);
+            foreach (var filePath in Directory.GetFiles(scriptsRoot, "*", SearchOption.AllDirectories))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                SkillPathGuard.EnsureInsideRoot(scriptsRoot, filePath);
+                var runtime = DetectRuntime(filePath);
+                if (string.IsNullOrWhiteSpace(runtime))
+                {
+                    continue;
+                }
+
+                var relativePath = filePath
+                    .Substring(definition.RootPath.Length)
+                    .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                    .Replace(Path.DirectorySeparatorChar, '/');
+                scripts.Add(new SkillScriptInfo
+                {
+                    SkillName = definition.Name,
+                    RelativePath = relativePath,
+                    Runtime = runtime,
+                    SizeBytes = new FileInfo(filePath).Length,
+                    Sha256 = ComputeSha256(filePath)
+                });
+            }
+
+            return scripts
+                .OrderBy(script => script.RelativePath)
+                .ToList();
+        }
+
+        private static SkillScriptResolution ResolveScript(
+            SkillDefinition definition,
+            string scriptPath,
+            string runtime,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var normalizedRuntime = NormalizeRuntime(runtime);
+            if (string.IsNullOrWhiteSpace(normalizedRuntime))
+            {
+                throw new InvalidOperationException("runtime 仅支持 csharp 或 python。");
+            }
+
+            var normalizedRelativePath = NormalizeScriptRelativePath(scriptPath);
+            var scriptsRoot = Path.Combine(definition.RootPath, "scripts");
+            var absolutePath = Path.GetFullPath(Path.Combine(definition.RootPath, normalizedRelativePath));
+            SkillPathGuard.EnsureInsideRoot(scriptsRoot, absolutePath);
+            if (!File.Exists(absolutePath))
+            {
+                throw new FileNotFoundException("未找到指定 Skill 脚本。", normalizedRelativePath);
+            }
+
+            var detectedRuntime = DetectRuntime(absolutePath);
+            if (!string.Equals(detectedRuntime, normalizedRuntime, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("脚本扩展名与 runtime 不匹配。");
+            }
+
+            var fileInfo = new FileInfo(absolutePath);
+            return new SkillScriptResolution
+            {
+                Skill = definition,
+                AbsolutePath = absolutePath,
+                Script = new SkillScriptInfo
+                {
+                    SkillName = definition.Name,
+                    RelativePath = normalizedRelativePath,
+                    Runtime = normalizedRuntime,
+                    SizeBytes = fileInfo.Length,
+                    Sha256 = ComputeSha256(absolutePath)
+                }
+            };
+        }
+
+        private static string NormalizeScriptRelativePath(string scriptPath)
+        {
+            var normalized = (scriptPath ?? string.Empty).Trim().Replace('\\', '/');
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                throw new InvalidOperationException("script_path 不能为空。");
+            }
+
+            if (Path.IsPathRooted(normalized) || normalized.Contains("../") || normalized == "..")
+            {
+                throw new InvalidOperationException("script_path 必须是 scripts/ 目录内的相对路径。");
+            }
+
+            if (!normalized.StartsWith("scripts/", StringComparison.OrdinalIgnoreCase))
+            {
+                normalized = "scripts/" + normalized.TrimStart('/');
+            }
+
+            return normalized;
+        }
+
+        private static string NormalizeRuntime(string runtime)
+        {
+            var value = (runtime ?? string.Empty).Trim().ToLowerInvariant();
+            switch (value)
+            {
+                case "csx":
+                case "c#":
+                case "csharp":
+                    return "csharp";
+                case "py":
+                case "python":
+                    return "python";
+                default:
+                    return string.Empty;
+            }
+        }
+
+        private static string DetectRuntime(string filePath)
+        {
+            var extension = Path.GetExtension(filePath ?? string.Empty).ToLowerInvariant();
+            switch (extension)
+            {
+                case ".csx":
+                    return "csharp";
+                case ".py":
+                    return "python";
+                default:
+                    return string.Empty;
+            }
+        }
+
+        private static string ComputeSha256(string filePath)
+        {
+            using (var sha256 = SHA256.Create())
+            using (var stream = File.OpenRead(filePath))
+            {
+                return BitConverter
+                    .ToString(sha256.ComputeHash(stream))
+                    .Replace("-", string.Empty)
+                    .ToLowerInvariant();
+            }
         }
 
         private string NormalizeSkillContent(string name, string content)
@@ -367,7 +553,7 @@ enabled: true
 
 ## 安全边界
 
-- 不执行 `scripts/` 下的脚本。
+- `scripts/` 下的脚本只能通过 `skill_run_script` 受控执行。
 - 不读取或输出 API Key、访问令牌、Authorization 头等密钥。
 - 不绕过 SmartWord 的权限确认和任务审计。
 ");
@@ -383,7 +569,7 @@ enabled: true
                     return new SkillState();
                 }
 
-                return JsonConvert.DeserializeObject<SkillState>(File.ReadAllText(statePath))
+                return JsonConvert.DeserializeObject<SkillState>(File.ReadAllText(statePath, Encoding.UTF8))
                     ?? new SkillState();
             }
             catch
@@ -395,7 +581,10 @@ enabled: true
         private void SaveState(SkillState state)
         {
             Directory.CreateDirectory(_userRoot);
-            File.WriteAllText(GetStatePath(), JsonConvert.SerializeObject(state ?? new SkillState(), Formatting.Indented));
+            File.WriteAllText(
+                GetStatePath(),
+                JsonConvert.SerializeObject(state ?? new SkillState(), Formatting.Indented),
+                Encoding.UTF8);
         }
 
         private string GetStatePath()

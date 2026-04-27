@@ -9,6 +9,7 @@ namespace SmartWord.Core.Enums
         StateWrite = 1,
         DocumentPatchWrite = 2,
         ScriptWrite = 3,
+        LocalAutomation = 4,
 
         /// <summary>
         /// 兼容旧测试与旧工具声明，默认按文档补丁写入处理。

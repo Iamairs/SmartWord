@@ -60,12 +60,15 @@
     <Compile Include="Interfaces\IContextHydrator.cs" />
     <Compile Include="Interfaces\IConversationStore.cs" />
     <Compile Include="Interfaces\ISkillPromptResolver.cs" />
+    <Compile Include="Interfaces\ISkillScriptApprovalStore.cs" />
+    <Compile Include="Interfaces\ISkillScriptRunner.cs" />
     <Compile Include="Interfaces\ISkillStore.cs" />
     <Compile Include="Interfaces\ITaskHistoryStore.cs" />
     <Compile Include="Interfaces\ILlmClient.cs" />
     <Compile Include="Interfaces\ITodoRecoveryChannel.cs" />
     <Compile Include="Interfaces\ITodoStore.cs" />
     <Compile Include="Interfaces\ITool.cs" />
+    <Compile Include="Interfaces\IToolConfirmationChannel.cs" />
     <Compile Include="Interfaces\IToolRegistry.cs" />
     <Compile Include="Interfaces\IUndoScope.cs" />
     <Compile Include="Interfaces\IUndoScopeFactory.cs" />

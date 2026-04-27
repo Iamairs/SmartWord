@@ -16,6 +16,7 @@ using SmartWord.Infrastructure.Configuration;
 using SmartWord.Infrastructure.LlmClients;
 using SmartWord.Infrastructure.Persistence;
 using SmartWord.Infrastructure.Skills;
+using SmartWord.OfficeIntegration.SkillScripts;
 using SmartWord.OfficeIntegration.Scripting;
 using SmartWord.OfficeIntegration.Tools;
 using SmartWord.OfficeIntegration.WordWrappers;
@@ -50,6 +51,7 @@ namespace SmartWord.AddIn.DI
             services.AddSingleton<IUndoScopeFactory>(wordApplicationWrapper);
             services.AddSingleton(_confirmationChannel);
             services.AddSingleton<IConfirmationChannel>(_confirmationChannel);
+            services.AddSingleton<IToolConfirmationChannel>(_confirmationChannel);
             services.AddSingleton(_questionChannel);
             services.AddSingleton<IQuestionChannel>(_questionChannel);
             services.AddSingleton(_todoRecoveryChannel);
@@ -65,6 +67,8 @@ namespace SmartWord.AddIn.DI
             services.AddSingleton<ITaskHistoryStore, SqliteTaskHistoryStore>();
             services.AddSingleton<ITodoStore, JsonTodoStore>();
             services.AddSingleton<ISkillStore, FileSystemSkillStore>();
+            services.AddSingleton<ISkillScriptApprovalStore, FileSkillScriptApprovalStore>();
+            services.AddSingleton<ISkillScriptRunner, SkillScriptRunner>();
             services.AddSingleton<ISkillPromptResolver, SkillPromptResolver>();
             services.AddSingleton<IContextHydrator, ContextHydrator>();
             services.AddSingleton<TodoManager>();
@@ -92,6 +96,9 @@ namespace SmartWord.AddIn.DI
                     wordWrapper,
                     provider.GetRequiredService<CSharpScriptExecutor>(),
                     provider.GetRequiredService<ScriptSecurityValidator>()));
+                registry.Register(new SkillRunScriptTool(
+                    provider.GetRequiredService<ISkillStore>(),
+                    provider.GetRequiredService<ISkillScriptRunner>()));
                 registry.Register(new AskUserQuestionTool());
                 registry.Register(new TodoReadTool(provider.GetRequiredService<TodoManager>()));
                 registry.Register(new TodoWriteTool(provider.GetRequiredService<TodoManager>()));
@@ -116,7 +123,8 @@ namespace SmartWord.AddIn.DI
                 provider.GetRequiredService<TodoManager>(),
                 provider.GetRequiredService<TodoReminderService>(),
                 provider.GetRequiredService<ITaskHistoryStore>(),
-                provider.GetRequiredService<ISkillPromptResolver>()));
+                provider.GetRequiredService<ISkillPromptResolver>(),
+                provider.GetRequiredService<ISkillScriptApprovalStore>()));
             services.AddSingleton<StreamingResponseHandler>();
 
             _serviceProvider = services.BuildServiceProvider();

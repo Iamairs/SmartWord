@@ -51,7 +51,9 @@ namespace SmartWord.Application.Tools
                     return PermissionDecision.Allow(IsUserConfirmedWrite(tool.RequiredPermission));
 
                 case AgentPermissionMode.AutoSafeWrites:
-                    return PermissionDecision.Allow(tool.RequiredPermission == ToolPermission.ScriptWrite);
+                    return PermissionDecision.Allow(
+                        tool.RequiredPermission == ToolPermission.ScriptWrite
+                        || tool.RequiredPermission == ToolPermission.LocalAutomation);
 
                 case AgentPermissionMode.FullAuto:
                     return PermissionDecision.Allow();
@@ -70,6 +72,7 @@ namespace SmartWord.Application.Tools
         {
             return permission == ToolPermission.DocumentPatchWrite
                 || permission == ToolPermission.ScriptWrite
+                || permission == ToolPermission.LocalAutomation
                 || permission == ToolPermission.Write;
         }
     }

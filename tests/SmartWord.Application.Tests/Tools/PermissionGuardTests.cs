@@ -82,12 +82,15 @@ namespace SmartWord.Application.Tests.Tools
 
             var patch = guard.Decide("patch_range", AgentMode.Agent, AgentPermissionMode.AutoSafeWrites);
             var script = guard.Decide("execute_script", AgentMode.Agent, AgentPermissionMode.AutoSafeWrites);
+            var localAutomation = guard.Decide("skill_run_script", AgentMode.Agent, AgentPermissionMode.AutoSafeWrites);
             var todo = guard.Decide("todo_write", AgentMode.Agent, AgentPermissionMode.AutoSafeWrites);
 
             Assert.True(patch.IsAllowed);
             Assert.False(patch.RequiresConfirmation);
             Assert.True(script.IsAllowed);
             Assert.True(script.RequiresConfirmation);
+            Assert.True(localAutomation.IsAllowed);
+            Assert.True(localAutomation.RequiresConfirmation);
             Assert.True(todo.IsAllowed);
             Assert.False(todo.RequiresConfirmation);
         }
@@ -129,6 +132,7 @@ namespace SmartWord.Application.Tests.Tools
             var registry = new ToolRegistry();
             registry.Register(new FakeTool("patch_range", ToolPermission.DocumentPatchWrite));
             registry.Register(new FakeTool("execute_script", ToolPermission.ScriptWrite));
+            registry.Register(new FakeTool("skill_run_script", ToolPermission.LocalAutomation));
             registry.Register(new FakeTool("todo_write", ToolPermission.StateWrite));
             return registry;
         }

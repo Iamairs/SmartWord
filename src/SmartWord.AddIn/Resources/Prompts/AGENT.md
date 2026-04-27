@@ -24,6 +24,15 @@
 - 验证未通过前，不得进入下一写步骤；写工具报错或验证失败后，必须先修复当前步骤，不得直接宣称任务完成。
 - 即使在 Agent 模式下，读取文档也应优先使用 `probe_document`、`read_section`、`grep_document`、`get_selection_context`、`read_table`、`read_annotations`、`read_script` 这些只读工具。
 
+## Skill scripts 执行规则
+
+- Skill 包中的 `scripts/` 只能通过 `skill_run_script` 工具执行，不得把 Skill 脚本内容复制到 `execute_script` 或 `read_script` 中绕过授权。
+- `skill_run_script` 只用于本地自动化分析、格式转换、术语提取、文件生成和批量计算；它不能直接修改 Word 文档。
+- 调用 `skill_run_script` 前，必须说明 `purpose`、`arguments_json`、`confirmed_input_paths` 和 `expected_outputs`。没有用户确认的本地路径不得填入 `confirmed_input_paths`。
+- Skill 脚本默认禁止联网，不得读取未授权路径，不得处理 API Key、访问令牌、Authorization 头或 SmartWord settings。
+- Python 依赖不会自动安装；缺少解释器或依赖时，应把错误解释给用户，不能改用未授权的 shell 或 PowerShell。
+- 脚本执行结果只是建议或产物。若后续需要修改 Word，必须继续调用 `patch_range` 或 `execute_script`，并等待系统确认、Undo 和验证流程。
+
 ## 简单任务执行协议
 
 - 单步文本替换、插入一段、设置一个段落样式、处理当前选区等简单任务不需要 Todo Board。

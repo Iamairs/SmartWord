@@ -30,7 +30,7 @@ namespace SmartWord.Application.Tests.Infrastructure
 
                 Assert.Equal("document-finalizer", detail.Definition.Name);
                 Assert.False(detail.Definition.IsBuiltIn);
-                Assert.Contains("不执行 `scripts/`", detail.Content);
+                Assert.Contains("`scripts/` 下的脚本只能通过 `skill_run_script`", detail.Content);
 
                 var reloaded = await store.GetSkillDetailAsync("document-finalizer", CancellationToken.None);
                 Assert.NotNull(reloaded);
@@ -114,7 +114,53 @@ namespace SmartWord.Application.Tests.Infrastructure
 
                 Assert.Contains(detail.Resources, resource =>
                     resource.Kind == "scripts" && resource.RelativePath == "scripts/scan.py");
+                Assert.Contains(detail.Scripts, script =>
+                    script.Runtime == "python"
+                    && script.RelativePath == "scripts/scan.py"
+                    && script.Sha256.Length == 64);
                 Assert.DoesNotContain("do not execute", detail.Content);
+            }
+            finally
+            {
+                DeleteTempRoots(roots);
+            }
+        }
+
+        [Fact]
+        public async Task ResolveScriptAsync_PathTraversal_RejectsRequest()
+        {
+            var roots = CreateTempRoots();
+            try
+            {
+                WriteSkill(roots.UserRoot, "term-check", "术语检查");
+                var store = new FileSystemSkillStore(roots.BuiltInRoot, roots.UserRoot);
+
+                await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    store.ResolveScriptAsync("term-check", "../outside.py", "python", CancellationToken.None));
+            }
+            finally
+            {
+                DeleteTempRoots(roots);
+            }
+        }
+
+        [Fact]
+        public async Task ResolveScriptAsync_ScriptHashChanges_ReturnsNewHash()
+        {
+            var roots = CreateTempRoots();
+            try
+            {
+                WriteSkill(roots.UserRoot, "term-check", "术语检查");
+                var scriptPath = Path.Combine(roots.UserRoot, "term-check", "scripts", "scan.py");
+                Directory.CreateDirectory(Path.GetDirectoryName(scriptPath));
+                File.WriteAllText(scriptPath, "print('v1')");
+                var store = new FileSystemSkillStore(roots.BuiltInRoot, roots.UserRoot);
+
+                var first = await store.ResolveScriptAsync("term-check", "scripts/scan.py", "python", CancellationToken.None);
+                File.WriteAllText(scriptPath, "print('v2')");
+                var second = await store.ResolveScriptAsync("term-check", "scripts/scan.py", "python", CancellationToken.None);
+
+                Assert.NotEqual(first.Script.Sha256, second.Script.Sha256);
             }
             finally
             {

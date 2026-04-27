@@ -30,10 +30,10 @@ namespace SmartWord.AddIn.TaskPane
     {
         private readonly Control _ownerControl;
         private readonly object _ctsSyncRoot = new object();
-        private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _pendingToolConfirmations =
-            new ConcurrentDictionary<string, TaskCompletionSource<bool>>(StringComparer.OrdinalIgnoreCase);
-        private readonly ConcurrentDictionary<string, bool> _earlyConfirmationResults =
-            new ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, TaskCompletionSource<ToolConfirmationDecision>> _pendingToolConfirmations =
+            new ConcurrentDictionary<string, TaskCompletionSource<ToolConfirmationDecision>>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, ToolConfirmationDecision> _earlyConfirmationResults =
+            new ConcurrentDictionary<string, ToolConfirmationDecision>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, TaskCompletionSource<string>> _pendingQuestionAnswers =
             new ConcurrentDictionary<string, TaskCompletionSource<string>>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, string> _earlyQuestionAnswers =
@@ -410,7 +410,8 @@ namespace SmartWord.AddIn.TaskPane
                     success = true,
                     skill = ToSkillPayload(detail.Definition),
                     content = detail.Content,
-                    resources = detail.Resources
+                    resources = detail.Resources,
+                    scripts = detail.Scripts
                 });
             }
             catch (Exception ex)
@@ -437,7 +438,8 @@ namespace SmartWord.AddIn.TaskPane
                     success = true,
                     skill = ToSkillPayload(detail.Definition),
                     content = detail.Content,
-                    resources = detail.Resources
+                    resources = detail.Resources,
+                    scripts = detail.Scripts
                 });
             }
             catch (Exception ex)
@@ -468,7 +470,8 @@ namespace SmartWord.AddIn.TaskPane
                     success = true,
                     skill = ToSkillPayload(detail.Definition),
                     content = detail.Content,
-                    resources = detail.Resources
+                    resources = detail.Resources,
+                    scripts = detail.Scripts
                 });
             }
             catch (Exception ex)
@@ -529,6 +532,53 @@ namespace SmartWord.AddIn.TaskPane
             }
         }
 
+        public string GetSkillScriptApprovalsJson()
+        {
+            try
+            {
+                var store = ServiceLocator.GetRequiredService<ISkillScriptApprovalStore>();
+                var approvals = store.GetApprovalsAsync(CancellationToken.None).GetAwaiter().GetResult();
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    items = approvals
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "读取 Skill 脚本授权失败。");
+                return JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+        }
+
+        public string RevokeSkillScriptApprovalJson(string keyJson)
+        {
+            try
+            {
+                var key = JsonConvert.DeserializeObject<SkillScriptApprovalKey>(keyJson ?? "{}")
+                    ?? new SkillScriptApprovalKey();
+                var store = ServiceLocator.GetRequiredService<ISkillScriptApprovalStore>();
+                store.RevokeAsync(key, CancellationToken.None).GetAwaiter().GetResult();
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "撤销 Skill 脚本授权失败。");
+                return JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+        }
+
         public void NavigateToParagraph(int paragraphIndex)
         {
             Task.Run(async () =>
@@ -547,6 +597,11 @@ namespace SmartWord.AddIn.TaskPane
 
         public string ConfirmToolCall(string toolCallId, bool confirmed)
         {
+            return ConfirmToolCallWithOptions(toolCallId, confirmed, false);
+        }
+
+        public string ConfirmToolCallWithOptions(string toolCallId, bool confirmed, bool remember)
+        {
             if (string.IsNullOrWhiteSpace(toolCallId))
             {
                 return JsonConvert.SerializeObject(new
@@ -556,20 +611,26 @@ namespace SmartWord.AddIn.TaskPane
                 });
             }
 
+            var decision = new ToolConfirmationDecision
+            {
+                Confirmed = confirmed,
+                Remember = confirmed && remember
+            };
             if (_pendingToolConfirmations.TryRemove(toolCallId, out var pendingConfirmation))
             {
-                pendingConfirmation.TrySetResult(confirmed);
+                pendingConfirmation.TrySetResult(decision);
             }
             else
             {
-                _earlyConfirmationResults[toolCallId] = confirmed;
+                _earlyConfirmationResults[toolCallId] = decision;
             }
 
             return JsonConvert.SerializeObject(new
             {
                 success = true,
                 toolCallId,
-                confirmed
+                confirmed,
+                remember = decision.Remember
             });
         }
 
@@ -682,6 +743,18 @@ namespace SmartWord.AddIn.TaskPane
 
         internal async Task<bool> WaitForToolConfirmationAsync(string toolCallId, CancellationToken cancellationToken)
         {
+            var decision = await WaitForToolConfirmationDecisionAsync(
+                    new ToolConfirmationRequest { ToolCallId = toolCallId ?? string.Empty },
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return decision != null && decision.Confirmed;
+        }
+
+        internal async Task<ToolConfirmationDecision> WaitForToolConfirmationDecisionAsync(
+            ToolConfirmationRequest request,
+            CancellationToken cancellationToken)
+        {
+            var toolCallId = request == null ? string.Empty : request.ToolCallId;
             if (string.IsNullOrWhiteSpace(toolCallId))
             {
                 throw new ArgumentException("toolCallId 不能为空。", nameof(toolCallId));
@@ -689,10 +762,10 @@ namespace SmartWord.AddIn.TaskPane
 
             if (_earlyConfirmationResults.TryRemove(toolCallId, out var earlyResult))
             {
-                return earlyResult;
+                return earlyResult ?? ToolConfirmationDecision.FromBoolean(false);
             }
 
-            var taskCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var taskCompletionSource = new TaskCompletionSource<ToolConfirmationDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
             if (!_pendingToolConfirmations.TryAdd(toolCallId, taskCompletionSource))
             {
                 if (_pendingToolConfirmations.TryGetValue(toolCallId, out var existing))
@@ -700,7 +773,7 @@ namespace SmartWord.AddIn.TaskPane
                     return await existing.Task.ConfigureAwait(false);
                 }
 
-                return false;
+                return ToolConfirmationDecision.FromBoolean(false);
             }
 
             var registration = cancellationToken.Register(() =>

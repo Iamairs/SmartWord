@@ -21,5 +21,13 @@ namespace SmartWord.Core.Interfaces
         Task DeleteSkillAsync(string name, CancellationToken cancellationToken);
 
         Task SetSkillEnabledAsync(string name, bool enabled, CancellationToken cancellationToken);
+
+        Task<IReadOnlyList<SkillScriptInfo>> GetSkillScriptsAsync(string name, CancellationToken cancellationToken);
+
+        Task<SkillScriptResolution> ResolveScriptAsync(
+            string skillName,
+            string scriptPath,
+            string runtime,
+            CancellationToken cancellationToken);
     }
 }

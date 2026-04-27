@@ -54,7 +54,7 @@ namespace SmartWord.Application.Tests.Skills
                 CancellationToken.None);
 
             Assert.Contains("Available skill index", context.PromptBlock);
-            Assert.Contains("禁止执行 Skill 脚本", context.PromptBlock);
+            Assert.Contains("只能通过 `skill_run_script` 工具执行", context.PromptBlock);
             Assert.Contains("No active skill selected", context.PromptBlock);
             Assert.DoesNotContain("检查占位符和编号", context.PromptBlock);
         }
@@ -142,6 +142,24 @@ namespace SmartWord.Application.Tests.Skills
             }
 
             public Task SetSkillEnabledAsync(string name, bool enabled, CancellationToken cancellationToken)
+            {
+                throw new System.NotImplementedException();
+            }
+
+            public Task<IReadOnlyList<SkillScriptInfo>> GetSkillScriptsAsync(string name, CancellationToken cancellationToken)
+            {
+                var detail = _details.FirstOrDefault(item => item.Definition.Name == name);
+                return Task.FromResult<IReadOnlyList<SkillScriptInfo>>(
+                    detail == null
+                        ? new List<SkillScriptInfo>()
+                        : detail.Scripts);
+            }
+
+            public Task<SkillScriptResolution> ResolveScriptAsync(
+                string skillName,
+                string scriptPath,
+                string runtime,
+                CancellationToken cancellationToken)
             {
                 throw new System.NotImplementedException();
             }

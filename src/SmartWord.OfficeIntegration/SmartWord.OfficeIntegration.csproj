@@ -40,6 +40,10 @@
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="System.Data" />
     <Reference Include="System.Net.Http" />
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>$(UserProfile)\.nuget\packages\newtonsoft.json\13.0.3\lib\net45\Newtonsoft.Json.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
     <Reference Include="Microsoft.CodeAnalysis">
       <HintPath>$(UserProfile)\.nuget\packages\microsoft.codeanalysis.common\4.11.0\lib\netstandard2.0\Microsoft.CodeAnalysis.dll</HintPath>
       <Private>True</Private>
@@ -96,6 +100,7 @@
     <Compile Include="Reading\ReadOnlyDocumentSnapshotBuilder.cs" />
     <Compile Include="Reading\ReadScope.cs" />
     <Compile Include="Reading\ReadScopeResolver.cs" />
+    <Compile Include="SkillScripts\SkillScriptRunner.cs" />
     <Compile Include="Scripting\CSharpScriptExecutor.cs" />
     <Compile Include="Scripting\ScriptContext.cs" />
     <Compile Include="Scripting\ScriptGlobals.cs" />
@@ -119,6 +124,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.11.0" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.11.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageReference Include="Serilog" Version="3.1.1" />
     <PackageReference Include="System.Collections.Immutable" Version="8.0.0" />
     <PackageReference Include="System.Memory" Version="4.5.5" />

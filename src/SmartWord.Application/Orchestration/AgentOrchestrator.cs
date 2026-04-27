@@ -50,6 +50,7 @@ namespace SmartWord.Application.Orchestration
         private readonly TodoReminderService _todoReminderService;
         private readonly ITaskHistoryStore _taskHistoryStore;
         private readonly ISkillPromptResolver _skillPromptResolver;
+        private readonly ISkillScriptApprovalStore _skillScriptApprovalStore;
 
         public AgentOrchestrator(
             ILlmClient llmClient,
@@ -66,7 +67,8 @@ namespace SmartWord.Application.Orchestration
             TodoManager todoManager = null,
             TodoReminderService todoReminderService = null,
             ITaskHistoryStore taskHistoryStore = null,
-            ISkillPromptResolver skillPromptResolver = null)
+            ISkillPromptResolver skillPromptResolver = null,
+            ISkillScriptApprovalStore skillScriptApprovalStore = null)
         {
             _llmClient = llmClient;
             _contextHydrator = contextHydrator;
@@ -83,6 +85,7 @@ namespace SmartWord.Application.Orchestration
             _todoReminderService = todoReminderService;
             _taskHistoryStore = taskHistoryStore;
             _skillPromptResolver = skillPromptResolver;
+            _skillScriptApprovalStore = skillScriptApprovalStore;
         }
 
         /// <summary>
@@ -757,18 +760,45 @@ namespace SmartWord.Application.Orchestration
                 }
 
                 var operationDescription = BuildOperationDescription(toolCall.Name, parsedInput);
+                var eventToolInput = toolCall.Input ?? string.Empty;
                 var permissionDecision = _permissionGuard.Decide(
                     toolCall.Name,
                     safeOptions.Mode,
                     ResolvePermissionMode(safeOptions));
                 var requiresConfirmation = permissionDecision.RequiresConfirmation;
+                SkillScriptApprovalKey scriptApprovalKey = null;
+                if (permissionDecision.IsAllowed
+                    && string.Equals(toolCall.Name, "skill_run_script", StringComparison.OrdinalIgnoreCase)
+                    && tool is SkillRunScriptTool skillRunScriptTool)
+                {
+                    try
+                    {
+                        scriptApprovalKey = await skillRunScriptTool
+                            .BuildApprovalKeyAsync(parsedInput, cancellationToken)
+                            .ConfigureAwait(false);
+                        var approved = _skillScriptApprovalStore != null
+                            && await _skillScriptApprovalStore
+                                .IsApprovedAsync(scriptApprovalKey, cancellationToken)
+                                .ConfigureAwait(false);
+                        requiresConfirmation = !approved;
+                        var confirmationInput = await skillRunScriptTool
+                            .BuildConfirmationInputAsync(parsedInput, cancellationToken)
+                            .ConfigureAwait(false);
+                        eventToolInput = confirmationInput.ToString(Formatting.None);
+                    }
+                    catch (Exception ex)
+                    {
+                        requiresConfirmation = false;
+                        permissionDecision = PermissionDecision.Deny("Skill 脚本解析失败：" + ex.Message);
+                    }
+                }
 
                 yield return new AgentEvent
                 {
                     Type = AgentEventType.ToolCallStarted,
                     ToolCallId = toolCall.Id,
                     ToolName = toolCall.Name,
-                    ToolInput = toolCall.Input ?? string.Empty,
+                    ToolInput = eventToolInput,
                     RequiresConfirmation = requiresConfirmation,
                     OperationDescription = operationDescription
                 };
@@ -890,10 +920,14 @@ namespace SmartWord.Application.Orchestration
                         continue;
                     }
 
-                    var confirmed = await _confirmationChannel
-                        .WaitForConfirmationAsync(toolCall.Id, cancellationToken)
+                    var confirmationDecision = await WaitForToolConfirmationDecisionAsync(
+                            toolCall,
+                            eventToolInput,
+                            operationDescription,
+                            scriptApprovalKey,
+                            cancellationToken)
                         .ConfigureAwait(false);
-                    if (!confirmed)
+                    if (confirmationDecision == null || !confirmationDecision.Confirmed)
                     {
                         var skippedResult = ToolCallResult.Skipped(toolCall.Name, "用户选择跳过本次写操作。");
                         await AppendToolResultAsync(documentPath, messages, toolCall, skippedResult, cancellationToken, auditRun?.Id, operationDescription)
@@ -920,6 +954,15 @@ namespace SmartWord.Application.Orchestration
                         }
 
                         continue;
+                    }
+
+                    if (confirmationDecision.Remember
+                        && scriptApprovalKey != null
+                        && _skillScriptApprovalStore != null)
+                    {
+                        await _skillScriptApprovalStore
+                            .ApproveAsync(scriptApprovalKey, operationDescription, cancellationToken)
+                            .ConfigureAwait(false);
                     }
                 }
 
@@ -1590,6 +1633,36 @@ namespace SmartWord.Application.Orchestration
                 Log.Warning(ex, "创建任务历史运行记录失败，主流程将继续。");
                 return null;
             }
+        }
+
+        private async Task<ToolConfirmationDecision> WaitForToolConfirmationDecisionAsync(
+            ToolCall toolCall,
+            string eventToolInput,
+            string operationDescription,
+            SkillScriptApprovalKey scriptApprovalKey,
+            CancellationToken cancellationToken)
+        {
+            var extendedChannel = _confirmationChannel as IToolConfirmationChannel;
+            if (extendedChannel != null)
+            {
+                return await extendedChannel
+                    .WaitForConfirmationDecisionAsync(
+                        new ToolConfirmationRequest
+                        {
+                            ToolCallId = toolCall == null ? string.Empty : toolCall.Id ?? string.Empty,
+                            ToolName = toolCall == null ? string.Empty : toolCall.Name ?? string.Empty,
+                            ToolInput = eventToolInput ?? string.Empty,
+                            OperationDescription = operationDescription ?? string.Empty,
+                            ScriptApprovalKey = scriptApprovalKey
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            var confirmed = await _confirmationChannel
+                .WaitForConfirmationAsync(toolCall == null ? string.Empty : toolCall.Id, cancellationToken)
+                .ConfigureAwait(false);
+            return ToolConfirmationDecision.FromBoolean(confirmed);
         }
 
         private async Task TryRecordTaskToolAsync(
@@ -3102,6 +3175,13 @@ namespace SmartWord.Application.Orchestration
                 }
 
                 var operation = parsedInput.Value<string>("operation");
+                var purpose = parsedInput.Value<string>("purpose");
+                if (!string.IsNullOrWhiteSpace(purpose)
+                    && string.Equals(toolName, "skill_run_script", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "准备执行 Skill 脚本：" + purpose.Trim();
+                }
+
                 if (!string.IsNullOrWhiteSpace(operation))
                 {
                     switch ((toolName ?? string.Empty).Trim().ToLowerInvariant())
@@ -3114,6 +3194,8 @@ namespace SmartWord.Application.Orchestration
                             return "准备验证改动结果：" + operation.Trim();
                         case "execute_script":
                             return "准备执行脚本写入：" + operation.Trim();
+                        case "skill_run_script":
+                            return "准备执行 Skill 脚本：" + operation.Trim();
                     }
                 }
 
@@ -3134,6 +3216,8 @@ namespace SmartWord.Application.Orchestration
                     return "准备验证本次改动结果。";
                 case "execute_script":
                     return "准备执行脚本写入。";
+                case "skill_run_script":
+                    return "准备执行 Skill 脚本。";
                 default:
                     return "准备执行工具：" + (toolName ?? string.Empty);
             }
