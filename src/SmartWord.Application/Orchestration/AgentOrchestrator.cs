@@ -49,6 +49,7 @@ namespace SmartWord.Application.Orchestration
         private readonly TodoManager _todoManager;
         private readonly TodoReminderService _todoReminderService;
         private readonly ITaskHistoryStore _taskHistoryStore;
+        private readonly ISkillPromptResolver _skillPromptResolver;
 
         public AgentOrchestrator(
             ILlmClient llmClient,
@@ -64,7 +65,8 @@ namespace SmartWord.Application.Orchestration
             ITodoRecoveryChannel todoRecoveryChannel = null,
             TodoManager todoManager = null,
             TodoReminderService todoReminderService = null,
-            ITaskHistoryStore taskHistoryStore = null)
+            ITaskHistoryStore taskHistoryStore = null,
+            ISkillPromptResolver skillPromptResolver = null)
         {
             _llmClient = llmClient;
             _contextHydrator = contextHydrator;
@@ -80,6 +82,7 @@ namespace SmartWord.Application.Orchestration
             _todoManager = todoManager;
             _todoReminderService = todoReminderService;
             _taskHistoryStore = taskHistoryStore;
+            _skillPromptResolver = skillPromptResolver;
         }
 
         /// <summary>
@@ -235,7 +238,12 @@ namespace SmartWord.Application.Orchestration
         .ConfigureAwait(false);
 
     var messages = new List<AgentMessage>();
-    var systemPrompt = BuildSystemPrompt(safeOptions, documentContext, currentTodoBoard);
+    var skillPromptContext = await ResolveSkillPromptContextAsync(
+            userInput,
+            safeOptions,
+            cancellationToken)
+        .ConfigureAwait(false);
+    var systemPrompt = BuildSystemPrompt(safeOptions, documentContext, currentTodoBoard, skillPromptContext);
     if (!string.IsNullOrWhiteSpace(systemPrompt))
     {
         messages.Add(new AgentMessage
@@ -1847,7 +1855,34 @@ namespace SmartWord.Application.Orchestration
             }
         }
 
-        private string BuildSystemPrompt(AgentRunOptions options, DocumentContext documentContext, TodoBoard todoBoard)
+        private async Task<SkillPromptContext> ResolveSkillPromptContextAsync(
+            string userInput,
+            AgentRunOptions options,
+            CancellationToken cancellationToken)
+        {
+            if (_skillPromptResolver == null)
+            {
+                return new SkillPromptContext();
+            }
+
+            try
+            {
+                return await _skillPromptResolver
+                    .ResolveAsync(userInput, options.SelectedSkillNames, options.Mode, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "加载 Skill prompt 上下文失败，本次任务将不使用 Skill。");
+                return new SkillPromptContext();
+            }
+        }
+
+        private string BuildSystemPrompt(
+            AgentRunOptions options,
+            DocumentContext documentContext,
+            TodoBoard todoBoard,
+            SkillPromptContext skillPromptContext)
         {
             var prompt = _systemPromptBuilder.Build(options.Mode);
             var contextBuilder = new StringBuilder();
@@ -1885,6 +1920,12 @@ namespace SmartWord.Application.Orchestration
                 contextBuilder.AppendLine();
                 contextBuilder.AppendLine(_todoManager.BuildPromptBlock(todoBoard));
                 contextBuilder.AppendLine("Notice: 复杂任务应持续维护 todo board。计划变化时，先更新任务板再继续执行。");
+            }
+
+            if (skillPromptContext != null && !string.IsNullOrWhiteSpace(skillPromptContext.PromptBlock))
+            {
+                contextBuilder.AppendLine();
+                contextBuilder.AppendLine(skillPromptContext.PromptBlock);
             }
 
             var finalPrompt = string.IsNullOrWhiteSpace(prompt)

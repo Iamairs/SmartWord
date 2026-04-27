@@ -76,6 +76,7 @@
     <Compile Include="Pipeline\StreamingResponseHandler.cs" />
     <Compile Include="PromptBuilder\SystemPromptBuilder.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Skills\SkillPromptResolver.cs" />
     <Compile Include="Todo\TodoManager.cs" />
     <Compile Include="Todo\TodoReminderService.cs" />
     <Compile Include="Tools\PermissionGuard.cs" />
