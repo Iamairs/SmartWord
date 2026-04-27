@@ -13,6 +13,7 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="System.Text.Json" Version="6.0.10" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.11" />
   </ItemGroup>
 
   <ItemGroup>
@@ -20,5 +21,12 @@
     <ProjectReference Include="..\..\src\SmartWord.Core\SmartWord.Core.csproj" />
     <ProjectReference Include="..\..\src\SmartWord.Infrastructure\SmartWord.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\SmartWord.OfficeIntegration\SmartWord.OfficeIntegration.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="$(UserProfile)\.nuget\packages\sqlitepclraw.lib.e_sqlite3\2.1.11\runtimes\win-x64\native\e_sqlite3.dll">
+      <Link>e_sqlite3.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 </Project>
