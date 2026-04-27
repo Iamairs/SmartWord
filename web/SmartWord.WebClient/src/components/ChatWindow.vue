@@ -10,6 +10,9 @@
         <button class="ghost-button" type="button" @click="taskHistoryStore.togglePanel()">
           {{ taskHistoryStore.isPanelOpen ? '收起历史' : '历史' }}
         </button>
+        <button class="ghost-button" type="button" @click="skillsStore.togglePanel()">
+          {{ skillsStore.isPanelOpen ? '收起Skill' : 'Skill' }}
+        </button>
         <button class="ghost-button" type="button" @click="settingsStore.togglePanel()">
           {{ settingsStore.isPanelOpen ? '收起设置' : '设置' }}
         </button>
@@ -22,6 +25,7 @@
       v-if="taskHistoryStore.isPanelOpen"
       @navigate="navigateToParagraph"
     />
+    <SkillPanel v-if="skillsStore.isPanelOpen" />
     <QuickActionsPanel v-if="!chatStore.isLoading" @select="submitQuickAction" />
 
     <section class="message-list" ref="messageListRef" @click="handleMessageListClick">
@@ -143,6 +147,22 @@
             </button>
           </div>
         </div>
+        <div class="skill-selector" v-if="skillsStore.enabledItems.length">
+          <p class="mode-selector__label">使用 Skill</p>
+          <div class="skill-selector__chips">
+            <button
+              v-for="skill in skillsStore.enabledItems"
+              :key="skill.name"
+              class="skill-chip"
+              :class="{ 'skill-chip--active': skillsStore.selectedSkillNames.includes(skill.name) }"
+              type="button"
+              :disabled="chatStore.isLoading"
+              @click="skillsStore.toggleSelectedSkill(skill.name)"
+            >
+              {{ skill.displayName || skill.name }}
+            </button>
+          </div>
+        </div>
         <p class="environment-hint environment-hint--wide">{{ environmentHint }}</p>
       </details>
       <textarea
@@ -179,11 +199,13 @@ import { marked } from 'marked';
 import { useChatStore } from '../stores/chat';
 import { useSettingsStore } from '../stores/settings';
 import { useTaskHistoryStore } from '../stores/taskHistory';
+import { useSkillsStore } from '../stores/skills';
 import { hostBridge } from '../bridge/hostBridge';
 import ChangesSummaryPanel from './ChangesSummaryPanel.vue';
 import ContentPreviewPanel from './ContentPreviewPanel.vue';
 import QuickActionsPanel from './QuickActionsPanel.vue';
 import SettingsPanel from './SettingsPanel.vue';
+import SkillPanel from './SkillPanel.vue';
 import TaskHistoryPanel from './TaskHistoryPanel.vue';
 import ThoughtActionTrace from './ThoughtActionTrace.vue';
 import TodoBoardPanel from './TodoBoardPanel.vue';
@@ -193,6 +215,7 @@ import TodoBoardRecoveryPanel from './TodoBoardRecoveryPanel.vue';
 const chatStore = useChatStore();
 const settingsStore = useSettingsStore();
 const taskHistoryStore = useTaskHistoryStore();
+const skillsStore = useSkillsStore();
 const draft = ref('');
 const messageListRef = ref(null);
 const customQuestionAnswer = ref('');
@@ -314,7 +337,8 @@ async function sendMessage(content, manualMode, permissionModeOverride = '') {
     requireConfirmationForScripts: requireConfirmationForPermission(
       permissionModeOverride || settingsStore.form.permissionMode
     ),
-    customInstructions: settingsStore.form.customInstructions
+    customInstructions: settingsStore.form.customInstructions,
+    selectedSkillNames: skillsStore.selectedSkillNames
   };
 
   chatStore.setMode(manualMode);
@@ -416,7 +440,8 @@ async function executePlan() {
     maxIterations: 100,
     permissionMode: settingsStore.form.permissionMode,
     requireConfirmationForScripts: requireConfirmationForPermission(settingsStore.form.permissionMode),
-    activePlan: plan
+    activePlan: plan,
+    selectedSkillNames: skillsStore.selectedSkillNames
   });
 }
 
@@ -473,7 +498,8 @@ async function resumePausedTodoRun(decision) {
       permissionMode: settingsStore.form.permissionMode,
       requireConfirmationForScripts: requireConfirmationForPermission(settingsStore.form.permissionMode),
       activePlan: chatStore.lastApprovedPlan,
-      todoBoardDecision: decision
+      todoBoardDecision: decision,
+      selectedSkillNames: skillsStore.selectedSkillNames
     });
   } catch (error) {
     chatStore.finishLoading();
@@ -664,6 +690,7 @@ async function scrollToBottom() {
 onMounted(async () => {
   unsubscribeAgentEvent = hostBridge.onAgentEvent(handleAgentEvent);
   await settingsStore.loadSettings();
+  await skillsStore.loadSkills();
 
   if (!chatStore.messages.length) {
     chatStore.appendAssistantMessage(
@@ -1006,6 +1033,10 @@ watch(
   margin-bottom: 10px;
 }
 
+.skill-selector {
+  margin-top: 10px;
+}
+
 .mode-selector__label {
   margin: 0 0 8px;
   font-size: 11px;
@@ -1015,6 +1046,12 @@ watch(
 .mode-selector__options {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.skill-selector__chips {
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
@@ -1074,6 +1111,27 @@ watch(
   font-size: 11px;
   line-height: 1.5;
   color: #60758f;
+}
+
+.skill-chip {
+  max-width: 100%;
+  min-height: 30px;
+  padding: 6px 8px;
+  border: 1px solid rgba(89, 118, 161, 0.22);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.84);
+  color: #395372;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.skill-chip--active {
+  border-color: rgba(217, 111, 50, 0.46);
+  background: #fff3ea;
+  color: #9a4a1f;
+  font-weight: 700;
 }
 
 .environment-hint--wide {

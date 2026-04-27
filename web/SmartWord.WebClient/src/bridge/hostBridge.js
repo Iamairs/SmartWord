@@ -1,4 +1,5 @@
 const SETTINGS_STORAGE_KEY = 'smartword-settings';
+const SKILLS_STORAGE_KEY = 'smartword-skills';
 const VALID_MODES = new Set(['ask', 'plan', 'agent']);
 
 let pendingMockConfirmation = null;
@@ -263,6 +264,118 @@ function createMockTaskDetail(taskRunId) {
   };
 }
 
+function createDefaultMockSkills() {
+  return [
+    {
+      name: 'document-finalizer',
+      displayName: '文档终检',
+      description: '交付前检查占位符、TODO、编号、标题层级、异常标点和术语一致性。',
+      version: '1.0.0',
+      enabled: true,
+      isBuiltIn: true,
+      updatedAtUtc: new Date().toISOString(),
+      content: `---
+name: document-finalizer
+display_name: 文档终检
+description: 交付前检查当前 Word 文档。
+version: 1.0.0
+enabled: true
+---
+
+# 文档终检
+
+检查占位符、TODO、编号、标题层级和低风险格式问题。`,
+      resources: []
+    },
+    {
+      name: 'business-report-polish',
+      displayName: '商务报告润色',
+      description: '将汇报材料和商务报告改写为正式、结论前置、结构清晰的表达。',
+      version: '1.0.0',
+      enabled: true,
+      isBuiltIn: true,
+      updatedAtUtc: new Date().toISOString(),
+      content: `---
+name: business-report-polish
+display_name: 商务报告润色
+description: 润色商务报告。
+version: 1.0.0
+enabled: true
+---
+
+# 商务报告润色
+
+保持事实不变，优化结构、语气和表达密度。`,
+      resources: []
+    },
+    {
+      name: 'term-consistency-check',
+      displayName: '术语一致性检查',
+      description: '检查并统一产品名、主体名、部门名、缩写、中英文术语和同义表达。',
+      version: '1.0.0',
+      enabled: true,
+      isBuiltIn: true,
+      updatedAtUtc: new Date().toISOString(),
+      content: `---
+name: term-consistency-check
+display_name: 术语一致性检查
+description: 检查术语一致性。
+version: 1.0.0
+enabled: true
+---
+
+# 术语一致性检查
+
+先生成候选术语表，批量替换前必须让用户确认标准写法。`,
+      resources: []
+    }
+  ];
+}
+
+function loadMockSkills() {
+  const cached = window.localStorage.getItem(SKILLS_STORAGE_KEY);
+  if (!cached) {
+    const defaults = createDefaultMockSkills();
+    window.localStorage.setItem(SKILLS_STORAGE_KEY, JSON.stringify(defaults));
+    return defaults;
+  }
+
+  try {
+    return JSON.parse(cached);
+  } catch {
+    return createDefaultMockSkills();
+  }
+}
+
+function saveMockSkills(skills) {
+  window.localStorage.setItem(SKILLS_STORAGE_KEY, JSON.stringify(skills || []));
+}
+
+function createSkillTemplate(name, displayName, description) {
+  return `---
+name: ${name}
+display_name: ${displayName || name}
+description: ${description || '面向当前 Word 文档的自定义处理流程。'}
+version: 1.0.0
+enabled: true
+---
+
+# ${displayName || name}
+
+## 工作流
+
+1. 判断当前 Word 文档是否符合此 Skill 的使用场景。
+2. 读取相关段落、标题、表格或选区。
+3. 输出问题清单或处理计划。
+4. 需要修改文档时，必须遵守 SmartWord 的权限确认、Undo 和验证。
+
+## 安全边界
+
+- 不执行 scripts/ 下的脚本。
+- 不绕过 SmartWord 的写入确认和任务审计。
+`;
+}
+
 const listeners = new Set();
 
 function emitEvent(payload) {
@@ -512,6 +625,148 @@ export const hostBridge = {
     }
 
     return createMockTaskDetail(taskRunId);
+  },
+
+  async getSkills() {
+    if (this.isAvailable) {
+      const raw = await callBridge('GetSkillsJson');
+      const result = JSON.parse(raw || '{}');
+      if (result.success === false) {
+        throw new Error(result.message || 'Skill 列表读取失败');
+      }
+
+      return Array.isArray(result.items) ? result.items : [];
+    }
+
+    return loadMockSkills().map(({ content, resources, ...skill }) => skill);
+  },
+
+  async getSkillDetail(name) {
+    if (this.isAvailable) {
+      const raw = await callBridge('GetSkillDetailJson', name || '');
+      const result = JSON.parse(raw || '{}');
+      if (result.success === false) {
+        throw new Error(result.message || 'Skill 详情读取失败');
+      }
+
+      return result;
+    }
+
+    const skill = loadMockSkills().find((item) => item.name === name);
+    if (!skill) {
+      throw new Error('未找到指定 Skill');
+    }
+
+    const { content, resources, ...summary } = skill;
+    return {
+      success: true,
+      skill: summary,
+      content,
+      resources: resources || []
+    };
+  },
+
+  async createSkill(request) {
+    if (this.isAvailable) {
+      const raw = await callBridge('CreateSkillJson', JSON.stringify(request || {}));
+      const result = JSON.parse(raw || '{}');
+      if (result.success === false) {
+        throw new Error(result.message || 'Skill 创建失败');
+      }
+
+      return result;
+    }
+
+    const skills = loadMockSkills();
+    const name = String(request?.name || '').trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) {
+      throw new Error('Skill 名称只能包含小写字母、数字和连字符');
+    }
+    if (skills.some((item) => item.name === name)) {
+      throw new Error('同名 Skill 已存在');
+    }
+
+    const skill = {
+      name,
+      displayName: request?.displayName || name,
+      description: request?.description || '面向当前 Word 文档的自定义处理流程。',
+      version: '1.0.0',
+      enabled: true,
+      isBuiltIn: false,
+      updatedAtUtc: new Date().toISOString(),
+      content: request?.content || createSkillTemplate(name, request?.displayName, request?.description),
+      resources: []
+    };
+    skills.push(skill);
+    saveMockSkills(skills);
+    const { content, resources, ...summary } = skill;
+    return { success: true, skill: summary, content, resources };
+  },
+
+  async saveSkill(name, content) {
+    if (this.isAvailable) {
+      const raw = await callBridge('SaveSkillJson', name || '', content || '');
+      const result = JSON.parse(raw || '{}');
+      if (result.success === false) {
+        throw new Error(result.message || 'Skill 保存失败');
+      }
+
+      return result;
+    }
+
+    const skills = loadMockSkills();
+    const skill = skills.find((item) => item.name === name);
+    if (!skill || skill.isBuiltIn) {
+      throw new Error('只能编辑用户 Skill');
+    }
+
+    skill.content = content || '';
+    skill.updatedAtUtc = new Date().toISOString();
+    saveMockSkills(skills);
+    const { resources, ...summaryWithContent } = skill;
+    const { content: savedContent, ...summary } = summaryWithContent;
+    return { success: true, skill: summary, content: savedContent, resources: resources || [] };
+  },
+
+  async deleteSkill(name) {
+    if (this.isAvailable) {
+      const raw = await callBridge('DeleteSkillJson', name || '');
+      const result = JSON.parse(raw || '{}');
+      if (result.success === false) {
+        throw new Error(result.message || 'Skill 删除失败');
+      }
+
+      return result;
+    }
+
+    const skills = loadMockSkills();
+    const skill = skills.find((item) => item.name === name);
+    if (skill?.isBuiltIn) {
+      throw new Error('内置 Skill 不允许删除');
+    }
+    saveMockSkills(skills.filter((item) => item.name !== name));
+    return { success: true };
+  },
+
+  async setSkillEnabled(name, enabled) {
+    if (this.isAvailable) {
+      const raw = await callBridge('SetSkillEnabledJson', name || '', enabled === true);
+      const result = JSON.parse(raw || '{}');
+      if (result.success === false) {
+        throw new Error(result.message || 'Skill 启停设置失败');
+      }
+
+      return result;
+    }
+
+    const skills = loadMockSkills();
+    const skill = skills.find((item) => item.name === name);
+    if (skill) {
+      skill.enabled = enabled === true;
+      skill.updatedAtUtc = new Date().toISOString();
+      saveMockSkills(skills);
+    }
+    return { success: true };
   },
 
   async navigateToParagraph(paragraphIndex) {
