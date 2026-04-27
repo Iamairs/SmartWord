@@ -7,6 +7,7 @@ using SmartWord.Application.Context;
 using SmartWord.Application.Orchestration;
 using SmartWord.Application.Pipeline;
 using SmartWord.Application.PromptBuilder;
+using SmartWord.Application.Skills;
 using SmartWord.Application.Todo;
 using SmartWord.Application.Tools;
 using SmartWord.AddIn.TaskPane;
@@ -14,6 +15,7 @@ using SmartWord.Core.Interfaces;
 using SmartWord.Infrastructure.Configuration;
 using SmartWord.Infrastructure.LlmClients;
 using SmartWord.Infrastructure.Persistence;
+using SmartWord.Infrastructure.Skills;
 using SmartWord.OfficeIntegration.Scripting;
 using SmartWord.OfficeIntegration.Tools;
 using SmartWord.OfficeIntegration.WordWrappers;
@@ -62,6 +64,8 @@ namespace SmartWord.AddIn.DI
             services.AddSingleton<IConversationStore, SqliteConversationStore>();
             services.AddSingleton<ITaskHistoryStore, SqliteTaskHistoryStore>();
             services.AddSingleton<ITodoStore, JsonTodoStore>();
+            services.AddSingleton<ISkillStore, FileSystemSkillStore>();
+            services.AddSingleton<ISkillPromptResolver, SkillPromptResolver>();
             services.AddSingleton<IContextHydrator, ContextHydrator>();
             services.AddSingleton<TodoManager>();
             services.AddSingleton<TodoReminderService>();
@@ -111,7 +115,8 @@ namespace SmartWord.AddIn.DI
                 provider.GetRequiredService<ITodoRecoveryChannel>(),
                 provider.GetRequiredService<TodoManager>(),
                 provider.GetRequiredService<TodoReminderService>(),
-                provider.GetRequiredService<ITaskHistoryStore>()));
+                provider.GetRequiredService<ITaskHistoryStore>(),
+                provider.GetRequiredService<ISkillPromptResolver>()));
             services.AddSingleton<StreamingResponseHandler>();
 
             _serviceProvider = services.BuildServiceProvider();

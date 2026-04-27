@@ -256,6 +256,9 @@
     <Content Include="Resources\Prompts\SYSTEM.md">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <Content Include="Resources\Skills\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="$(UserProfile)\.nuget\packages\sqlitepclraw.lib.e_sqlite3\2.1.11\runtimes\win-x64\native\e_sqlite3.dll">
       <Link>e_sqlite3.dll</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -278,9 +281,12 @@
   <Target Name="CopyStaticResources" AfterTargets="Build">
     <ItemGroup>
       <WebClientResources Include="$(ProjectDir)Resources\WebClient\**\*" />
+      <SkillResources Include="$(ProjectDir)Resources\Skills\**\*" />
     </ItemGroup>
     <MakeDir Directories="$(TargetDir)Resources\WebClient" Condition="Exists('$(ProjectDir)Resources\WebClient')" />
     <Copy SourceFiles="@(WebClientResources)" DestinationFiles="@(WebClientResources->'$(TargetDir)Resources\WebClient\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" Condition="Exists('$(ProjectDir)Resources\WebClient')" />
+    <MakeDir Directories="$(TargetDir)Resources\Skills" Condition="Exists('$(ProjectDir)Resources\Skills')" />
+    <Copy SourceFiles="@(SkillResources)" DestinationFiles="@(SkillResources->'$(TargetDir)Resources\Skills\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" Condition="Exists('$(ProjectDir)Resources\Skills')" />
   </Target>
   <!-- Include the build rules for a C# project. -->
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />

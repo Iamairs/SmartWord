@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -202,6 +204,7 @@ namespace SmartWord.AddIn.TaskPane
                         EnableToolCalling = modelRoute.EnableToolCalling,
                         ModelRoutingMessage = modelRoute.RoutingMessage ?? string.Empty,
                         CustomSystemInstructions = customInstructions ?? string.Empty,
+                        SelectedSkillNames = ParseSelectedSkillNames(request["selectedSkillNames"]),
                         StartupTodoBoardDecision = hasStartupTodoBoardDecision
                             ? startupTodoBoardDecision
                             : (TodoBoardRecoveryDecision?)null,
@@ -356,6 +359,168 @@ namespace SmartWord.AddIn.TaskPane
             catch (Exception ex)
             {
                 Log.Warning(ex, "读取任务历史详情失败。TaskRunId={TaskRunId}", taskRunId);
+                return JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+        }
+
+        public string GetSkillsJson()
+        {
+            try
+            {
+                var store = ServiceLocator.GetRequiredService<ISkillStore>();
+                var skills = store.GetSkillsAsync(CancellationToken.None).GetAwaiter().GetResult();
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    items = skills.Select(ToSkillPayload).ToArray()
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "读取 Skill 列表失败。");
+                return JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+        }
+
+        public string GetSkillDetailJson(string name)
+        {
+            try
+            {
+                var store = ServiceLocator.GetRequiredService<ISkillStore>();
+                var detail = store.GetSkillDetailAsync(name ?? string.Empty, CancellationToken.None).GetAwaiter().GetResult();
+                if (detail == null || detail.Definition == null)
+                {
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = false,
+                        message = "未找到指定 Skill。"
+                    });
+                }
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    skill = ToSkillPayload(detail.Definition),
+                    content = detail.Content,
+                    resources = detail.Resources
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "读取 Skill 详情失败。Name={Name}", name);
+                return JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+        }
+
+        public string CreateSkillJson(string requestJson)
+        {
+            try
+            {
+                var request = JsonConvert.DeserializeObject<CreateSkillRequest>(requestJson ?? "{}")
+                    ?? new CreateSkillRequest();
+                var store = ServiceLocator.GetRequiredService<ISkillStore>();
+                var detail = store.CreateSkillAsync(request, CancellationToken.None).GetAwaiter().GetResult();
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    skill = ToSkillPayload(detail.Definition),
+                    content = detail.Content,
+                    resources = detail.Resources
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "创建 Skill 失败。");
+                return JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+        }
+
+        public string SaveSkillJson(string name, string content)
+        {
+            try
+            {
+                var store = ServiceLocator.GetRequiredService<ISkillStore>();
+                var detail = store.SaveSkillAsync(
+                    new SaveSkillRequest
+                    {
+                        Name = name ?? string.Empty,
+                        Content = content ?? string.Empty
+                    },
+                    CancellationToken.None).GetAwaiter().GetResult();
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    skill = ToSkillPayload(detail.Definition),
+                    content = detail.Content,
+                    resources = detail.Resources
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "保存 Skill 失败。Name={Name}", name);
+                return JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+        }
+
+        public string DeleteSkillJson(string name)
+        {
+            try
+            {
+                var store = ServiceLocator.GetRequiredService<ISkillStore>();
+                store.DeleteSkillAsync(name ?? string.Empty, CancellationToken.None).GetAwaiter().GetResult();
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    message = "Skill 已删除。"
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "删除 Skill 失败。Name={Name}", name);
+                return JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+        }
+
+        public string SetSkillEnabledJson(string name, bool enabled)
+        {
+            try
+            {
+                var store = ServiceLocator.GetRequiredService<ISkillStore>();
+                store.SetSkillEnabledAsync(name ?? string.Empty, enabled, CancellationToken.None).GetAwaiter().GetResult();
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    name = name ?? string.Empty,
+                    enabled
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "设置 Skill 启停失败。Name={Name}", name);
                 return JsonConvert.SerializeObject(new
                 {
                     success = false,
@@ -746,6 +911,38 @@ namespace SmartWord.AddIn.TaskPane
             }
         }
 
+        private static IReadOnlyList<string> ParseSelectedSkillNames(JToken token)
+        {
+            var results = new List<string>();
+            if (token == null)
+            {
+                return results;
+            }
+
+            if (token.Type == JTokenType.Array)
+            {
+                foreach (var item in token)
+                {
+                    var name = (item.Value<string>() ?? string.Empty).Trim().ToLowerInvariant();
+                    if (!string.IsNullOrWhiteSpace(name)
+                        && !results.Contains(name, StringComparer.OrdinalIgnoreCase))
+                    {
+                        results.Add(name);
+                    }
+                }
+
+                return results;
+            }
+
+            var singleName = (token.Value<string>() ?? string.Empty).Trim().ToLowerInvariant();
+            if (!string.IsNullOrWhiteSpace(singleName))
+            {
+                results.Add(singleName);
+            }
+
+            return results;
+        }
+
         private void CancelPendingWaits()
         {
             foreach (var item in _pendingToolConfirmations)
@@ -832,6 +1029,20 @@ namespace SmartWord.AddIn.TaskPane
                 hasActivePlan = agentEvent.HasActivePlan,
                 canRecoverExisting = agentEvent.CanRecoverExisting,
                 todoBoardUpdateKind = agentEvent.TodoBoardUpdateKind
+            };
+        }
+
+        private static object ToSkillPayload(SkillDefinition skill)
+        {
+            return new
+            {
+                name = skill.Name,
+                displayName = skill.DisplayName,
+                description = skill.Description,
+                version = skill.Version,
+                enabled = skill.Enabled,
+                isBuiltIn = skill.IsBuiltIn,
+                updatedAtUtc = skill.UpdatedAtUtc
             };
         }
 
