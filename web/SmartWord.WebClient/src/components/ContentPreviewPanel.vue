@@ -2,7 +2,6 @@
   <section class="preview-panel">
     <div class="preview-panel__header">
       <div>
-        <p class="preview-panel__eyebrow">待确认写操作</p>
         <h2>{{ preview.title }}</h2>
       </div>
       <span class="preview-panel__status" :class="`preview-panel__status--${preview.riskLevel}`">
@@ -19,15 +18,8 @@
         <span>影响范围</span>
         <strong>{{ preview.scopeLabel }}</strong>
       </div>
-      <div>
-        <span>验证方式</span>
-        <strong>{{ preview.verifyLabel }}</strong>
-      </div>
-      <div>
-        <span>撤销能力</span>
-        <strong>当前步骤可回滚</strong>
-      </div>
     </div>
+    <p class="preview-panel__safety">{{ preview.safetyLabel }}</p>
 
     <div v-if="preview.operations.length" class="preview-panel__operations">
       <p>将执行的操作</p>
@@ -107,7 +99,7 @@ const preview = computed(() => {
     riskLevel: 'medium',
     riskLabel: '中风险',
     scopeLabel: '待确认',
-    verifyLabel: '系统将尝试验证',
+    safetyLabel: '系统会尽量验证改动结果；如果当前步骤失败，会回滚本步。',
     operations: []
   };
 });
@@ -115,18 +107,15 @@ const preview = computed(() => {
 function buildPatchRangePreview(input) {
   const operations = Array.isArray(input.operations) ? input.operations : [];
   const affectedParagraphs = collectPatchParagraphs(operations);
+  const hasDeleteOperation = operations.some((item) => item?.type === 'delete_paragraph' || item?.type === 'delete');
   return {
     title: '标准文档补丁',
-    riskLevel: operations.some((item) => item?.type === 'delete_paragraph' || item?.type === 'delete')
-      ? 'high'
-      : 'low',
-    riskLabel: operations.some((item) => item?.type === 'delete_paragraph' || item?.type === 'delete')
-      ? '较高风险'
-      : '低风险',
+    riskLevel: hasDeleteOperation ? 'high' : 'low',
+    riskLabel: hasDeleteOperation ? '较高风险' : '低风险',
     scopeLabel: affectedParagraphs.length
       ? `段落 ${affectedParagraphs.join(', ')}`
       : '由工具输入决定',
-    verifyLabel: '系统自动验证',
+    safetyLabel: '系统会自动验证改动结果；如果当前步骤失败，会回滚本步。',
     operations: operations.map(formatPatchOperation)
   };
 }
@@ -140,9 +129,11 @@ function buildScriptPreview(input) {
     scopeLabel: affectedParagraphs.length
       ? `段落 ${affectedParagraphs.join(', ')}`
       : '脚本自行定位，需重点确认',
-    verifyLabel: input.verify_code ? '脚本验证计划' : '缺少显式验证',
+    safetyLabel: input.verify_code
+      ? '写入后会执行只读验证脚本；如果当前步骤失败，会回滚本步。'
+      : '缺少显式验证脚本，确认前建议展开技术详情；当前步骤失败时会回滚本步。',
     operations: [
-      input.description || '执行一段受控 C# 脚本修改 Word 文档。',
+      '执行受控脚本完成上述文档修改。',
       input.verify_code ? '写入后执行只读验证脚本。' : '当前输入未提供可展示的验证脚本。'
     ]
   };
@@ -217,14 +208,6 @@ function getToolDisplayName(toolName) {
   align-items: flex-start;
 }
 
-.preview-panel__eyebrow {
-  margin: 0 0 4px;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #a64b18;
-}
-
 .preview-panel__header h2 {
   margin: 0;
   font-size: 16px;
@@ -264,9 +247,6 @@ function getToolDisplayName(toolName) {
 
 .preview-panel__summary {
   margin-top: 10px;
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 6px;
 }
 
 .preview-panel__summary div {
@@ -283,6 +263,13 @@ function getToolDisplayName(toolName) {
 .preview-panel__summary strong {
   color: #7a3110;
   text-align: right;
+}
+
+.preview-panel__safety {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #8a5a35;
 }
 
 .preview-panel__operations {
