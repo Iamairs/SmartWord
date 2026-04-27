@@ -244,6 +244,7 @@ namespace SmartWord.Application.Orchestration
     var nextCitationRef = 1;
     var maxIterations = ResolveMaxIterations(safeOptions);
     var consecutiveFailures = 0;
+    var lastFailureSummary = string.Empty;
     var completedSuccessfully = false;
     var hasSuccessfulDocumentWriteOccurredInRun = false;
     var hasCompactedContext = false;
@@ -538,12 +539,16 @@ namespace SmartWord.Application.Orchestration
 
                         yield return CreateToolCompletedEvent(toolCall, invalidQuestionResult);
 
-                        consecutiveFailures++;
+                        RecordConsecutiveFailure(
+                            ref consecutiveFailures,
+                            ref lastFailureSummary,
+                            toolCall.Name,
+                            invalidQuestionResult.Output);
                         if (consecutiveFailures >= ConsecutiveFailureThreshold)
                         {
                             interruptedOutcome = TodoBoardRunOutcome.Failed;
                             interruptedReason = "连续多次工具调用失败，系统已触发熔断停止。";
-                            yield return CreateCircuitBreakerEvent();
+                            yield return CreateCircuitBreakerEvent(lastFailureSummary);
                             yield break;
                         }
 
@@ -629,12 +634,16 @@ namespace SmartWord.Application.Orchestration
                         OperationDescription = "内部验证工具不可直接调用。"
                     };
 
-                    consecutiveFailures++;
+                    RecordConsecutiveFailure(
+                        ref consecutiveFailures,
+                        ref lastFailureSummary,
+                        toolCall.Name,
+                        internalOnlyResult.Output);
                     if (consecutiveFailures >= ConsecutiveFailureThreshold)
                     {
                         interruptedOutcome = TodoBoardRunOutcome.Failed;
                         interruptedReason = "连续多次工具调用失败，系统已触发熔断停止。";
-                        yield return CreateCircuitBreakerEvent();
+                        yield return CreateCircuitBreakerEvent(lastFailureSummary);
                         yield break;
                     }
 
@@ -672,12 +681,16 @@ namespace SmartWord.Application.Orchestration
                         OperationDescription = pendingWriteStep.OperationDescription
                     };
 
-                    consecutiveFailures++;
+                    RecordConsecutiveFailure(
+                        ref consecutiveFailures,
+                        ref lastFailureSummary,
+                        toolCall.Name,
+                        repairOnlyResult.Output);
                     if (consecutiveFailures >= ConsecutiveFailureThreshold)
                     {
                         interruptedOutcome = TodoBoardRunOutcome.Failed;
                         interruptedReason = "连续多次工具调用失败，系统已触发熔断停止。";
-                        yield return CreateCircuitBreakerEvent();
+                        yield return CreateCircuitBreakerEvent(lastFailureSummary);
                         yield break;
                     }
 
@@ -734,12 +747,16 @@ namespace SmartWord.Application.Orchestration
                         OperationDescription = operationDescription
                     };
 
-                    consecutiveFailures++;
+                    RecordConsecutiveFailure(
+                        ref consecutiveFailures,
+                        ref lastFailureSummary,
+                        toolCall.Name,
+                        deniedResult.Output);
                     if (consecutiveFailures >= ConsecutiveFailureThreshold)
                     {
                         interruptedOutcome = TodoBoardRunOutcome.Failed;
                         interruptedReason = "连续多次工具调用失败，系统已触发熔断停止。";
-                        yield return CreateCircuitBreakerEvent();
+                        yield return CreateCircuitBreakerEvent(lastFailureSummary);
                         yield break;
                     }
 
@@ -761,12 +778,16 @@ namespace SmartWord.Application.Orchestration
 
                     yield return CreateToolCompletedEvent(toolCall, inputParseError);
 
-                    consecutiveFailures++;
+                    RecordConsecutiveFailure(
+                        ref consecutiveFailures,
+                        ref lastFailureSummary,
+                        toolCall.Name,
+                        inputParseError.Output);
                     if (consecutiveFailures >= ConsecutiveFailureThreshold)
                     {
                         interruptedOutcome = TodoBoardRunOutcome.Failed;
                         interruptedReason = "连续多次工具调用失败，系统已触发熔断停止。";
-                        yield return CreateCircuitBreakerEvent();
+                        yield return CreateCircuitBreakerEvent(lastFailureSummary);
                         yield break;
                     }
 
@@ -802,10 +823,16 @@ namespace SmartWord.Application.Orchestration
                             OperationDescription = operationDescription
                         };
 
-                        consecutiveFailures++;
+                        RecordConsecutiveFailure(
+                            ref consecutiveFailures,
+                            ref lastFailureSummary,
+                            toolCall.Name,
+                            unavailableResult.Output);
                         if (consecutiveFailures >= ConsecutiveFailureThreshold)
                         {
-                            yield return CreateCircuitBreakerEvent();
+                            interruptedOutcome = TodoBoardRunOutcome.Failed;
+                            interruptedReason = "连续多次工具调用失败，系统已触发熔断停止。";
+                            yield return CreateCircuitBreakerEvent(lastFailureSummary);
                             yield break;
                         }
 
@@ -1199,12 +1226,16 @@ namespace SmartWord.Application.Orchestration
                         break;
                     }
 
-                    consecutiveFailures++;
+                    RecordConsecutiveFailure(
+                        ref consecutiveFailures,
+                        ref lastFailureSummary,
+                        toolCall.Name,
+                        executionResult.Output);
                     if (consecutiveFailures >= ConsecutiveFailureThreshold)
                     {
                         interruptedOutcome = TodoBoardRunOutcome.Failed;
                         interruptedReason = "连续多次工具调用失败，系统已触发熔断停止。";
-                        yield return CreateCircuitBreakerEvent();
+                        yield return CreateCircuitBreakerEvent(lastFailureSummary);
                         yield break;
                     }
 
@@ -2146,13 +2177,56 @@ namespace SmartWord.Application.Orchestration
             return citations;
         }
 
-        private static AgentEvent CreateCircuitBreakerEvent()
+        private static void RecordConsecutiveFailure(
+            ref int consecutiveFailures,
+            ref string lastFailureSummary,
+            string toolName,
+            string toolOutput)
         {
+            consecutiveFailures++;
+            lastFailureSummary = BuildFailureSummary(toolName, toolOutput);
+        }
+
+        private static AgentEvent CreateCircuitBreakerEvent(string lastFailureSummary)
+        {
+            var message = "工具已连续失败 3 次，系统为防止误操作已停止本次任务。";
+            if (!string.IsNullOrWhiteSpace(lastFailureSummary))
+            {
+                message += Environment.NewLine
+                    + "最近一次失败大致原因："
+                    + lastFailureSummary
+                    + Environment.NewLine
+                    + "建议：检查任务范围、选区或指令后重新发起；如果是文档状态或权限问题，请先处理对应限制。";
+            }
+
             return new AgentEvent
             {
                 Type = AgentEventType.Error,
-                Message = "工具已连续失败 3 次，系统为防止误操作已停止本次任务。"
+                Message = message
             };
+        }
+
+        private static string BuildFailureSummary(string toolName, string toolOutput)
+        {
+            var normalizedToolName = string.IsNullOrWhiteSpace(toolName)
+                ? "未知工具"
+                : toolName.Trim();
+            var normalizedOutput = NormalizeFailureText(toolOutput);
+            return string.IsNullOrWhiteSpace(normalizedOutput)
+                ? $"工具 {normalizedToolName} 未返回明确错误详情。"
+                : $"工具 {normalizedToolName}：{Truncate(normalizedOutput, 240)}";
+        }
+
+        private static string NormalizeFailureText(string toolOutput)
+        {
+            if (string.IsNullOrWhiteSpace(toolOutput))
+            {
+                return string.Empty;
+            }
+
+            var text = Regex.Replace(toolOutput, @"\[(ERROR in [^\]]+|PERMISSION DENIED|SKIPPED)\]\s*", string.Empty);
+            text = Regex.Replace(text, @"Tool '[^']+' (was blocked|is not allowed in current mode|was skipped by user)\.?", string.Empty);
+            return Regex.Replace(text, @"\s+", " ").Trim();
         }
 
         private static bool IsTodoToolName(string toolName)

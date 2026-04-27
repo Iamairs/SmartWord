@@ -72,6 +72,36 @@ namespace SmartWord.Application.Tests.Orchestration
         }
 
         [Fact]
+        public async Task RunAsync_GenericToolFailsThreeTimes_ErrorIncludesLastFailureSummary()
+        {
+            var orchestrator = CreateOrchestrator(
+                new LoopingToolLlmClient("probe_document", "{}"),
+                CreateWritableHydrator(),
+                new ITool[]
+                {
+                    new FakeTool(
+                        "probe_document",
+                        ToolPermission.ReadOnly,
+                        ToolCallResult.Error("probe_document", "文档读取失败：Word COM 对象不可用。"))
+                });
+
+            var events = await CollectAsync(orchestrator.RunAsync(
+                "读取文档摘要",
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Agent,
+                    EnableToolCalling = true
+                },
+                CancellationToken.None));
+
+            var errorEvent = Assert.Single(events.Where(item => item.Type == AgentEventType.Error));
+            Assert.Contains("工具已连续失败 3 次", errorEvent.Message);
+            Assert.Contains("最近一次失败大致原因", errorEvent.Message);
+            Assert.Contains("probe_document", errorEvent.Message);
+            Assert.Contains("文档读取失败", errorEvent.Message);
+        }
+
+        [Fact]
         public async Task RunAsync_PlanModeQuestionWithoutId_GeneratesStableIdAndSkipsRemainingToolCalls()
         {
             var conversationStore = new InMemoryConversationStore();
