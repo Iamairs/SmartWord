@@ -59,22 +59,32 @@ namespace SmartWord.Application.Context
                 .Skip(recentStartIndex)
                 .ToList();
             var protocolSafeRecentMessages = BuildProtocolSafeRecentMessages(recentMessages);
+            var firstUserMessage = nonSystemMessages.FirstOrDefault(IsUserMessage);
             var lastUserMessage = nonSystemMessages.LastOrDefault(IsRealUserMessage);
             var shouldReinsertUserMessage = lastUserMessage != null
                 && !protocolSafeRecentMessages.Any(IsRealUserMessage);
+            var shouldReinsertFirstUserMessage = firstUserMessage != null
+                && !protocolSafeRecentMessages.Any(message => IsSameMessage(message, firstUserMessage));
 
             var result = new List<AgentMessage>(
                 systemMessages.Count
                 + protocolSafeRecentMessages.Count
+                + (shouldReinsertFirstUserMessage ? 1 : 0)
                 + (shouldReinsertUserMessage ? 2 : 1));
             result.AddRange(systemMessages);
+            if (shouldReinsertFirstUserMessage)
+            {
+                result.Add(CloneMessage(firstUserMessage));
+            }
+
             result.Add(new AgentMessage
             {
                 Role = "system",
                 Content = BuildSummaryContent(compactedMessages, nonSystemMessages, safeContext),
                 IsCompressedSummary = true
             });
-            if (shouldReinsertUserMessage)
+            if (shouldReinsertUserMessage
+                && !result.Any(message => IsSameMessage(message, lastUserMessage)))
             {
                 result.Add(CloneMessage(lastUserMessage));
             }
@@ -651,6 +661,24 @@ namespace SmartWord.Application.Context
         private static bool IsRealUserMessage(AgentMessage message)
         {
             return IsUserMessage(message) && !message.IsInternalObservation;
+        }
+
+        private static bool IsSameMessage(AgentMessage left, AgentMessage right)
+        {
+            if (left == null || right == null)
+            {
+                return false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(left.LocalMessageId)
+                && string.Equals(left.LocalMessageId, right.LocalMessageId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            return string.Equals(left.Role, right.Role, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(left.Content, right.Content, StringComparison.Ordinal)
+                && string.Equals(left.ToolCallId, right.ToolCallId, StringComparison.Ordinal);
         }
 
         private static bool IsAutoVerifyObservation(AgentMessage message)

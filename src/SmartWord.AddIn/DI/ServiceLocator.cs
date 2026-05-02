@@ -106,6 +106,12 @@ namespace SmartWord.AddIn.DI
             });
             services.AddSingleton<PermissionGuard>();
             services.AddSingleton<ConversationCompressor>();
+            services.AddSingleton<ContextBudgetPolicy>();
+            services.AddSingleton<LightToolResultPruner>();
+            services.AddSingleton<OversizedToolResultTruncator>();
+            services.AddSingleton<ProgramHardStateBuilder>();
+            services.AddSingleton<LlmHistoryCompactor>();
+            services.AddSingleton<ContextCompactionService>();
             services.AddSingleton(provider => new SystemPromptBuilder(
                 Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "Prompts")));
             services.AddSingleton<IAgentOrchestrator>(provider => new AgentOrchestrator(
@@ -124,7 +130,8 @@ namespace SmartWord.AddIn.DI
                 provider.GetRequiredService<TodoReminderService>(),
                 provider.GetRequiredService<ITaskHistoryStore>(),
                 provider.GetRequiredService<ISkillPromptResolver>(),
-                provider.GetRequiredService<ISkillScriptApprovalStore>()));
+                provider.GetRequiredService<ISkillScriptApprovalStore>(),
+                provider.GetRequiredService<ContextCompactionService>()));
             services.AddSingleton<StreamingResponseHandler>();
 
             _serviceProvider = services.BuildServiceProvider();
@@ -314,6 +321,15 @@ namespace SmartWord.AddIn.DI
                 normalized.RequireConfirmationForScripts);
             normalized.RequireConfirmationForScripts =
                 IsLegacyConfirmationRequired(normalized.PermissionMode);
+            normalized.ContextWindowTokens = normalized.ContextWindowTokens <= 0
+                ? 256 * 1024
+                : normalized.ContextWindowTokens;
+            normalized.ContextSoftLimitRatio = NormalizeRatio(normalized.ContextSoftLimitRatio, 0.65);
+            normalized.ContextHardLimitRatio = NormalizeRatio(normalized.ContextHardLimitRatio, 0.85);
+            normalized.ContextEmergencyLimitRatio = NormalizeRatio(normalized.ContextEmergencyLimitRatio, 0.95);
+            normalized.ContextTokenSafetyMargin = normalized.ContextTokenSafetyMargin <= 0
+                ? 1.2
+                : normalized.ContextTokenSafetyMargin;
             ApplySecretDisplayFlags(normalized);
             return normalized;
         }
@@ -336,6 +352,11 @@ namespace SmartWord.AddIn.DI
                 HeavyModel = settings.HeavyModel,
                 PermissionMode = settings.PermissionMode,
                 RequireConfirmationForScripts = settings.RequireConfirmationForScripts,
+                ContextWindowTokens = settings.ContextWindowTokens,
+                ContextSoftLimitRatio = settings.ContextSoftLimitRatio,
+                ContextHardLimitRatio = settings.ContextHardLimitRatio,
+                ContextEmergencyLimitRatio = settings.ContextEmergencyLimitRatio,
+                ContextTokenSafetyMargin = settings.ContextTokenSafetyMargin,
                 CustomInstructions = settings.CustomInstructions,
                 HasApiKey = settings.HasApiKey,
                 HasApiKeyHeavy = settings.HasApiKeyHeavy,
@@ -362,6 +383,11 @@ namespace SmartWord.AddIn.DI
             target.HeavyModel = source.HeavyModel;
             target.PermissionMode = source.PermissionMode;
             target.RequireConfirmationForScripts = source.RequireConfirmationForScripts;
+            target.ContextWindowTokens = source.ContextWindowTokens;
+            target.ContextSoftLimitRatio = source.ContextSoftLimitRatio;
+            target.ContextHardLimitRatio = source.ContextHardLimitRatio;
+            target.ContextEmergencyLimitRatio = source.ContextEmergencyLimitRatio;
+            target.ContextTokenSafetyMargin = source.ContextTokenSafetyMargin;
             target.CustomInstructions = source.CustomInstructions;
             target.HasApiKey = source.HasApiKey;
             target.HasApiKeyHeavy = source.HasApiKeyHeavy;
@@ -418,6 +444,11 @@ namespace SmartWord.AddIn.DI
                 HeavyModel = llmOptions.HeavyModel,
                 PermissionMode = runtimeSettings.PermissionMode,
                 RequireConfirmationForScripts = runtimeSettings.RequireConfirmationForScripts,
+                ContextWindowTokens = runtimeSettings.ContextWindowTokens,
+                ContextSoftLimitRatio = runtimeSettings.ContextSoftLimitRatio,
+                ContextHardLimitRatio = runtimeSettings.ContextHardLimitRatio,
+                ContextEmergencyLimitRatio = runtimeSettings.ContextEmergencyLimitRatio,
+                ContextTokenSafetyMargin = runtimeSettings.ContextTokenSafetyMargin,
                 CustomInstructions = runtimeSettings.CustomInstructions,
                 HasApiKey = SecretProtector.HasSecret(runtimeSettings.ApiKey, runtimeSettings.ProtectedApiKey),
                 HasApiKeyHeavy = SecretProtector.HasSecret(runtimeSettings.ApiKeyHeavy, runtimeSettings.ProtectedApiKeyHeavy),
@@ -425,6 +456,13 @@ namespace SmartWord.AddIn.DI
             };
             ApplySecretDisplayFlags(snapshot);
             return snapshot;
+        }
+
+        private static double NormalizeRatio(double value, double fallback)
+        {
+            return value > 0 && value < 1
+                ? value
+                : fallback;
         }
 
         private static void ApplySecretDisplayFlags(SmartWordSettings settings)

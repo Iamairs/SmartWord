@@ -338,6 +338,11 @@ async function sendMessage(content, manualMode, permissionModeOverride = '') {
     requireConfirmationForScripts: requireConfirmationForPermission(
       permissionModeOverride || settingsStore.form.permissionMode
     ),
+    contextWindowTokens: settingsStore.form.contextWindowTokens,
+    contextSoftLimitRatio: settingsStore.form.contextSoftLimitRatio,
+    contextHardLimitRatio: settingsStore.form.contextHardLimitRatio,
+    contextEmergencyLimitRatio: settingsStore.form.contextEmergencyLimitRatio,
+    contextTokenSafetyMargin: settingsStore.form.contextTokenSafetyMargin,
     customInstructions: settingsStore.form.customInstructions,
     selectedSkillNames: skillsStore.selectedSkillNames
   };
@@ -445,6 +450,11 @@ async function executePlan() {
     maxIterations: 100,
     permissionMode: settingsStore.form.permissionMode,
     requireConfirmationForScripts: requireConfirmationForPermission(settingsStore.form.permissionMode),
+    contextWindowTokens: settingsStore.form.contextWindowTokens,
+    contextSoftLimitRatio: settingsStore.form.contextSoftLimitRatio,
+    contextHardLimitRatio: settingsStore.form.contextHardLimitRatio,
+    contextEmergencyLimitRatio: settingsStore.form.contextEmergencyLimitRatio,
+    contextTokenSafetyMargin: settingsStore.form.contextTokenSafetyMargin,
     activePlan: plan,
     selectedSkillNames: skillsStore.selectedSkillNames
   });
@@ -502,6 +512,11 @@ async function resumePausedTodoRun(decision) {
       maxIterations: 100,
       permissionMode: settingsStore.form.permissionMode,
       requireConfirmationForScripts: requireConfirmationForPermission(settingsStore.form.permissionMode),
+      contextWindowTokens: settingsStore.form.contextWindowTokens,
+      contextSoftLimitRatio: settingsStore.form.contextSoftLimitRatio,
+      contextHardLimitRatio: settingsStore.form.contextHardLimitRatio,
+      contextEmergencyLimitRatio: settingsStore.form.contextEmergencyLimitRatio,
+      contextTokenSafetyMargin: settingsStore.form.contextTokenSafetyMargin,
       activePlan: chatStore.lastApprovedPlan,
       todoBoardDecision: decision,
       selectedSkillNames: skillsStore.selectedSkillNames

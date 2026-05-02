@@ -98,6 +98,33 @@
           placeholder="例如：优先使用简洁正式的中文回答。"
         ></textarea>
       </label>
+
+      <label class="settings-field">
+        <span>上下文窗口 tokens</span>
+        <input v-model.number="settingsStore.form.contextWindowTokens" type="number" min="4096" step="1024" />
+      </label>
+
+      <div class="settings-grid">
+        <label class="settings-field">
+          <span>Soft 比例</span>
+          <input v-model.number="settingsStore.form.contextSoftLimitRatio" type="number" min="0.1" max="0.9" step="0.01" />
+        </label>
+
+        <label class="settings-field">
+          <span>Hard 比例</span>
+          <input v-model.number="settingsStore.form.contextHardLimitRatio" type="number" min="0.2" max="0.98" step="0.01" />
+        </label>
+
+        <label class="settings-field">
+          <span>Emergency 比例</span>
+          <input v-model.number="settingsStore.form.contextEmergencyLimitRatio" type="number" min="0.3" max="0.99" step="0.01" />
+        </label>
+
+        <label class="settings-field">
+          <span>Token 安全系数</span>
+          <input v-model.number="settingsStore.form.contextTokenSafetyMargin" type="number" min="1" max="2" step="0.05" />
+        </label>
+      </div>
     </details>
 
     <div v-if="settingsStore.connectionTestResult" class="diagnostic-card" :class="diagnosticClass">
@@ -294,6 +321,12 @@ async function testConnection() {
 .settings-field textarea {
   resize: vertical;
   min-height: 88px;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .diagnostic-card {

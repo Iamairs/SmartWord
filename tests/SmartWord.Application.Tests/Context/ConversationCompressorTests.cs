@@ -46,11 +46,12 @@ namespace SmartWord.Application.Tests.Context
             var result = compressor.Compress(messages);
 
             Assert.Equal("system", result[0].Role);
-            Assert.True(result[1].IsCompressedSummary);
-            Assert.Contains("已压缩消息数：2", result[1].Content);
+            Assert.Equal("user-1", result[1].Content);
+            Assert.True(result[2].IsCompressedSummary);
+            Assert.Contains("已压缩消息数：2", result[2].Content);
             Assert.Equal(
                 new[] { "user-2", "assistant-2", "user-3", "assistant-3", "user-4", "assistant-4" },
-                result.Skip(2).Select(item => item.Content).ToArray());
+                result.Skip(3).Select(item => item.Content).ToArray());
         }
 
         [Fact]

@@ -19,6 +19,11 @@ function createDefaultSettings() {
     heavyModel: 'gpt-4.1',
     permissionMode: 'confirm_writes',
     requireConfirmationForScripts: true,
+    contextWindowTokens: 262144,
+    contextSoftLimitRatio: 0.65,
+    contextHardLimitRatio: 0.85,
+    contextEmergencyLimitRatio: 0.95,
+    contextTokenSafetyMargin: 1.2,
     customInstructions: ''
   };
 }

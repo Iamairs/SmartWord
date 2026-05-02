@@ -67,9 +67,16 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Context\ContextBudgetPolicy.cs" />
+    <Compile Include="Context\ContextCompactionService.cs" />
     <Compile Include="Context\ContextHydrator.cs" />
+    <Compile Include="Context\ConversationMessageUtilities.cs" />
     <Compile Include="Context\ConversationCompressionContext.cs" />
     <Compile Include="Context\ConversationCompressor.cs" />
+    <Compile Include="Context\LightToolResultPruner.cs" />
+    <Compile Include="Context\LlmHistoryCompactor.cs" />
+    <Compile Include="Context\OversizedToolResultTruncator.cs" />
+    <Compile Include="Context\ProgramHardStateBuilder.cs" />
     <Compile Include="Orchestration\AgentOrchestrator.cs" />
     <Compile Include="Orchestration\ExecutionPlanParser.cs" />
     <Compile Include="Orchestration\IntentRouter.cs" />

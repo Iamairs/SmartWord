@@ -1659,7 +1659,7 @@ namespace SmartWord.Application.Tests.Orchestration
             var llmClient = new FakeLlmClient(new AgentMessage
             {
                 Role = "assistant",
-                Content = "压缩后继续完成。"
+                Content = "[当前任务摘要]\n用户目标：继续处理当前任务。\n下一步：继续完成。"
             });
             var conversationStore = new FakeConversationStore(new[]
             {
@@ -1683,13 +1683,17 @@ namespace SmartWord.Application.Tests.Orchestration
                 {
                     Mode = AgentMode.Ask,
                     EnableToolCalling = false,
-                    CompactionThreshold = 9000
+                    ContextWindowTokens = 200,
+                    ContextSoftLimitRatio = 0.10,
+                    ContextHardLimitRatio = 0.95,
+                    ContextEmergencyLimitRatio = 0.99
                 },
                 CancellationToken.None));
 
             Assert.Contains(events, item => item.Type == AgentEventType.ContextCompacted);
             Assert.Contains(events, item => item.Type == AgentEventType.TaskCompleted);
-            Assert.Contains(conversationStore.LastEstimatedMessages, item => item.IsCompressedSummary);
+            Assert.Contains(llmClient.RequestMessageSnapshots, snapshot =>
+                snapshot.Any(item => item.Content.Contains("会话历史")));
         }
 
         private static AgentOrchestrator CreateOrchestrator(

@@ -45,6 +45,16 @@ namespace SmartWord.Infrastructure.Configuration
 
         public bool RequireConfirmationForScripts { get; set; } = true;
 
+        public int ContextWindowTokens { get; set; } = 256 * 1024;
+
+        public double ContextSoftLimitRatio { get; set; } = 0.65;
+
+        public double ContextHardLimitRatio { get; set; } = 0.85;
+
+        public double ContextEmergencyLimitRatio { get; set; } = 0.95;
+
+        public double ContextTokenSafetyMargin { get; set; } = 1.2;
+
         public string CustomInstructions { get; set; } = string.Empty;
 
         public bool HasApiKey { get; set; }

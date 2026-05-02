@@ -33,7 +33,6 @@ namespace SmartWord.Application.Orchestration
         private const int WriteRepairAttemptLimit = 3;
         private static readonly TimeSpan ToolExecutionTimeout = TimeSpan.FromSeconds(30);
         private const int ToolErrorMessageMaxLength = 500;
-        private const int CompactionThreshold = 80000;
 
         private readonly ILlmClient _llmClient;
         private readonly IContextHydrator _contextHydrator;
@@ -45,6 +44,7 @@ namespace SmartWord.Application.Orchestration
         private readonly IQuestionChannel _questionChannel;
         private readonly IUndoScopeFactory _undoScopeFactory;
         private readonly ConversationCompressor _conversationCompressor;
+        private readonly ContextCompactionService _contextCompactionService;
         private readonly ITodoRecoveryChannel _todoRecoveryChannel;
         private readonly TodoManager _todoManager;
         private readonly TodoReminderService _todoReminderService;
@@ -68,7 +68,8 @@ namespace SmartWord.Application.Orchestration
             TodoReminderService todoReminderService = null,
             ITaskHistoryStore taskHistoryStore = null,
             ISkillPromptResolver skillPromptResolver = null,
-            ISkillScriptApprovalStore skillScriptApprovalStore = null)
+            ISkillScriptApprovalStore skillScriptApprovalStore = null,
+            ContextCompactionService contextCompactionService = null)
         {
             _llmClient = llmClient;
             _contextHydrator = contextHydrator;
@@ -80,6 +81,9 @@ namespace SmartWord.Application.Orchestration
             _questionChannel = questionChannel;
             _undoScopeFactory = undoScopeFactory;
             _conversationCompressor = conversationCompressor ?? throw new ArgumentNullException(nameof(conversationCompressor));
+            _contextCompactionService = contextCompactionService ?? new ContextCompactionService(
+                llmClient,
+                _conversationCompressor);
             _todoRecoveryChannel = todoRecoveryChannel;
             _todoManager = todoManager;
             _todoReminderService = todoReminderService;
@@ -279,7 +283,6 @@ namespace SmartWord.Application.Orchestration
     var lastFailureSummary = string.Empty;
     var completedSuccessfully = false;
     var hasSuccessfulDocumentWriteOccurredInRun = false;
-    var hasCompactedContext = false;
     var interviewRound = 0;
     const int MaxInterviewRounds = 3;
     PendingWriteStep pendingWriteStep = null;
@@ -314,52 +317,44 @@ namespace SmartWord.Application.Orchestration
                 yield break;
             }
 
-            var compactionThreshold = safeOptions.CompactionThreshold > 0
-                ? safeOptions.CompactionThreshold
-                : CompactionThreshold;
-            var estimatedTokenCount = _conversationStore.EstimateTokenCount(messages);
-            if (estimatedTokenCount > compactionThreshold)
+            var compressionContext = CreateCompressionContext(
+                safeOptions,
+                documentPath,
+                latestContext,
+                currentTodoBoard,
+                pendingWriteStep,
+                messages);
+            var compactionResult = await _contextCompactionService
+                .CompactIfNeededAsync(messages, safeOptions, compressionContext, cancellationToken)
+                .ConfigureAwait(false);
+            if (compactionResult.WasCompacted)
             {
-                var compressionContext = CreateCompressionContext(
-                    safeOptions,
-                    documentPath,
-                    latestContext,
-                    currentTodoBoard,
-                    pendingWriteStep,
-                    messages);
-                var compactedMessages = _conversationCompressor.Compress(messages, compressionContext);
-                var compactedTokenCount = _conversationStore.EstimateTokenCount(compactedMessages);
-                var canContinueWithCompactedContext = compactedMessages != null
-                    && compactedMessages.Count < messages.Count
-                    && compactedTokenCount < estimatedTokenCount;
-
                 yield return new AgentEvent
                 {
                     Type = AgentEventType.ContextCompacted,
-                    Message = canContinueWithCompactedContext
-                        ? "当前对话已接近上下文上限，系统已压缩较早消息并继续执行。"
-                        : "当前对话已接近上下文上限，压缩后仍不足以继续执行，系统已停止本轮任务。"
+                    Message = compactionResult.Message
                 };
+            }
 
-                if (!canContinueWithCompactedContext || hasCompactedContext)
+            if (compactionResult.ShouldStop)
+            {
+                if (safeOptions.Mode == AgentMode.Agent)
                 {
-                    if (safeOptions.Mode == AgentMode.Agent)
-                    {
-                        interruptedOutcome = TodoBoardRunOutcome.Failed;
-                        interruptedReason = "对话压缩后仍无法继续执行，系统已停止当前任务。";
-                    }
-
-                    yield return new AgentEvent
-                    {
-                        Type = AgentEventType.Error,
-                        Message = "对话压缩后仍无法继续执行，本轮任务已停止。请缩小范围或拆分任务后再继续。"
-                    };
-                    yield break;
+                    interruptedOutcome = TodoBoardRunOutcome.Failed;
+                    interruptedReason = compactionResult.Message;
                 }
 
-                messages = compactedMessages.ToList();
-                hasCompactedContext = true;
-                continue;
+                yield return new AgentEvent
+                {
+                    Type = AgentEventType.Error,
+                    Message = compactionResult.Message
+                };
+                yield break;
+            }
+
+            if (compactionResult.WasCompacted)
+            {
+                messages = compactionResult.Messages.ToList();
             }
 
             AgentMessage assistantMessage;

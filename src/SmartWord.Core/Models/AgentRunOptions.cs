@@ -16,6 +16,16 @@ namespace SmartWord.Core.Models
 
         public int CompactionThreshold { get; set; } = 24000;
 
+        public int ContextWindowTokens { get; set; } = 256 * 1024;
+
+        public double ContextSoftLimitRatio { get; set; } = 0.65;
+
+        public double ContextHardLimitRatio { get; set; } = 0.85;
+
+        public double ContextEmergencyLimitRatio { get; set; } = 0.95;
+
+        public double ContextTokenSafetyMargin { get; set; } = 1.2;
+
         public AgentPermissionMode? PermissionMode { get; set; }
 
         public bool RequireConfirmationForScripts { get; set; } = true;

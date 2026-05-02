@@ -201,6 +201,16 @@ namespace SmartWord.AddIn.TaskPane
                         RequireConfirmationForScripts =
                             request.Value<bool?>("requireConfirmationForScripts")
                             ?? smartWordSettings.RequireConfirmationForScripts,
+                        ContextWindowTokens = request.Value<int?>("contextWindowTokens")
+                            ?? smartWordSettings.ContextWindowTokens,
+                        ContextSoftLimitRatio = request.Value<double?>("contextSoftLimitRatio")
+                            ?? smartWordSettings.ContextSoftLimitRatio,
+                        ContextHardLimitRatio = request.Value<double?>("contextHardLimitRatio")
+                            ?? smartWordSettings.ContextHardLimitRatio,
+                        ContextEmergencyLimitRatio = request.Value<double?>("contextEmergencyLimitRatio")
+                            ?? smartWordSettings.ContextEmergencyLimitRatio,
+                        ContextTokenSafetyMargin = request.Value<double?>("contextTokenSafetyMargin")
+                            ?? smartWordSettings.ContextTokenSafetyMargin,
                         EnableToolCalling = modelRoute.EnableToolCalling,
                         ModelRoutingMessage = modelRoute.RoutingMessage ?? string.Empty,
                         CustomSystemInstructions = customInstructions ?? string.Empty,

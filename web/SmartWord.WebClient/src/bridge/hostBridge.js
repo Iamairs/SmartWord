@@ -32,6 +32,11 @@ function createDefaultSettings() {
     heavyModel: 'gpt-4.1',
     permissionMode: 'confirm_writes',
     requireConfirmationForScripts: true,
+    contextWindowTokens: 262144,
+    contextSoftLimitRatio: 0.65,
+    contextHardLimitRatio: 0.85,
+    contextEmergencyLimitRatio: 0.95,
+    contextTokenSafetyMargin: 1.2,
     customInstructions: ''
   };
 }
@@ -96,9 +101,44 @@ function normalizeSettings(settings) {
     heavyModel: source.heavyModel ?? source.HeavyModel ?? defaults.heavyModel,
     permissionMode,
     requireConfirmationForScripts: legacyConfirmationFromPermissionMode(permissionMode),
+    contextWindowTokens: normalizePositiveInt(
+      source.contextWindowTokens ?? source.ContextWindowTokens,
+      defaults.contextWindowTokens
+    ),
+    contextSoftLimitRatio: normalizeRatio(
+      source.contextSoftLimitRatio ?? source.ContextSoftLimitRatio,
+      defaults.contextSoftLimitRatio
+    ),
+    contextHardLimitRatio: normalizeRatio(
+      source.contextHardLimitRatio ?? source.ContextHardLimitRatio,
+      defaults.contextHardLimitRatio
+    ),
+    contextEmergencyLimitRatio: normalizeRatio(
+      source.contextEmergencyLimitRatio ?? source.ContextEmergencyLimitRatio,
+      defaults.contextEmergencyLimitRatio
+    ),
+    contextTokenSafetyMargin: normalizePositiveNumber(
+      source.contextTokenSafetyMargin ?? source.ContextTokenSafetyMargin,
+      defaults.contextTokenSafetyMargin
+    ),
     customInstructions:
       source.customInstructions ?? source.CustomInstructions ?? defaults.customInstructions
   };
+}
+
+function normalizePositiveInt(value, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function normalizePositiveNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function normalizeRatio(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 && parsed < 1 ? parsed : fallback;
 }
 
 function createMockResponse(request, notify) {
