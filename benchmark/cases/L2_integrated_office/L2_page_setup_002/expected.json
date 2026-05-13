@@ -1,0 +1,61 @@
+{
+  "checks": [
+    {
+      "type": "first_page_no_header_footer",
+      "points": 15
+    },
+    {
+      "type": "abstract_page_number",
+      "format": "roman",
+      "points": 15
+    },
+    {
+      "type": "body_page_number",
+      "start_section": "第一章 绪论",
+      "start_number": 1,
+      "format": "arabic",
+      "points": 20
+    },
+    {
+      "type": "header_text",
+      "text": "基于大语言模型的 Word 文档自动化研究",
+      "alignment": "center",
+      "scope": "body_sections",
+      "points": 15
+    },
+    {
+      "type": "heading_style",
+      "targets": [
+        "第一章 绪论",
+        "第二章 系统设计",
+        "第三章 实验分析"
+      ],
+      "style": "Heading1",
+      "points": 10
+    },
+    {
+      "type": "heading_style",
+      "targets": [
+        "1.1 研究背景",
+        "1.2 研究意义",
+        "2.1 总体架构",
+        "2.2 权限体系",
+        "3.1 实验任务",
+        "3.2 结果分析"
+      ],
+      "style": "Heading2",
+      "points": 10
+    },
+    {
+      "type": "toc_exists",
+      "replaced_placeholder": "此处需要生成自动目录。",
+      "points": 10
+    },
+    {
+      "type": "page_setup",
+      "paper": "A4",
+      "margins_cm": 2.5,
+      "points": 5
+    }
+  ]
+}

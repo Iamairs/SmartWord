@@ -1,0 +1,36 @@
+{
+  "id": "L1_header_footer_004",
+  "level": 1,
+  "name": "页眉页脚与页码",
+  "source_type": "computer_rank_exam_style",
+  "reference": "参考计算机一级 Word 操作题型自建",
+  "document_type": "benchmark_document",
+  "operation_types": [
+    "header_footer",
+    "page_number"
+  ],
+  "input_docx": "input.docx",
+  "expected": "expected.json",
+  "user_instruction": "请在页眉居中插入“月度工作简报”，并在页脚居中插入页码。",
+  "mode": "Agent",
+  "permission_mode": "ConfirmWrites",
+  "allowed_tools": [
+    "probe_document",
+    "read_section",
+    "grep_document",
+    "get_selection_context",
+    "read_table",
+    "read_annotations",
+    "patch_range",
+    "execute_script",
+    "verify_script"
+  ],
+  "required_capabilities": [],
+  "risk_level": "low",
+  "requires_confirmation": false,
+  "scoring": {
+    "auto_score": true,
+    "manual_review": false,
+    "total_points": 100
+  }
+}

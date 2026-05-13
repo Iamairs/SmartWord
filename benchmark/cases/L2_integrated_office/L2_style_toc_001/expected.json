@@ -1,0 +1,59 @@
+{
+  "checks": [
+    {
+      "type": "heading_style",
+      "targets": [
+        "一、项目背景",
+        "二、建设目标",
+        "三、建设内容",
+        "四、实施计划",
+        "五、保障措施"
+      ],
+      "style": "Heading1",
+      "points": 20
+    },
+    {
+      "type": "heading_style",
+      "targets": [
+        "1.1 建设现状",
+        "1.2 主要问题",
+        "2.1 总体目标",
+        "2.2 阶段目标"
+      ],
+      "style": "Heading2",
+      "points": 15
+    },
+    {
+      "type": "toc_exists",
+      "location": "before_first_heading",
+      "heading_levels": "1-2",
+      "points": 20
+    },
+    {
+      "type": "caption_style",
+      "targets": [
+        "图 1 数字校园总体架构图",
+        "表 1 建设内容清单"
+      ],
+      "points": 15
+    },
+    {
+      "type": "footnote_or_endnote_exists",
+      "source_text": "建设周期以学校最终批复为准",
+      "points": 15
+    },
+    {
+      "type": "paragraph_style",
+      "target": "body",
+      "font_name": "宋体",
+      "font_size": "小四",
+      "first_line_indent_chars": 2,
+      "line_spacing": 1.5,
+      "points": 10
+    },
+    {
+      "type": "body_text_unchanged",
+      "points": 5
+    }
+  ]
+}

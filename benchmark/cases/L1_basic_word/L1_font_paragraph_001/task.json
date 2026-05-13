@@ -1,0 +1,36 @@
+{
+  "id": "L1_font_paragraph_001",
+  "level": 1,
+  "name": "标题与正文基础格式",
+  "source_type": "computer_rank_exam_style",
+  "reference": "参考计算机一级 Word 操作题型自建",
+  "document_type": "benchmark_document",
+  "operation_types": [
+    "font",
+    "paragraph"
+  ],
+  "input_docx": "input.docx",
+  "expected": "expected.json",
+  "user_instruction": "请将文档标题设置为黑体、三号、加粗、居中；正文设置为宋体、小四，首行缩进 2 字符，行距 1.5 倍。",
+  "mode": "Agent",
+  "permission_mode": "ConfirmWrites",
+  "allowed_tools": [
+    "probe_document",
+    "read_section",
+    "grep_document",
+    "get_selection_context",
+    "read_table",
+    "read_annotations",
+    "patch_range",
+    "execute_script",
+    "verify_script"
+  ],
+  "required_capabilities": [],
+  "risk_level": "low",
+  "requires_confirmation": false,
+  "scoring": {
+    "auto_score": true,
+    "manual_review": false,
+    "total_points": 100
+  }
+}

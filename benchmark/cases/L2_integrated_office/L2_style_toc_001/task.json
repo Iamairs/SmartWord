@@ -1,0 +1,39 @@
+{
+  "id": "L2_style_toc_001",
+  "level": 2,
+  "name": "规划报告样式、目录、题注与脚注综合排版",
+  "source_type": "computer_rank_exam_style",
+  "reference": "参考计算机二级 MS Office Word 操作题型自建",
+  "document_type": "benchmark_document",
+  "operation_types": [
+    "style",
+    "toc",
+    "caption",
+    "footnote",
+    "paragraph_format"
+  ],
+  "input_docx": "input.docx",
+  "expected": "expected.json",
+  "user_instruction": "请按计算机二级 Word 综合操作要求完成排版：将“一、二、三、四、五”开头的章节设置为标题 1，将“1.1、1.2、2.1、2.2”开头的小节设置为标题 2；在正文前插入自动目录；将“图 1 数字校园总体架构图”和“表 1 建设内容清单”设置为题注格式；将文末“注：建设周期以学校最终批复为准。”转换为脚注或尾注；统一正文为宋体小四、首行缩进 2 字符、1.5 倍行距。",
+  "mode": "Agent",
+  "permission_mode": "ConfirmWrites",
+  "allowed_tools": [
+    "probe_document",
+    "read_section",
+    "grep_document",
+    "get_selection_context",
+    "read_table",
+    "read_annotations",
+    "patch_range",
+    "execute_script",
+    "verify_script"
+  ],
+  "required_capabilities": [],
+  "risk_level": "medium",
+  "requires_confirmation": true,
+  "scoring": {
+    "auto_score": true,
+    "manual_review": false,
+    "total_points": 100
+  }
+}

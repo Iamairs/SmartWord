@@ -1,0 +1,48 @@
+{
+  "checks": [
+    {
+      "type": "generated_documents_or_sections",
+      "expected_count": 4,
+      "separator": "page_break",
+      "points": 25
+    },
+    {
+      "type": "mail_merge_fields_replaced",
+      "fields": [
+        "姓名",
+        "竞赛名称",
+        "奖项",
+        "日期"
+      ],
+      "points": 25
+    },
+    {
+      "type": "no_placeholder_remaining",
+      "placeholders": [
+        "【姓名】",
+        "【竞赛名称】",
+        "【奖项】",
+        "【日期】"
+      ],
+      "points": 15
+    },
+    {
+      "type": "title_style",
+      "target_text": "获奖通知书",
+      "font_name": "黑体",
+      "font_size": "小二",
+      "bold": true,
+      "alignment": "center",
+      "points": 15
+    },
+    {
+      "type": "data_source_table_preserved",
+      "points": 10
+    },
+    {
+      "type": "table_header_shading_and_border",
+      "table_index": 1,
+      "points": 10
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "id": "L1_find_replace_002",
+  "level": 1,
+  "name": "全文查找替换",
+  "source_type": "computer_rank_exam_style",
+  "reference": "参考计算机一级 Word 操作题型自建",
+  "document_type": "benchmark_document",
+  "operation_types": [
+    "find_replace",
+    "verification"
+  ],
+  "input_docx": "input.docx",
+  "expected": "expected.json",
+  "user_instruction": "请将全文中的“人工智能”替换为“生成式人工智能”，并检查是否还有遗漏。",
+  "mode": "Agent",
+  "permission_mode": "ConfirmWrites",
+  "allowed_tools": [
+    "probe_document",
+    "read_section",
+    "grep_document",
+    "get_selection_context",
+    "read_table",
+    "read_annotations",
+    "patch_range",
+    "execute_script",
+    "verify_script"
+  ],
+  "required_capabilities": [],
+  "risk_level": "low",
+  "requires_confirmation": false,
+  "scoring": {
+    "auto_score": true,
+    "manual_review": false,
+    "total_points": 100
+  }
+}

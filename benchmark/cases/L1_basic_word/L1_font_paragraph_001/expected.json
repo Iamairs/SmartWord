@@ -1,0 +1,26 @@
+{
+  "checks": [
+    {
+      "type": "paragraph_style",
+      "target": "paragraph:1",
+      "font_name": "黑体",
+      "font_size": "三号",
+      "bold": true,
+      "alignment": "center",
+      "points": 30
+    },
+    {
+      "type": "paragraph_style",
+      "target": "body:2-",
+      "font_name": "宋体",
+      "font_size": "小四",
+      "first_line_indent_chars": 2,
+      "line_spacing": 1.5,
+      "points": 50
+    },
+    {
+      "type": "no_unexpected_text_change",
+      "points": 20
+    }
+  ]
+}

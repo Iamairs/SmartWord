@@ -1,0 +1,38 @@
+{
+  "id": "L2_numbering_template_004",
+  "level": 2,
+  "name": "邮件合并式通知书批量生成",
+  "source_type": "computer_rank_exam_style",
+  "reference": "参考计算机二级 MS Office Word 操作题型自建",
+  "document_type": "benchmark_document",
+  "operation_types": [
+    "mail_merge",
+    "template_formatting",
+    "page_break",
+    "table_formatting"
+  ],
+  "input_docx": "input.docx",
+  "expected": "expected.json",
+  "user_instruction": "请按计算机二级邮件合并题型完成文档：根据“数据源”表格为每位学生生成一份获奖通知书；将模板中的【姓名】、【竞赛名称】、【奖项】、【日期】替换为对应记录；每份通知书之间使用分页符分隔；通知书标题设置为黑体、小二、加粗、居中；生成后保留原始数据源表格作为附件，并为数据源表格添加单线边框和表头底纹。",
+  "mode": "Agent",
+  "permission_mode": "ConfirmWrites",
+  "allowed_tools": [
+    "probe_document",
+    "read_section",
+    "grep_document",
+    "get_selection_context",
+    "read_table",
+    "read_annotations",
+    "patch_range",
+    "execute_script",
+    "verify_script"
+  ],
+  "required_capabilities": [],
+  "risk_level": "medium",
+  "requires_confirmation": true,
+  "scoring": {
+    "auto_score": true,
+    "manual_review": false,
+    "total_points": 100
+  }
+}

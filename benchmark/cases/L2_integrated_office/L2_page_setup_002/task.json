@@ -1,0 +1,40 @@
+{
+  "id": "L2_page_setup_002",
+  "level": 2,
+  "name": "论文分节、页眉页脚、目录与页码综合排版",
+  "source_type": "computer_rank_exam_style",
+  "reference": "参考计算机二级 MS Office Word 操作题型自建",
+  "document_type": "benchmark_document",
+  "operation_types": [
+    "section",
+    "page_number",
+    "header_footer",
+    "toc",
+    "style",
+    "page_setup"
+  ],
+  "input_docx": "input.docx",
+  "expected": "expected.json",
+  "user_instruction": "请按计算机二级论文排版要求处理文档：封面不显示页眉页码；摘要页使用罗马数字页码；正文从第一章开始使用阿拉伯数字页码并从 1 开始；正文页眉居中显示论文题目；将第一章、第二章、第三章设置为标题 1，将 1.1、1.2、2.1、2.2、3.1、3.2 设置为标题 2；用自动目录替换“此处需要生成自动目录。”；正文页面设置为 A4，页边距上下左右 2.5 厘米。",
+  "mode": "Agent",
+  "permission_mode": "ConfirmWrites",
+  "allowed_tools": [
+    "probe_document",
+    "read_section",
+    "grep_document",
+    "get_selection_context",
+    "read_table",
+    "read_annotations",
+    "patch_range",
+    "execute_script",
+    "verify_script"
+  ],
+  "required_capabilities": [],
+  "risk_level": "medium",
+  "requires_confirmation": true,
+  "scoring": {
+    "auto_score": true,
+    "manual_review": false,
+    "total_points": 100
+  }
+}

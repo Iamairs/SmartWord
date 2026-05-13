@@ -1,0 +1,38 @@
+{
+  "id": "L3_contract_party_replace_001",
+  "level": 3,
+  "name": "合同主体名称替换",
+  "source_type": "smartword_benchmark_synthetic",
+  "reference": "参考真实办公文档与 SmartWord Agent 场景自建",
+  "document_type": "contract",
+  "operation_types": [
+    "contract",
+    "find_replace",
+    "table_reasoning",
+    "range_limited_edit"
+  ],
+  "input_docx": "input.docx",
+  "expected": "expected.json",
+  "user_instruction": "请将合同正文和表格中的甲方名称从“A 公司”改为“B 公司”，但不要修改批注区中的历史讨论，并在完成后检查是否还有遗漏。",
+  "mode": "Agent",
+  "permission_mode": "ConfirmWrites",
+  "allowed_tools": [
+    "probe_document",
+    "read_section",
+    "grep_document",
+    "get_selection_context",
+    "read_table",
+    "read_annotations",
+    "patch_range",
+    "execute_script",
+    "verify_script"
+  ],
+  "required_capabilities": [],
+  "risk_level": "high",
+  "requires_confirmation": true,
+  "scoring": {
+    "auto_score": true,
+    "manual_review": false,
+    "total_points": 100
+  }
+}

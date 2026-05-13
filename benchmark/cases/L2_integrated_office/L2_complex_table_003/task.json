@@ -1,0 +1,39 @@
+{
+  "id": "L2_complex_table_003",
+  "level": 2,
+  "name": "销售数据表格、计算、排序与题注综合处理",
+  "source_type": "computer_rank_exam_style",
+  "reference": "参考计算机二级 MS Office Word 操作题型自建",
+  "document_type": "benchmark_document",
+  "operation_types": [
+    "complex_table",
+    "calculation",
+    "merge_cells",
+    "caption",
+    "table_header"
+  ],
+  "input_docx": "input.docx",
+  "expected": "expected.json",
+  "user_instruction": "请按计算机二级表格综合题要求处理文档：将“表 1 销售数据原始表”设置为表格题注；将第一个表格第一行设置为重复标题行、加粗、水平居中，并统一添加单线边框；计算每行“合计”列，数值为产品A与产品B之和；按区域合并第一列中连续相同区域单元格；将所有数据单元格垂直居中；在图表占位文字前保留“图 1 销售趋势图”题注；附表只设置边框，不得改动联系人信息。",
+  "mode": "Agent",
+  "permission_mode": "ConfirmWrites",
+  "allowed_tools": [
+    "probe_document",
+    "read_section",
+    "grep_document",
+    "get_selection_context",
+    "read_table",
+    "read_annotations",
+    "patch_range",
+    "execute_script",
+    "verify_script"
+  ],
+  "required_capabilities": [],
+  "risk_level": "medium",
+  "requires_confirmation": true,
+  "scoring": {
+    "auto_score": true,
+    "manual_review": false,
+    "total_points": 100
+  }
+}

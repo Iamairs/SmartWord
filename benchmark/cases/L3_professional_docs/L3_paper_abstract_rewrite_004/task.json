@@ -1,0 +1,37 @@
+{
+  "id": "L3_paper_abstract_rewrite_004",
+  "level": 3,
+  "name": "论文摘要学术化润色",
+  "source_type": "smartword_benchmark_synthetic",
+  "reference": "参考真实办公文档与 SmartWord Agent 场景自建",
+  "document_type": "paper",
+  "operation_types": [
+    "paper",
+    "semantic_rewrite",
+    "range_limited_edit"
+  ],
+  "input_docx": "input.docx",
+  "expected": "expected.json",
+  "user_instruction": "请润色论文摘要，使表达更学术，但不要改变研究对象、方法和结论。",
+  "mode": "Agent",
+  "permission_mode": "ConfirmWrites",
+  "allowed_tools": [
+    "probe_document",
+    "read_section",
+    "grep_document",
+    "get_selection_context",
+    "read_table",
+    "read_annotations",
+    "patch_range",
+    "execute_script",
+    "verify_script"
+  ],
+  "required_capabilities": [],
+  "risk_level": "medium",
+  "requires_confirmation": true,
+  "scoring": {
+    "auto_score": true,
+    "manual_review": true,
+    "total_points": 100
+  }
+}

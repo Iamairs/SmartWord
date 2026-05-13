@@ -1,0 +1,24 @@
+{
+  "checks": [
+    {
+      "type": "text_occurrence",
+      "text": "人工智能",
+      "expected_count": 0,
+      "points": 40
+    },
+    {
+      "type": "text_occurrence",
+      "text": "生成式人工智能",
+      "expected_count": 4,
+      "points": 40
+    },
+    {
+      "type": "must_call_tool",
+      "tools": [
+        "grep_document",
+        "verify_script"
+      ],
+      "points": 20
+    }
+  ]
+}

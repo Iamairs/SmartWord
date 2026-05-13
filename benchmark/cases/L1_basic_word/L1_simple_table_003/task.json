@@ -1,0 +1,37 @@
+{
+  "id": "L1_simple_table_003",
+  "level": 1,
+  "name": "简单表格格式",
+  "source_type": "computer_rank_exam_style",
+  "reference": "参考计算机一级 Word 操作题型自建",
+  "document_type": "benchmark_document",
+  "operation_types": [
+    "simple_table",
+    "font",
+    "alignment"
+  ],
+  "input_docx": "input.docx",
+  "expected": "expected.json",
+  "user_instruction": "请将第一个表格的第一行设置为表头，字体加粗，水平居中，并为所有单元格添加单线边框。",
+  "mode": "Agent",
+  "permission_mode": "ConfirmWrites",
+  "allowed_tools": [
+    "probe_document",
+    "read_section",
+    "grep_document",
+    "get_selection_context",
+    "read_table",
+    "read_annotations",
+    "patch_range",
+    "execute_script",
+    "verify_script"
+  ],
+  "required_capabilities": [],
+  "risk_level": "low",
+  "requires_confirmation": false,
+  "scoring": {
+    "auto_score": true,
+    "manual_review": false,
+    "total_points": 100
+  }
+}

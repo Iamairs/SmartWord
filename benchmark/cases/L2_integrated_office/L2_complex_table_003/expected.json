@@ -1,0 +1,72 @@
+{
+  "checks": [
+    {
+      "type": "caption_style",
+      "targets": [
+        "表 1 销售数据原始表",
+        "图 1 销售趋势图"
+      ],
+      "points": 15
+    },
+    {
+      "type": "table_repeating_header",
+      "table_index": 1,
+      "row_index": 1,
+      "points": 15
+    },
+    {
+      "type": "table_header_style",
+      "table_index": 1,
+      "row_index": 1,
+      "bold": true,
+      "alignment": "center",
+      "points": 10
+    },
+    {
+      "type": "table_borders",
+      "table_index": 1,
+      "border_style": "single",
+      "points": 10
+    },
+    {
+      "type": "calculated_cells",
+      "table_index": 1,
+      "column": "合计",
+      "values": [
+        "200",
+        "240",
+        "170",
+        "215",
+        "150",
+        "185"
+      ],
+      "points": 25
+    },
+    {
+      "type": "merged_cells",
+      "table_index": 1,
+      "column_index": 1,
+      "groups": [
+        "华东",
+        "华南",
+        "华北"
+      ],
+      "points": 15
+    },
+    {
+      "type": "table_vertical_alignment",
+      "table_index": 1,
+      "alignment": "center",
+      "points": 5
+    },
+    {
+      "type": "table_content_preserved",
+      "table_index": 2,
+      "protected_columns": [
+        "负责人",
+        "联系电话"
+      ],
+      "points": 5
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "checks": [
+    {
+      "type": "header_text",
+      "text": "月度工作简报",
+      "alignment": "center",
+      "points": 40
+    },
+    {
+      "type": "footer_page_number",
+      "alignment": "center",
+      "points": 40
+    },
+    {
+      "type": "body_text_unchanged",
+      "points": 20
+    }
+  ]
+}

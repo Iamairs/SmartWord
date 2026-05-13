@@ -1,0 +1,40 @@
+{
+  "checks": [
+    {
+      "type": "must_have_plan",
+      "points": 15
+    },
+    {
+      "type": "must_read_multiple_sections",
+      "min_sections": 5,
+      "points": 10
+    },
+    {
+      "type": "changed_sentences_highlighted",
+      "min_count": 7,
+      "points": 25
+    },
+    {
+      "type": "facts_preserved",
+      "facts": [
+        "负责人",
+        "计划节点",
+        "验收口径",
+        "部分延期"
+      ],
+      "points": 15
+    },
+    {
+      "type": "unchanged_table_content",
+      "points": 10
+    },
+    {
+      "type": "post_write_verification_passed",
+      "points": 20
+    },
+    {
+      "type": "must_record_change_summary",
+      "points": 5
+    }
+  ]
+}

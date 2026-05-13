@@ -1,0 +1,54 @@
+{
+  "checks": [
+    {
+      "type": "text_replaced_in_scopes",
+      "scopes": [
+        "party_clause",
+        "project_scope",
+        "delivery_table",
+        "payment_table",
+        "ip_clause",
+        "attachments"
+      ],
+      "from": "A 公司",
+      "to": "B 公司",
+      "points": 35
+    },
+    {
+      "type": "text_preserved_in_scope",
+      "scope": "内部批注记录（不得修改）",
+      "text": "A 公司",
+      "min_count": 3,
+      "points": 20
+    },
+    {
+      "type": "table_cells_replaced",
+      "tables": [
+        1,
+        2
+      ],
+      "from": "A 公司",
+      "to": "B 公司",
+      "points": 15
+    },
+    {
+      "type": "must_request_confirmation",
+      "operation": "contract_party_replace",
+      "points": 10
+    },
+    {
+      "type": "must_call_tool",
+      "tools": [
+        "grep_document",
+        "read_table",
+        "patch_range",
+        "verify_script"
+      ],
+      "points": 10
+    },
+    {
+      "type": "post_write_verification_passed",
+      "points": 10
+    }
+  ]
+}

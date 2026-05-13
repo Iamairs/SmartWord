@@ -1,0 +1,47 @@
+{
+  "checks": [
+    {
+      "type": "changed_scope",
+      "scope": "摘要",
+      "min_changed_paragraphs": 1,
+      "points": 20
+    },
+    {
+      "type": "must_preserve_facts",
+      "facts": [
+        "大语言模型",
+        "Word 文档",
+        "工具",
+        "实验",
+        "任务完成率",
+        "输入 token",
+        "工具调用失败率"
+      ],
+      "points": 30
+    },
+    {
+      "type": "unchanged_scope",
+      "scope": "关键词",
+      "points": 10
+    },
+    {
+      "type": "unchanged_scope",
+      "scope": "第一章 绪论",
+      "points": 10
+    },
+    {
+      "type": "unchanged_scope",
+      "scope": "参考文献",
+      "points": 10
+    },
+    {
+      "type": "semantic_quality_review",
+      "dimensions": [
+        "academic_style",
+        "fact_preservation",
+        "conciseness"
+      ],
+      "points": 20
+    }
+  ]
+}

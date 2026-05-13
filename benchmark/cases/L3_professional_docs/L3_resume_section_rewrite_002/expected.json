@@ -1,0 +1,52 @@
+{
+  "checks": [
+    {
+      "type": "changed_scope",
+      "scope": "项目经历",
+      "min_changed_paragraphs": 3,
+      "points": 25
+    },
+    {
+      "type": "unchanged_scope",
+      "scope": "个人信息",
+      "points": 15
+    },
+    {
+      "type": "unchanged_scope",
+      "scope": "教育经历",
+      "points": 15
+    },
+    {
+      "type": "unchanged_scope",
+      "scope": "技能清单",
+      "points": 15
+    },
+    {
+      "type": "unchanged_scope",
+      "scope": "实习经历",
+      "points": 10
+    },
+    {
+      "type": "must_preserve_facts",
+      "facts": [
+        "Word 插件",
+        "Ask、Plan、Agent",
+        "权限",
+        "验证",
+        "恢复",
+        "工具调用"
+      ],
+      "points": 10
+    },
+    {
+      "type": "semantic_quality_review",
+      "dimensions": [
+        "clarity",
+        "role_fit",
+        "fact_preservation",
+        "ai_application_relevance"
+      ],
+      "points": 10
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "id": "L4_long_context_bid_004",
+  "level": 4,
+  "name": "长文档一致性与上下文压缩",
+  "source_type": "smartword_benchmark_synthetic",
+  "reference": "参考真实办公文档与 SmartWord Agent 场景自建",
+  "document_type": "bid",
+  "operation_types": [
+    "long_context",
+    "context_compression",
+    "consistency_check",
+    "verification_repair"
+  ],
+  "input_docx": "input.docx",
+  "expected": "expected.json",
+  "user_instruction": "请检查这份标书中供应商名称、项目名称、日期和表格编号是否一致，并修复可以自动修复的问题。",
+  "mode": "Agent",
+  "permission_mode": "ConfirmWrites",
+  "allowed_tools": [
+    "probe_document",
+    "read_section",
+    "grep_document",
+    "get_selection_context",
+    "read_table",
+    "read_annotations",
+    "patch_range",
+    "execute_script",
+    "verify_script"
+  ],
+  "required_capabilities": [],
+  "risk_level": "high",
+  "requires_confirmation": true,
+  "scoring": {
+    "auto_score": true,
+    "manual_review": false,
+    "total_points": 100
+  }
+}

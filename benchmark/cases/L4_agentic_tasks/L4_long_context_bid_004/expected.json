@@ -1,0 +1,48 @@
+{
+  "checks": [
+    {
+      "type": "must_call_tool",
+      "tools": [
+        "probe_document",
+        "grep_document"
+      ],
+      "points": 20
+    },
+    {
+      "type": "must_use_granular_context",
+      "points": 20
+    },
+    {
+      "type": "must_find_inconsistency",
+      "field": "supplier_name",
+      "expected_text": "星河科技有限责任公司",
+      "points": 15
+    },
+    {
+      "type": "must_find_inconsistency",
+      "field": "project_name",
+      "expected_text": "智慧校园平台升级项目",
+      "points": 15
+    },
+    {
+      "type": "must_find_inconsistency",
+      "field": "date",
+      "expected_text": "2026 年 6 月 1 日",
+      "points": 10
+    },
+    {
+      "type": "must_read_table",
+      "min_tables": 10,
+      "points": 10
+    },
+    {
+      "type": "context_token_below_baseline_ratio",
+      "max_ratio": 0.5,
+      "points": 15
+    },
+    {
+      "type": "post_write_verification_passed",
+      "points": 15
+    }
+  ]
+}

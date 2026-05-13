@@ -1,0 +1,23 @@
+{
+  "checks": [
+    {
+      "type": "table_header_style",
+      "table_index": 1,
+      "row_index": 1,
+      "bold": true,
+      "alignment": "center",
+      "points": 35
+    },
+    {
+      "type": "table_borders",
+      "table_index": 1,
+      "border_style": "single",
+      "points": 45
+    },
+    {
+      "type": "no_unexpected_table_change",
+      "table_index": 1,
+      "points": 20
+    }
+  ]
+}

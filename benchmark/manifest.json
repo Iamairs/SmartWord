@@ -1,0 +1,158 @@
+{
+  "name": "SmartWord-Bench Seed Cases",
+  "version": "0.1.0",
+  "generated_at": "2026-05-13T18:05:03.179Z",
+  "total_cases": 16,
+  "levels": {
+    "L1_basic_word": 4,
+    "L2_integrated_office": 4,
+    "L3_professional_docs": 4,
+    "L4_agentic_tasks": 4
+  },
+  "cases": [
+    {
+      "id": "L1_font_paragraph_001",
+      "group": "L1_basic_word",
+      "level": 1,
+      "name": "标题与正文基础格式",
+      "task": "cases/L1_basic_word/L1_font_paragraph_001/task.json",
+      "input_docx": "cases/L1_basic_word/L1_font_paragraph_001/input.docx",
+      "expected": "cases/L1_basic_word/L1_font_paragraph_001/expected.json"
+    },
+    {
+      "id": "L1_find_replace_002",
+      "group": "L1_basic_word",
+      "level": 1,
+      "name": "全文查找替换",
+      "task": "cases/L1_basic_word/L1_find_replace_002/task.json",
+      "input_docx": "cases/L1_basic_word/L1_find_replace_002/input.docx",
+      "expected": "cases/L1_basic_word/L1_find_replace_002/expected.json"
+    },
+    {
+      "id": "L1_simple_table_003",
+      "group": "L1_basic_word",
+      "level": 1,
+      "name": "简单表格格式",
+      "task": "cases/L1_basic_word/L1_simple_table_003/task.json",
+      "input_docx": "cases/L1_basic_word/L1_simple_table_003/input.docx",
+      "expected": "cases/L1_basic_word/L1_simple_table_003/expected.json"
+    },
+    {
+      "id": "L1_header_footer_004",
+      "group": "L1_basic_word",
+      "level": 1,
+      "name": "页眉页脚与页码",
+      "task": "cases/L1_basic_word/L1_header_footer_004/task.json",
+      "input_docx": "cases/L1_basic_word/L1_header_footer_004/input.docx",
+      "expected": "cases/L1_basic_word/L1_header_footer_004/expected.json"
+    },
+    {
+      "id": "L2_style_toc_001",
+      "group": "L2_integrated_office",
+      "level": 2,
+      "name": "规划报告样式、目录、题注与脚注综合排版",
+      "task": "cases/L2_integrated_office/L2_style_toc_001/task.json",
+      "input_docx": "cases/L2_integrated_office/L2_style_toc_001/input.docx",
+      "expected": "cases/L2_integrated_office/L2_style_toc_001/expected.json"
+    },
+    {
+      "id": "L2_page_setup_002",
+      "group": "L2_integrated_office",
+      "level": 2,
+      "name": "论文分节、页眉页脚、目录与页码综合排版",
+      "task": "cases/L2_integrated_office/L2_page_setup_002/task.json",
+      "input_docx": "cases/L2_integrated_office/L2_page_setup_002/input.docx",
+      "expected": "cases/L2_integrated_office/L2_page_setup_002/expected.json"
+    },
+    {
+      "id": "L2_complex_table_003",
+      "group": "L2_integrated_office",
+      "level": 2,
+      "name": "销售数据表格、计算、排序与题注综合处理",
+      "task": "cases/L2_integrated_office/L2_complex_table_003/task.json",
+      "input_docx": "cases/L2_integrated_office/L2_complex_table_003/input.docx",
+      "expected": "cases/L2_integrated_office/L2_complex_table_003/expected.json"
+    },
+    {
+      "id": "L2_numbering_template_004",
+      "group": "L2_integrated_office",
+      "level": 2,
+      "name": "邮件合并式通知书批量生成",
+      "task": "cases/L2_integrated_office/L2_numbering_template_004/task.json",
+      "input_docx": "cases/L2_integrated_office/L2_numbering_template_004/input.docx",
+      "expected": "cases/L2_integrated_office/L2_numbering_template_004/expected.json"
+    },
+    {
+      "id": "L3_contract_party_replace_001",
+      "group": "L3_professional_docs",
+      "level": 3,
+      "name": "合同主体名称替换",
+      "task": "cases/L3_professional_docs/L3_contract_party_replace_001/task.json",
+      "input_docx": "cases/L3_professional_docs/L3_contract_party_replace_001/input.docx",
+      "expected": "cases/L3_professional_docs/L3_contract_party_replace_001/expected.json"
+    },
+    {
+      "id": "L3_resume_section_rewrite_002",
+      "group": "L3_professional_docs",
+      "level": 3,
+      "name": "简历项目经历优化",
+      "task": "cases/L3_professional_docs/L3_resume_section_rewrite_002/task.json",
+      "input_docx": "cases/L3_professional_docs/L3_resume_section_rewrite_002/input.docx",
+      "expected": "cases/L3_professional_docs/L3_resume_section_rewrite_002/expected.json"
+    },
+    {
+      "id": "L3_bid_consistency_003",
+      "group": "L3_professional_docs",
+      "level": 3,
+      "name": "标书一致性检查",
+      "task": "cases/L3_professional_docs/L3_bid_consistency_003/task.json",
+      "input_docx": "cases/L3_professional_docs/L3_bid_consistency_003/input.docx",
+      "expected": "cases/L3_professional_docs/L3_bid_consistency_003/expected.json"
+    },
+    {
+      "id": "L3_paper_abstract_rewrite_004",
+      "group": "L3_professional_docs",
+      "level": 3,
+      "name": "论文摘要学术化润色",
+      "task": "cases/L3_professional_docs/L3_paper_abstract_rewrite_004/task.json",
+      "input_docx": "cases/L3_professional_docs/L3_paper_abstract_rewrite_004/input.docx",
+      "expected": "cases/L3_professional_docs/L3_paper_abstract_rewrite_004/expected.json"
+    },
+    {
+      "id": "L4_full_rewrite_highlight_001",
+      "group": "L4_agentic_tasks",
+      "level": 4,
+      "name": "全文润色并高亮修改",
+      "task": "cases/L4_agentic_tasks/L4_full_rewrite_highlight_001/task.json",
+      "input_docx": "cases/L4_agentic_tasks/L4_full_rewrite_highlight_001/input.docx",
+      "expected": "cases/L4_agentic_tasks/L4_full_rewrite_highlight_001/expected.json"
+    },
+    {
+      "id": "L4_high_risk_delete_002",
+      "group": "L4_agentic_tasks",
+      "level": 4,
+      "name": "高风险批量删除",
+      "task": "cases/L4_agentic_tasks/L4_high_risk_delete_002/task.json",
+      "input_docx": "cases/L4_agentic_tasks/L4_high_risk_delete_002/input.docx",
+      "expected": "cases/L4_agentic_tasks/L4_high_risk_delete_002/expected.json"
+    },
+    {
+      "id": "L4_prompt_injection_003",
+      "group": "L4_agentic_tasks",
+      "level": 4,
+      "name": "Prompt Injection 防护",
+      "task": "cases/L4_agentic_tasks/L4_prompt_injection_003/task.json",
+      "input_docx": "cases/L4_agentic_tasks/L4_prompt_injection_003/input.docx",
+      "expected": "cases/L4_agentic_tasks/L4_prompt_injection_003/expected.json"
+    },
+    {
+      "id": "L4_long_context_bid_004",
+      "group": "L4_agentic_tasks",
+      "level": 4,
+      "name": "长文档一致性与上下文压缩",
+      "task": "cases/L4_agentic_tasks/L4_long_context_bid_004/task.json",
+      "input_docx": "cases/L4_agentic_tasks/L4_long_context_bid_004/input.docx",
+      "expected": "cases/L4_agentic_tasks/L4_long_context_bid_004/expected.json"
+    }
+  ]
+}
