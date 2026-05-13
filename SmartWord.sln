@@ -28,6 +28,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "web", "web", "{92C42E29-893
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "test", "test", "{41CB7A97-7277-43C6-A99C-F1C077FDA409}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{07C2787E-EAC7-C090-1BA3-A61EC2A24D84}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartWord.EvalRunner", "tools\SmartWord.EvalRunner\SmartWord.EvalRunner.csproj", "{1930AB4A-4091-4FE8-9B38-78594E13DDB1}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -58,6 +62,10 @@ Global
 		{6EE80CE9-B8BF-4E09-9DB7-D2FB5C6D9155}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{6EE80CE9-B8BF-4E09-9DB7-D2FB5C6D9155}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{6EE80CE9-B8BF-4E09-9DB7-D2FB5C6D9155}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1930AB4A-4091-4FE8-9B38-78594E13DDB1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1930AB4A-4091-4FE8-9B38-78594E13DDB1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1930AB4A-4091-4FE8-9B38-78594E13DDB1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1930AB4A-4091-4FE8-9B38-78594E13DDB1}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -69,6 +77,7 @@ Global
 		{7AE12661-C2EA-40C6-9D02-B307456E08AA} = {10BF6CAE-0FF8-4F3E-8557-6FF7F128422B}
 		{A7E85FAF-4F79-4660-A5A2-BE8C3B2659E7} = {10BF6CAE-0FF8-4F3E-8557-6FF7F128422B}
 		{6EE80CE9-B8BF-4E09-9DB7-D2FB5C6D9155} = {41CB7A97-7277-43C6-A99C-F1C077FDA409}
+		{1930AB4A-4091-4FE8-9B38-78594E13DDB1} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {C2EEA98F-B6B8-435E-A4E7-31CC0FC44C6A}
