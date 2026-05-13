@@ -46,5 +46,8 @@ namespace SmartWord.Core.Models
 
         [JsonIgnore]
         public bool ToolSuccess { get; set; }
+
+        [JsonIgnore]
+        public LlmResponseMetadata LlmMetadata { get; set; }
     }
 }

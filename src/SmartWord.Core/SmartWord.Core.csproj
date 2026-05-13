@@ -80,6 +80,7 @@
     <Compile Include="Models\DocumentHeading.cs" />
     <Compile Include="Models\DocumentStatus.cs" />
     <Compile Include="Models\ExecutionPlan.cs" />
+    <Compile Include="Models\LlmResponseMetadata.cs" />
     <Compile Include="Models\PermissionDecision.cs" />
     <Compile Include="Models\SkillModels.cs" />
     <Compile Include="Models\TodoBoard.cs" />
@@ -87,6 +88,11 @@
     <Compile Include="Models\ToolCall.cs" />
     <Compile Include="Models\ToolCallResult.cs" />
     <Compile Include="Models\ToolDefinition.cs" />
+    <Compile Include="Telemetry\AgentTelemetryContext.cs" />
+    <Compile Include="Telemetry\AgentTelemetryEvent.cs" />
+    <Compile Include="Telemetry\AgentTelemetryScope.cs" />
+    <Compile Include="Telemetry\IAgentTelemetrySink.cs" />
+    <Compile Include="Telemetry\NullAgentTelemetrySink.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>

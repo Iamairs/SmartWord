@@ -214,6 +214,7 @@ namespace SmartWord.Infrastructure.LlmClients
             var textBuilder = new StringBuilder();
             var reasoningBuilder = new StringBuilder();
             var toolCallAccumulators = new Dictionary<int, ToolCallAccumulator>();
+            var responseMetadata = new LlmResponseMetadata();
 
             using (var responseHeadersTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             using (var request = new HttpRequestMessage(HttpMethod.Post, BuildChatCompletionsUri(endpoint)))
@@ -389,6 +390,21 @@ namespace SmartWord.Infrastructure.LlmClients
                             }
 
                             var finishReason = choice?["finish_reason"]?.Value<string>();
+                            if (!string.IsNullOrWhiteSpace(finishReason))
+                            {
+                                responseMetadata.FinishReason = finishReason;
+                            }
+
+                            var usage = jsonPayload["usage"];
+                            if (usage != null && usage.Type != JTokenType.Null)
+                            {
+                                responseMetadata.PromptTokens = usage["prompt_tokens"]?.Value<int?>();
+                                responseMetadata.CompletionTokens = usage["completion_tokens"]?.Value<int?>();
+                                responseMetadata.TotalTokens = usage["total_tokens"]?.Value<int?>();
+                                responseMetadata.IsEstimatedUsage = false;
+                            }
+
+                            responseMetadata.ProviderTraceId = GetTraceId(response);
                             if (string.Equals(finishReason, "tool_calls", StringComparison.OrdinalIgnoreCase)
                                 || string.Equals(finishReason, "stop", StringComparison.OrdinalIgnoreCase))
                             {
@@ -422,7 +438,8 @@ namespace SmartWord.Infrastructure.LlmClients
                 Role = "assistant",
                 Content = textBuilder.ToString(),
                 ReasoningContent = reasoningBuilder.ToString(),
-                ToolCalls = toolCallsResult
+                ToolCalls = toolCallsResult,
+                LlmMetadata = responseMetadata
             };
         }
 
