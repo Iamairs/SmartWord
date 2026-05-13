@@ -17,6 +17,7 @@ using SmartWord.Application.Tools;
 using SmartWord.Core.Enums;
 using SmartWord.Core.Interfaces;
 using SmartWord.Core.Models;
+using SmartWord.Core.Telemetry;
 using SmartWord.OfficeIntegration.Tools;
 
 namespace SmartWord.Application.Orchestration
@@ -51,6 +52,7 @@ namespace SmartWord.Application.Orchestration
         private readonly ITaskHistoryStore _taskHistoryStore;
         private readonly ISkillPromptResolver _skillPromptResolver;
         private readonly ISkillScriptApprovalStore _skillScriptApprovalStore;
+        private readonly IAgentTelemetrySink _telemetrySink;
 
         public AgentOrchestrator(
             ILlmClient llmClient,
@@ -69,7 +71,8 @@ namespace SmartWord.Application.Orchestration
             ITaskHistoryStore taskHistoryStore = null,
             ISkillPromptResolver skillPromptResolver = null,
             ISkillScriptApprovalStore skillScriptApprovalStore = null,
-            ContextCompactionService contextCompactionService = null)
+            ContextCompactionService contextCompactionService = null,
+            IAgentTelemetrySink telemetrySink = null)
         {
             _llmClient = llmClient;
             _contextHydrator = contextHydrator;
@@ -90,6 +93,7 @@ namespace SmartWord.Application.Orchestration
             _taskHistoryStore = taskHistoryStore;
             _skillPromptResolver = skillPromptResolver;
             _skillScriptApprovalStore = skillScriptApprovalStore;
+            _telemetrySink = telemetrySink ?? NullAgentTelemetrySink.Instance;
         }
 
         /// <summary>
@@ -109,11 +113,23 @@ namespace SmartWord.Application.Orchestration
     var documentPath = string.IsNullOrWhiteSpace(documentContext.DocumentPath)
         ? "__active_document__"
         : documentContext.DocumentPath;
+    var taskStartedAtUtc = DateTimeOffset.UtcNow;
     _todoManager?.SetCurrentDocumentPath(documentPath);
     var auditRun = await TryStartTaskRunAsync(
             documentPath,
             userInput,
             safeOptions,
+            cancellationToken)
+        .ConfigureAwait(false);
+    await RecordTaskTelemetryAsync(
+            "task_started",
+            safeOptions,
+            new Dictionary<string, object>
+            {
+                ["inputDocx"] = documentPath,
+                ["startedAtUtc"] = taskStartedAtUtc.ToString("O"),
+                ["status"] = "running"
+            },
             cancellationToken)
         .ConfigureAwait(false);
     TaskRunCompletion auditCompletion = null;
@@ -329,6 +345,23 @@ namespace SmartWord.Application.Orchestration
                 .ConfigureAwait(false);
             if (compactionResult.WasCompacted)
             {
+                var beforeTokens = _conversationStore.EstimateTokenCount(messages);
+                var afterTokens = _conversationStore.EstimateTokenCount(compactionResult.Messages.ToList());
+                await RecordTelemetryAsync(
+                        "context_compressed",
+                        safeOptions,
+                        new Dictionary<string, object>
+                        {
+                            ["beforeTokens"] = beforeTokens,
+                            ["afterTokens"] = afterTokens,
+                            ["tokensSaved"] = Math.Max(0, beforeTokens - afterTokens),
+                            ["messageCountBefore"] = messages.Count,
+                            ["messageCountAfter"] = compactionResult.Messages == null ? 0 : compactionResult.Messages.Count,
+                            ["strategy"] = compactionResult.Message ?? string.Empty,
+                            ["wasCompacted"] = true
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
                 yield return new AgentEvent
                 {
                     Type = AgentEventType.ContextCompacted,
@@ -797,10 +830,50 @@ namespace SmartWord.Application.Orchestration
                     RequiresConfirmation = requiresConfirmation,
                     OperationDescription = operationDescription
                 };
+                await RecordTelemetryAsync(
+                        "tool_call_started",
+                        safeOptions,
+                        new Dictionary<string, object>
+                        {
+                            ["toolCallId"] = toolCall.Id ?? string.Empty,
+                            ["toolName"] = toolCall.Name ?? string.Empty,
+                            ["rawInput"] = toolCall.Input ?? string.Empty,
+                            ["operationDescription"] = operationDescription,
+                            ["startedAtUtc"] = DateTimeOffset.UtcNow.ToString("O"),
+                            ["requiresConfirmation"] = requiresConfirmation
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                await RecordTelemetryAsync(
+                        "permission_checked",
+                        safeOptions,
+                        new Dictionary<string, object>
+                        {
+                            ["toolCallId"] = toolCall.Id ?? string.Empty,
+                            ["toolName"] = toolCall.Name ?? string.Empty,
+                            ["mode"] = safeOptions.Mode.ToString(),
+                            ["permissionMode"] = ResolvePermissionMode(safeOptions).ToString(),
+                            ["decision"] = permissionDecision.IsAllowed ? "allow" : "deny",
+                            ["reason"] = permissionDecision.Reason ?? string.Empty,
+                            ["requiresConfirmation"] = requiresConfirmation
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
 
                 if (!permissionDecision.IsAllowed)
                 {
                     var deniedResult = ToolCallResult.Denied(toolCall.Name, permissionDecision.Reason);
+                    await RecordToolTelemetryAsync(
+                            "tool_call_denied",
+                            safeOptions,
+                            toolCall,
+                            deniedResult,
+                            operationDescription,
+                            requiresConfirmation,
+                            false,
+                            0,
+                            cancellationToken)
+                        .ConfigureAwait(false);
                     await AppendToolResultAsync(documentPath, messages, toolCall, deniedResult, cancellationToken, auditRun?.Id, operationDescription)
                         .ConfigureAwait(false);
 
@@ -841,6 +914,17 @@ namespace SmartWord.Application.Orchestration
 
                 if (inputParseError != null)
                 {
+                    await RecordToolTelemetryAsync(
+                            "tool_call_failed",
+                            safeOptions,
+                            toolCall,
+                            inputParseError,
+                            operationDescription,
+                            requiresConfirmation,
+                            false,
+                            0,
+                            cancellationToken)
+                        .ConfigureAwait(false);
                     await AppendToolResultAsync(documentPath, messages, toolCall, inputParseError, cancellationToken, auditRun?.Id, operationDescription)
                         .ConfigureAwait(false);
 
@@ -915,6 +999,19 @@ namespace SmartWord.Application.Orchestration
                         continue;
                     }
 
+                    var confirmationStartedAt = DateTimeOffset.UtcNow;
+                    await RecordTelemetryAsync(
+                            "confirmation_requested",
+                            safeOptions,
+                            new Dictionary<string, object>
+                            {
+                                ["toolCallId"] = toolCall.Id ?? string.Empty,
+                                ["toolName"] = toolCall.Name ?? string.Empty,
+                                ["requestedAtUtc"] = confirmationStartedAt.ToString("O"),
+                                ["policy"] = "runtime_channel"
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
                     var confirmationDecision = await WaitForToolConfirmationDecisionAsync(
                             toolCall,
                             eventToolInput,
@@ -922,9 +1019,37 @@ namespace SmartWord.Application.Orchestration
                             scriptApprovalKey,
                             cancellationToken)
                         .ConfigureAwait(false);
+                    await RecordTelemetryAsync(
+                            "confirmation_decided",
+                            safeOptions,
+                            new Dictionary<string, object>
+                            {
+                                ["toolCallId"] = toolCall.Id ?? string.Empty,
+                                ["toolName"] = toolCall.Name ?? string.Empty,
+                                ["requestedAtUtc"] = confirmationStartedAt.ToString("O"),
+                                ["decidedAtUtc"] = DateTimeOffset.UtcNow.ToString("O"),
+                                ["durationMs"] = (long)(DateTimeOffset.UtcNow - confirmationStartedAt).TotalMilliseconds,
+                                ["confirmed"] = confirmationDecision != null && confirmationDecision.Confirmed,
+                                ["remember"] = confirmationDecision != null && confirmationDecision.Remember,
+                                ["policy"] = "runtime_channel",
+                                ["reason"] = confirmationDecision == null ? "未收到确认决策。" : string.Empty
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
                     if (confirmationDecision == null || !confirmationDecision.Confirmed)
                     {
                         var skippedResult = ToolCallResult.Skipped(toolCall.Name, "用户选择跳过本次写操作。");
+                        await RecordToolTelemetryAsync(
+                                "tool_call_skipped",
+                                safeOptions,
+                                toolCall,
+                                skippedResult,
+                                operationDescription,
+                                requiresConfirmation,
+                                false,
+                                0,
+                                cancellationToken)
+                            .ConfigureAwait(false);
                         await AppendToolResultAsync(documentPath, messages, toolCall, skippedResult, cancellationToken, auditRun?.Id, operationDescription)
                             .ConfigureAwait(false);
 
@@ -962,6 +1087,7 @@ namespace SmartWord.Application.Orchestration
                 }
 
                 ToolCallResult executionResult;
+                var toolExecutionStartedAtUtc = DateTimeOffset.UtcNow;
                 IUndoScope writeStepUndoScope = null;
                 var writeStepCommitted = false;
                 var writeStepRolledBack = false;
@@ -1047,6 +1173,18 @@ namespace SmartWord.Application.Orchestration
                         Truncate(ex.ToString(), ToolErrorMessageMaxLength));
                 }
 
+                await RecordToolTelemetryAsync(
+                        executionResult.Success ? "tool_call_completed" : "tool_call_failed",
+                        safeOptions,
+                        toolCall,
+                        executionResult,
+                        operationDescription,
+                        requiresConfirmation,
+                        requiresConfirmation,
+                        (long)(DateTimeOffset.UtcNow - toolExecutionStartedAtUtc).TotalMilliseconds,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
                 if (executionResult.Success)
                 {
                     executionResult.Output = DecorateToolOutput(
@@ -1113,6 +1251,14 @@ namespace SmartWord.Application.Orchestration
                             yield return CreateToolStartedEvent(
                                 autoVerifyOutcome.ToolCall,
                                 autoVerifyOutcome.OperationDescription);
+                            await RecordVerificationTelemetryAsync(
+                                    autoVerifyOutcome.Passed ? "verification_completed" : "verification_failed",
+                                    safeOptions,
+                                    autoVerifyOutcome.ToolCall,
+                                    autoVerifyOutcome.Result,
+                                    autoVerifyOutcome.OperationDescription,
+                                    cancellationToken)
+                                .ConfigureAwait(false);
                             await TryRecordTaskToolAsync(
                                     auditRun?.Id,
                                     autoVerifyOutcome.ToolCall,
@@ -1574,6 +1720,22 @@ namespace SmartWord.Application.Orchestration
                 .ConfigureAwait(false);
             auditRunCompleted = true;
         }
+
+        await RecordTaskTelemetryAsync(
+                completedSuccessfully ? "task_completed" : "task_failed",
+                safeOptions,
+                new Dictionary<string, object>
+                {
+                    ["inputDocx"] = documentPath,
+                    ["outputDocx"] = documentPath,
+                    ["startedAtUtc"] = taskStartedAtUtc.ToString("O"),
+                    ["durationMs"] = (long)(DateTimeOffset.UtcNow - taskStartedAtUtc).TotalMilliseconds,
+                    ["status"] = completedSuccessfully ? "completed" : (runPaused ? "paused" : "failed"),
+                    ["failureType"] = completedSuccessfully ? string.Empty : ResolveFailureType(interruptedOutcome),
+                    ["failureReason"] = completedSuccessfully ? string.Empty : interruptedReason ?? string.Empty
+                },
+                CancellationToken.None)
+            .ConfigureAwait(false);
     }
 
     if (runStarted && completedSuccessfully && _todoManager != null && safeOptions.Mode == AgentMode.Agent)
@@ -1627,6 +1789,190 @@ namespace SmartWord.Application.Orchestration
             {
                 Log.Warning(ex, "创建任务历史运行记录失败，主流程将继续。");
                 return null;
+            }
+        }
+
+        private async Task RecordTaskTelemetryAsync(
+            string eventType,
+            AgentRunOptions options,
+            Dictionary<string, object> data,
+            CancellationToken cancellationToken)
+        {
+            await RecordTelemetryAsync(eventType, options, data, cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task RecordToolTelemetryAsync(
+            string eventType,
+            AgentRunOptions options,
+            ToolCall toolCall,
+            ToolCallResult result,
+            string operationDescription,
+            bool requiresConfirmation,
+            bool wasConfirmed,
+            long durationMs,
+            CancellationToken cancellationToken)
+        {
+            if (toolCall == null)
+            {
+                return;
+            }
+
+            var data = new Dictionary<string, object>
+            {
+                ["toolCallId"] = toolCall.Id ?? string.Empty,
+                ["toolName"] = toolCall.Name ?? string.Empty,
+                ["rawInput"] = toolCall.Input ?? string.Empty,
+                ["operationDescription"] = string.IsNullOrWhiteSpace(operationDescription)
+                    ? toolCall.Description ?? string.Empty
+                    : operationDescription,
+                ["completedAtUtc"] = DateTimeOffset.UtcNow.ToString("O"),
+                ["durationMs"] = durationMs,
+                ["success"] = result != null && result.Success,
+                ["failureType"] = result == null || result.Success ? string.Empty : ClassifyToolFailure(result.Output),
+                ["errorMessage"] = result == null || result.Success ? string.Empty : result.Output ?? string.Empty,
+                ["affectedParagraphs"] = result == null ? null : result.AffectedParagraphs,
+                ["paragraphRefs"] = result == null ? null : result.ParagraphRefs,
+                ["outputSizeChars"] = result == null || result.Output == null ? 0 : result.Output.Length,
+                ["requiresConfirmation"] = requiresConfirmation,
+                ["wasConfirmed"] = wasConfirmed,
+                ["isSafetyBlock"] = result != null
+                    && !result.Success
+                    && (result.Output ?? string.Empty).IndexOf("PERMISSION DENIED", StringComparison.OrdinalIgnoreCase) >= 0
+            };
+
+            await RecordTelemetryAsync(eventType, options, data, cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task RecordVerificationTelemetryAsync(
+            string eventType,
+            AgentRunOptions options,
+            ToolCall toolCall,
+            ToolCallResult result,
+            string operationDescription,
+            CancellationToken cancellationToken)
+        {
+            if (toolCall == null)
+            {
+                return;
+            }
+
+            await RecordTelemetryAsync(
+                    eventType,
+                    options,
+                    new Dictionary<string, object>
+                    {
+                        ["verificationId"] = toolCall.Id ?? Guid.NewGuid().ToString("N"),
+                        ["toolCallId"] = toolCall.Id ?? string.Empty,
+                        ["toolName"] = toolCall.Name ?? string.Empty,
+                        ["operationDescription"] = operationDescription ?? string.Empty,
+                        ["success"] = result != null && result.Success && IsVerificationPassed(result),
+                        ["failureReason"] = result == null || result.Success ? string.Empty : result.Output ?? string.Empty,
+                        ["checksJson"] = result == null ? string.Empty : result.Output ?? string.Empty,
+                        ["completedAtUtc"] = DateTimeOffset.UtcNow.ToString("O")
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        private async Task RecordTelemetryAsync(
+            string eventType,
+            AgentRunOptions options,
+            Dictionary<string, object> data,
+            CancellationToken cancellationToken)
+        {
+            if (_telemetrySink == null)
+            {
+                return;
+            }
+
+            try
+            {
+                var telemetryEvent = AgentTelemetryEvent.Create(eventType);
+                var context = AgentTelemetryScope.Current;
+                if (context != null)
+                {
+                    telemetryEvent.EvalRunId = context.EvalRunId;
+                    telemetryEvent.TaskRunId = context.TaskRunId;
+                    telemetryEvent.CaseId = context.CaseId;
+                    telemetryEvent.Level = context.Level;
+                    telemetryEvent.Variant = context.Variant;
+                }
+
+                telemetryEvent.Mode = options == null ? string.Empty : options.Mode.ToString();
+                telemetryEvent.PermissionMode = ResolvePermissionMode(options).ToString();
+                telemetryEvent.Model = options == null ? string.Empty : options.Model ?? string.Empty;
+                telemetryEvent.Data = data ?? new Dictionary<string, object>();
+
+                await _telemetrySink.RecordAsync(telemetryEvent, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "写入 Agent 评测 Telemetry 失败。EventType={EventType}", eventType);
+            }
+        }
+
+        private static bool IsVerificationPassed(ToolCallResult result)
+        {
+            if (result == null || !result.Success)
+            {
+                return false;
+            }
+
+            return !TryGetVerificationAllPassed(result.Output, out var allPassed) || allPassed;
+        }
+
+        private static string ClassifyToolFailure(string output)
+        {
+            var text = output ?? string.Empty;
+            if (text.IndexOf("PERMISSION DENIED", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "permission_denied";
+            }
+
+            if (text.IndexOf("SKIPPED", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "user_rejected";
+            }
+
+            if (text.IndexOf("超时", StringComparison.OrdinalIgnoreCase) >= 0
+                || text.IndexOf("timeout", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "timeout";
+            }
+
+            if (text.IndexOf("验证", StringComparison.OrdinalIgnoreCase) >= 0
+                || text.IndexOf("verify", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "verification_failed";
+            }
+
+            if (text.IndexOf("参数", StringComparison.OrdinalIgnoreCase) >= 0
+                || text.IndexOf("JSON", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "invalid_arguments";
+            }
+
+            if (text.IndexOf("COM", StringComparison.OrdinalIgnoreCase) >= 0
+                || text.IndexOf("Word", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "word_com_error";
+            }
+
+            return "unknown_error";
+        }
+
+        private static string ResolveFailureType(TodoBoardRunOutcome outcome)
+        {
+            switch (outcome)
+            {
+                case TodoBoardRunOutcome.Cancelled:
+                    return "cancelled";
+                case TodoBoardRunOutcome.RolledBack:
+                    return "verification_failed";
+                case TodoBoardRunOutcome.Failed:
+                    return "unknown_error";
+                default:
+                    return string.Empty;
             }
         }
 

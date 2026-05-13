@@ -12,6 +12,7 @@ using SmartWord.Application.Todo;
 using SmartWord.Application.Tools;
 using SmartWord.AddIn.TaskPane;
 using SmartWord.Core.Interfaces;
+using SmartWord.Core.Telemetry;
 using SmartWord.Infrastructure.Configuration;
 using SmartWord.Infrastructure.LlmClients;
 using SmartWord.Infrastructure.Persistence;
@@ -61,6 +62,7 @@ namespace SmartWord.AddIn.DI
             services.AddSingleton(provider => LoadSmartWordSettings());
             services.AddSingleton(provider => CreateLlmClientOptions(
                 provider.GetRequiredService<SmartWordSettings>()));
+            services.AddSingleton<IAgentTelemetrySink>(NullAgentTelemetrySink.Instance);
             services.AddSingleton<ILlmClient, OpenAiCompatibleClient>();
             services.AddSingleton<SmartWordSqliteDatabase>();
             services.AddSingleton<IConversationStore, SqliteConversationStore>();
@@ -131,7 +133,8 @@ namespace SmartWord.AddIn.DI
                 provider.GetRequiredService<ITaskHistoryStore>(),
                 provider.GetRequiredService<ISkillPromptResolver>(),
                 provider.GetRequiredService<ISkillScriptApprovalStore>(),
-                provider.GetRequiredService<ContextCompactionService>()));
+                provider.GetRequiredService<ContextCompactionService>(),
+                provider.GetRequiredService<IAgentTelemetrySink>()));
             services.AddSingleton<StreamingResponseHandler>();
 
             _serviceProvider = services.BuildServiceProvider();
