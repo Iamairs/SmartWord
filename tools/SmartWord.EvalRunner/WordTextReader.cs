@@ -49,6 +49,27 @@ namespace SmartWord.EvalRunner
             System.Runtime.InteropServices.Marshal.FinalReleaseComObject(wordApp);
         }
 
+        public static void InvokeComMethod(object target, string name)
+        {
+            target.GetType().InvokeMember(name, System.Reflection.BindingFlags.InvokeMethod, null, target, null);
+        }
+
+        public static void TryCloseDocument(object document)
+        {
+            if (document == null)
+            {
+                return;
+            }
+
+            try
+            {
+                document.GetType().InvokeMember("Close", System.Reflection.BindingFlags.InvokeMethod, null, document, new object[] { false });
+            }
+            catch
+            {
+            }
+        }
+
         public static void TryCloseWord(object wordApp)
         {
             try

@@ -141,6 +141,7 @@ namespace SmartWord.EvalRunner
         public string OutputDocx { get; set; } = string.Empty;
         public string ScorePath { get; set; } = string.Empty;
         public string FailureReason { get; set; } = string.Empty;
+        public string FailureDetail { get; set; } = string.Empty;
         public List<CheckResult> CheckResults { get; set; } = new List<CheckResult>();
     }
 }

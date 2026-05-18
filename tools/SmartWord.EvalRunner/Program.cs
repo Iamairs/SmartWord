@@ -105,6 +105,7 @@ namespace SmartWord.EvalRunner
             using (new AgentTelemetryScope(context))
             {
                 object wordApp = null;
+                object openedDocument = null;
                 WordApplicationWrapper wordWrapper = null;
                 try
                 {
@@ -116,9 +117,21 @@ namespace SmartWord.EvalRunner
                     wordApp = Activator.CreateInstance(Type.GetTypeFromProgID("Word.Application"));
                     ProgramAccessor.SetComProperty(wordApp, "Visible", options.KeepWordVisible);
                     dynamic documents = ProgramAccessor.GetComProperty(wordApp, "Documents");
-                    documents.Open(inputCopyPath, ReadOnly: false, Visible: options.KeepWordVisible);
+                    openedDocument = documents.Open(inputCopyPath, ReadOnly: false, Visible: options.KeepWordVisible);
+                    if (openedDocument == null)
+                    {
+                        throw new InvalidOperationException("Word 未返回已打开的文档对象。");
+                    }
+
+                    ProgramAccessor.InvokeComMethod(openedDocument, "Activate");
 
                     wordWrapper = new WordApplicationWrapper(wordApp);
+                    var activeDocumentPath = await wordWrapper.GetActiveDocumentPath().ConfigureAwait(false);
+                    if (string.IsNullOrWhiteSpace(activeDocumentPath))
+                    {
+                        throw new InvalidOperationException("Word 已启动，但没有活动文档。请检查 input.docx 是否被受保护视图或 Word 启动弹窗阻塞。");
+                    }
+
                     var orchestrator = BuildOrchestrator(wordWrapper, options, telemetrySink);
                     var runOptions = CreateAgentRunOptions(benchmarkCase, options);
 
@@ -130,9 +143,10 @@ namespace SmartWord.EvalRunner
                         // EvalRunner 只消费事件以推动运行；正式指标来自 telemetry 和 scorer。
                     }
 
-                    dynamic activeDocument = ProgramAccessor.GetComProperty(wordApp, "ActiveDocument");
+                    dynamic activeDocument = openedDocument;
                     activeDocument.SaveAs2(outputDocxPath);
                     activeDocument.Close(false);
+                    openedDocument = null;
                     ProgramAccessor.QuitWord(wordApp);
 
                     var score = BenchmarkScorer.Score(
@@ -170,6 +184,7 @@ namespace SmartWord.EvalRunner
                 }
                 catch (Exception ex)
                 {
+                    var rootException = UnwrapException(ex);
                     ProgramAccessor.TryCloseWord(wordApp);
                     var failed = new CaseRunResult
                     {
@@ -177,11 +192,12 @@ namespace SmartWord.EvalRunner
                         Level = benchmarkCase.Level,
                         Variant = options.Variant,
                         Status = "failed",
-                        FailureReason = ex.Message,
+                        FailureReason = rootException.Message,
+                        FailureDetail = rootException.ToString(),
                         OutputDocx = File.Exists(outputDocxPath) ? outputDocxPath : string.Empty
                     };
                     await telemetrySink.RecordAsync(
-                            CreateTaskFailedEvent(runId, taskRunId, benchmarkCase, options, inputCopyPath, outputDocxPath, ex),
+                            CreateTaskFailedEvent(runId, taskRunId, benchmarkCase, options, inputCopyPath, outputDocxPath, rootException),
                             CancellationToken.None)
                         .ConfigureAwait(false);
                     File.WriteAllText(
@@ -192,8 +208,21 @@ namespace SmartWord.EvalRunner
                 finally
                 {
                     wordWrapper?.Dispose();
+                    ProgramAccessor.TryCloseDocument(openedDocument);
                 }
             }
+        }
+
+        private static Exception UnwrapException(Exception exception)
+        {
+            var current = exception;
+            while (current is System.Reflection.TargetInvocationException targetInvocationException
+                && targetInvocationException.InnerException != null)
+            {
+                current = targetInvocationException.InnerException;
+            }
+
+            return current ?? exception;
         }
 
         private static IAgentOrchestrator BuildOrchestrator(
@@ -350,6 +379,7 @@ namespace SmartWord.EvalRunner
             e.Data["status"] = "failed";
             e.Data["failureType"] = ex is TimeoutException ? "timeout" : "unknown_error";
             e.Data["failureReason"] = ex.Message;
+            e.Data["failureDetail"] = ex.ToString();
             return e;
         }
 
