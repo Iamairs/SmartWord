@@ -22,15 +22,25 @@ namespace SmartWord.OfficeIntegration.WordWrappers
         private readonly dynamic _wordApplication;
         private readonly Control _uiThreadInvoker;
         private readonly int _ownerThreadId;
+        private readonly bool _useDirectInvoke;
 
         public WordApplicationWrapper(object wordApplication)
+            : this(wordApplication, false)
+        {
+        }
+
+        public WordApplicationWrapper(object wordApplication, bool useDirectInvoke)
         {
             _wordApplication = wordApplication ?? throw new ArgumentNullException(nameof(wordApplication));
             _ownerThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
+            _useDirectInvoke = useDirectInvoke;
 
-            // 在创建包装器时显式绑定一个 WinForms 控件句柄，后续统一用它把 COM 访问切回宿主 UI 线程。
-            _uiThreadInvoker = new Control();
-            var handle = _uiThreadInvoker.Handle;
+            if (!_useDirectInvoke)
+            {
+                // 在创建包装器时显式绑定一个 WinForms 控件句柄，后续统一用它把 COM 访问切回宿主 UI 线程。
+                _uiThreadInvoker = new Control();
+                var handle = _uiThreadInvoker.Handle;
+            }
         }
 
         public Task<T> InvokeAsync<T>(Func<T> action)
@@ -40,7 +50,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                 throw new ArgumentNullException(nameof(action));
             }
 
-            if (System.Threading.Thread.CurrentThread.ManagedThreadId == _ownerThreadId)
+            if (_useDirectInvoke || System.Threading.Thread.CurrentThread.ManagedThreadId == _ownerThreadId)
             {
                 return Task.FromResult(action());
             }
@@ -1070,7 +1080,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
 
         public void Dispose()
         {
-            _uiThreadInvoker.Dispose();
+            _uiThreadInvoker?.Dispose();
         }
 
         private static int SafeConvertToInt(Func<object> accessor)

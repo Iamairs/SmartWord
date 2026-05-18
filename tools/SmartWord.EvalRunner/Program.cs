@@ -125,7 +125,7 @@ namespace SmartWord.EvalRunner
 
                     ProgramAccessor.InvokeComMethod(openedDocument, "Activate");
 
-                    wordWrapper = new WordApplicationWrapper(wordApp);
+                    wordWrapper = new WordApplicationWrapper(wordApp, useDirectInvoke: true);
                     var activeDocumentPath = await wordWrapper.GetActiveDocumentPath().ConfigureAwait(false);
                     if (string.IsNullOrWhiteSpace(activeDocumentPath))
                     {
