@@ -1,25 +1,30 @@
 <template>
   <section class="quick-actions">
-    <div class="quick-actions__header">
-      <h2>常用任务</h2>
-      <span>点击后直接发起</span>
-    </div>
+    <details open>
+      <summary class="quick-actions__header">
+        <span>
+          <strong>常用任务</strong>
+          <small>从常见工作流快速开始</small>
+        </span>
+        <span class="quick-actions__toggle">收起</span>
+      </summary>
 
-    <div class="quick-actions__group" v-for="group in actionGroups" :key="group.title">
-      <p>{{ group.title }}</p>
-      <div class="quick-actions__grid">
-        <button
-          v-for="action in group.actions"
-          :key="action.id"
-          type="button"
-          class="quick-action"
-          @click="$emit('select', action)"
-        >
-          <span>{{ action.label }}</span>
-          <small>{{ action.hint }}</small>
-        </button>
+      <div class="quick-actions__group" v-for="group in actionGroups" :key="group.title">
+        <p>{{ group.title }}</p>
+        <div class="quick-actions__grid">
+          <button
+            v-for="action in group.actions"
+            :key="action.id"
+            type="button"
+            class="quick-action"
+            @click="$emit('select', action)"
+          >
+            <span>{{ action.label }}</span>
+            <small>{{ action.hint }}</small>
+          </button>
+        </div>
       </div>
-    </div>
+    </details>
   </section>
 </template>
 
@@ -127,35 +132,66 @@ const actionGroups = [
 
 <style scoped>
 .quick-actions {
-  padding: 12px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(89, 118, 161, 0.16);
-  box-shadow: 0 10px 24px rgba(24, 49, 79, 0.06);
+  flex: 0 0 auto;
+  max-height: 31vh;
+  overflow-y: auto;
+  padding: 10px;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-md);
+  background: var(--sw-surface);
+  box-shadow: var(--sw-shadow-soft);
 }
 
 .quick-actions__header {
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  align-items: baseline;
+  align-items: center;
+  cursor: pointer;
+  list-style: none;
 }
 
-.quick-actions__header h2 {
-  margin: 0;
-  font-size: 14px;
-  color: #18314f;
+.quick-actions__header::-webkit-details-marker {
+  display: none;
 }
 
-.quick-actions__header span,
+.quick-actions__header > span:first-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.quick-actions__header strong {
+  color: var(--sw-text);
+  font-size: 13px;
+}
+
+.quick-actions__header small,
 .quick-actions__group p,
 .quick-action small {
-  font-size: 11px;
-  color: #60758f;
+  color: var(--sw-text-muted);
+  font-size: 10px;
+}
+
+.quick-actions__toggle {
+  flex: 0 0 auto;
+  color: var(--sw-primary-strong);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.quick-actions details:not([open]) .quick-actions__toggle {
+  font-size: 0;
+}
+
+.quick-actions details:not([open]) .quick-actions__toggle::after {
+  content: '展开';
+  font-size: 10px;
 }
 
 .quick-actions__group {
-  margin-top: 10px;
+  margin-top: 9px;
 }
 
 .quick-actions__group p {
@@ -170,15 +206,22 @@ const actionGroups = [
 }
 
 .quick-action {
-  min-height: 48px;
-  padding: 8px;
-  border: 1px solid rgba(89, 118, 161, 0.2);
-  border-radius: 10px;
-  background: #f7f9fc;
-  color: #244464;
+  min-height: 42px;
+  padding: 7px;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-sm);
+  background: var(--sw-surface-muted);
+  color: var(--sw-text-soft);
   font: inherit;
   text-align: left;
   cursor: pointer;
+  transition: background var(--sw-transition), border-color var(--sw-transition), transform var(--sw-transition);
+}
+
+.quick-action:hover {
+  border-color: rgba(37, 99, 235, 0.34);
+  background: var(--sw-primary-soft);
+  transform: translateY(-1px);
 }
 
 .quick-action span,

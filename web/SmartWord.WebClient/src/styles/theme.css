@@ -1,0 +1,90 @@
+:root {
+  --sw-bg: #f5f7fb;
+  --sw-bg-elevated: #ffffff;
+  --sw-surface: rgba(255, 255, 255, 0.92);
+  --sw-surface-muted: #f8fafc;
+  --sw-surface-strong: #edf3f8;
+  --sw-text: #172033;
+  --sw-text-soft: #526173;
+  --sw-text-muted: #7a8797;
+  --sw-border: rgba(45, 63, 86, 0.14);
+  --sw-border-strong: rgba(45, 63, 86, 0.24);
+  --sw-primary: #2563eb;
+  --sw-primary-strong: #1d4ed8;
+  --sw-primary-soft: rgba(37, 99, 235, 0.1);
+  --sw-accent: #d97706;
+  --sw-accent-soft: rgba(217, 119, 6, 0.12);
+  --sw-success: #047857;
+  --sw-success-soft: rgba(4, 120, 87, 0.1);
+  --sw-warning: #b45309;
+  --sw-warning-soft: rgba(180, 83, 9, 0.12);
+  --sw-danger: #be123c;
+  --sw-danger-soft: rgba(190, 18, 60, 0.1);
+  --sw-shadow-soft: 0 8px 24px rgba(15, 23, 42, 0.08);
+  --sw-shadow-button: 0 8px 18px rgba(37, 99, 235, 0.2);
+  --sw-radius-xs: 6px;
+  --sw-radius-sm: 8px;
+  --sw-radius-md: 10px;
+  --sw-radius-pill: 999px;
+  --sw-focus: 0 0 0 3px rgba(37, 99, 235, 0.18);
+  --sw-transition: 140ms ease;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  min-height: 100%;
+  font-family: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72) 0%, rgba(245, 247, 251, 0.92) 42%),
+    var(--sw-bg);
+  color: var(--sw-text);
+}
+
+body {
+  min-width: 280px;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea,
+summary {
+  font: inherit;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: none;
+  box-shadow: var(--sw-focus);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

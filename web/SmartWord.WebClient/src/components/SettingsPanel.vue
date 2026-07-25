@@ -262,6 +262,16 @@ async function testConnection() {
   gap: 8px;
 }
 
+.settings-panel__header > div {
+  min-width: 0;
+}
+
+.settings-panel__header .ghost-button {
+  min-width: 44px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .settings-panel__header h2 {
   margin: 0;
   font-size: 16px;
@@ -396,5 +406,75 @@ async function testConnection() {
 button:disabled {
   cursor: not-allowed;
   opacity: 0.65;
+}
+
+.settings-panel {
+  padding: 12px;
+  border-color: var(--sw-border);
+  border-radius: var(--sw-radius-md);
+  background: var(--sw-surface);
+  box-shadow: var(--sw-shadow-soft);
+}
+
+.settings-panel__header h2,
+.settings-section h3,
+.settings-section summary {
+  color: var(--sw-text);
+}
+
+.settings-panel__header p,
+.permission-help,
+.settings-message,
+.diagnostic-card p,
+.diagnostic-card li,
+.settings-field {
+  color: var(--sw-text-soft);
+}
+
+.settings-field input,
+.settings-field select,
+.settings-field textarea {
+  border-color: var(--sw-border);
+  border-radius: var(--sw-radius-sm);
+  background: var(--sw-surface-muted);
+  color: var(--sw-text);
+}
+
+.settings-field input:focus,
+.settings-field select:focus,
+.settings-field textarea:focus {
+  border-color: rgba(37, 99, 235, 0.5);
+  box-shadow: var(--sw-focus);
+}
+
+.diagnostic-card {
+  border-color: var(--sw-border);
+  border-radius: var(--sw-radius-sm);
+  background: var(--sw-surface-muted);
+}
+
+.diagnostic-card--success {
+  border-color: rgba(4, 120, 87, 0.24);
+  background: var(--sw-success-soft);
+}
+
+.diagnostic-card--error {
+  border-color: rgba(190, 18, 60, 0.24);
+  background: var(--sw-danger-soft);
+}
+
+.ghost-button,
+.send-button {
+  border-radius: var(--sw-radius-sm);
+}
+
+.ghost-button {
+  border-color: var(--sw-border);
+  background: var(--sw-surface);
+  color: var(--sw-text-soft);
+}
+
+.send-button {
+  background: var(--sw-primary);
 }
 </style>

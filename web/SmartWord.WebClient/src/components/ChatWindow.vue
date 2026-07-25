@@ -1,23 +1,43 @@
 <template>
   <div class="chat-window">
     <header class="chat-header">
-      <div>
-        <p class="eyebrow">SmartWord</p>
-        <h1>文档副驾</h1>
-        <p class="settings-summary">{{ settingsSummary }}</p>
+      <div class="chat-header__top">
+        <div>
+          <p class="eyebrow">SmartWord</p>
+          <h1>文档副驾</h1>
+        </div>
+        <span class="mode-pill">{{ modeLabel }}</span>
       </div>
-      <div class="header-actions">
-        <button class="ghost-button" type="button" @click="taskHistoryStore.togglePanel()">
-          {{ taskHistoryStore.isPanelOpen ? '收起历史' : '历史' }}
+      <p class="settings-summary">{{ settingsSummary }}</p>
+      <nav class="header-actions" aria-label="功能面板">
+        <button
+          class="toolbar-button"
+          :class="{ 'toolbar-button--active': taskHistoryStore.isPanelOpen }"
+          type="button"
+          :aria-pressed="taskHistoryStore.isPanelOpen"
+          @click="taskHistoryStore.togglePanel()"
+        >
+          任务历史
         </button>
-        <button class="ghost-button" type="button" @click="skillsStore.togglePanel()">
-          {{ skillsStore.isPanelOpen ? '收起Skill' : 'Skill' }}
+        <button
+          class="toolbar-button"
+          :class="{ 'toolbar-button--active': skillsStore.isPanelOpen }"
+          type="button"
+          :aria-pressed="skillsStore.isPanelOpen"
+          @click="skillsStore.togglePanel()"
+        >
+          Skill
         </button>
-        <button class="ghost-button" type="button" @click="settingsStore.togglePanel()">
-          {{ settingsStore.isPanelOpen ? '收起设置' : '设置' }}
+        <button
+          class="toolbar-button"
+          :class="{ 'toolbar-button--active': settingsStore.isPanelOpen }"
+          type="button"
+          :aria-pressed="settingsStore.isPanelOpen"
+          @click="settingsStore.togglePanel()"
+        >
+          设置
         </button>
-        <span class="mode-pill">{{ modeBadgeText }}</span>
-      </div>
+      </nav>
     </header>
 
     <SettingsPanel v-if="settingsStore.isPanelOpen" />
@@ -26,7 +46,7 @@
       @navigate="navigateToParagraph"
     />
     <SkillPanel v-if="skillsStore.isPanelOpen" />
-    <QuickActionsPanel v-if="!chatStore.isLoading" @select="submitQuickAction" />
+    <QuickActionsPanel v-if="shouldShowQuickActions" @select="submitQuickAction" />
 
     <section class="message-list" ref="messageListRef" @click="handleMessageListClick">
       <ThoughtActionTrace :tool-calls="chatStore.activeToolCalls" />
@@ -129,25 +149,27 @@
     </section>
 
     <form class="composer" @submit.prevent="submitMessage">
-      <label class="composer-label" for="chat-input">输入自然语言指令</label>
+      <div class="composer-heading">
+        <label class="composer-label" for="chat-input">要处理什么？</label>
+        <span class="composer-counter">{{ draft.length }} / 3000</span>
+      </div>
+      <div class="mode-selector" role="group" aria-label="运行模式">
+        <button
+          v-for="option in modeOptions"
+          :key="option.value"
+          class="mode-option"
+          :class="{ 'mode-option--active': chatStore.currentMode === option.value }"
+          type="button"
+          :disabled="chatStore.isLoading"
+          :aria-pressed="chatStore.currentMode === option.value"
+          @click="chatStore.setMode(option.value)"
+        >
+          <span>{{ option.label }}</span>
+          <small>{{ option.hint }}</small>
+        </button>
+      </div>
       <details class="advanced-options">
-        <summary>高级执行选项</summary>
-        <div class="mode-selector">
-          <p class="mode-selector__label">运行模式</p>
-          <div class="mode-selector__options">
-            <button
-              v-for="option in modeOptions"
-              :key="option.value"
-              class="mode-option"
-              :class="{ 'mode-option--active': chatStore.currentMode === option.value }"
-              type="button"
-              :disabled="chatStore.isLoading"
-              @click="chatStore.setMode(option.value)"
-            >
-              {{ option.label }}
-            </button>
-          </div>
-        </div>
+        <summary>Skill 与运行环境</summary>
         <div class="skill-selector" v-if="skillsStore.enabledItems.length">
           <p class="mode-selector__label">使用 Skill</p>
           <div class="skill-selector__chips">
@@ -168,12 +190,13 @@
       </details>
       <textarea
         id="chat-input"
-        v-model.trim="draft"
+        v-model="draft"
         class="composer-input"
-        rows="4"
+        rows="3"
         maxlength="3000"
         :disabled="chatStore.isLoading"
         :placeholder="composerPlaceholder"
+        @keydown="handleComposerKeydown"
       ></textarea>
       <div class="composer-footer">
         <p class="environment-hint">{{ composerHint }}</p>
@@ -221,11 +244,15 @@ const draft = ref('');
 const messageListRef = ref(null);
 const customQuestionAnswer = ref('');
 const isCancelling = ref(false);
+const renderCache = new Map();
 let unsubscribeAgentEvent = null;
+let pendingAssistantChunk = '';
+let chunkFrameId = 0;
+let scrollFrameId = 0;
 const modeOptions = [
-  { value: 'ask', label: '对话交流' },
-  { value: 'plan', label: '规划任务' },
-  { value: 'agent', label: '自主执行' }
+  { value: 'ask', label: '问答', hint: '只读' },
+  { value: 'plan', label: '规划', hint: '先确认' },
+  { value: 'agent', label: '执行', hint: '可写入' }
 ];
 const permissionOptions = [
   { value: 'read_only', label: '只读模式' },
@@ -249,10 +276,6 @@ const modeLabel = computed(() => {
   return labels[chatStore.currentMode] || '对话交流';
 });
 
-const modeBadgeText = computed(() => {
-  return `当前模式 · ${modeLabel.value}`;
-});
-
 const composerPlaceholder = computed(() => {
   const placeholders = {
     ask: '例如：总结当前文档的主要结构',
@@ -269,7 +292,7 @@ const settingsSummary = computed(() => {
   }
 
   const permission = permissionOptions.find((item) => item.value === settingsStore.form.permissionMode);
-  return `轻量：${settingsStore.form.lightModel} / 重量：${settingsStore.form.heavyModel} / ${permission?.label || '写入前确认'}`;
+  return `${settingsStore.form.lightModel} · ${settingsStore.form.heavyModel} · ${permission?.label || '写入前确认'}`;
 });
 
 const shouldShowTodoBoard = computed(() => {
@@ -280,6 +303,19 @@ const shouldShowTodoBoard = computed(() => {
   return Array.isArray(chatStore.activeTodoBoard.items) && chatStore.activeTodoBoard.items.length > 0;
 });
 
+const shouldShowQuickActions = computed(() => {
+  return !chatStore.isLoading &&
+    !settingsStore.isPanelOpen &&
+    !taskHistoryStore.isPanelOpen &&
+    !skillsStore.isPanelOpen;
+});
+
+const citationCacheKey = computed(() => {
+  return chatStore.citations
+    .map((item) => `${item.ref}:${item.paragraphIndex}`)
+    .join('|');
+});
+
 const environmentHint = computed(() => {
   return hostBridge.isAvailable
     ? '当前运行在 WebView2 环境，设置会保存到本地应用目录。'
@@ -287,31 +323,51 @@ const environmentHint = computed(() => {
 });
 
 const composerHint = computed(() => {
-  return chatStore.currentMode === 'agent'
-    ? '写入会按权限设置确认。'
-    : '默认先读取证据再回答。';
+  const hints = {
+    ask: '先读取证据，再给出回答。',
+    plan: '先澄清目标，再生成计划。',
+    agent: '按当前权限执行并验证改动。'
+  };
+  return hints[chatStore.currentMode] || hints.ask;
 });
 
 const isSubmitDisabled = computed(() => {
-  return chatStore.isLoading || draft.value.length === 0 || settingsStore.isLoading;
+  return chatStore.isLoading || draft.value.trim().length === 0 || settingsStore.isLoading;
 });
 
 function renderMessage(message) {
-  const html = marked.parse(message?.content || '');
-  if (!message || message.role !== 'assistant') {
-    return html;
+  const messageId = message?.id || '';
+  const content = message?.content || '';
+  const citations = message?.role === 'assistant' ? citationCacheKey.value : '';
+  const cached = renderCache.get(messageId);
+  if (cached && cached.content === content && cached.citations === citations) {
+    return cached.rendered;
   }
 
-  return html.replace(/\[(\d+)\]/g, (fullMatch, rawRef) => {
-    const ref = Number(rawRef);
-    const citation = chatStore.findCitation(ref);
-    if (!citation) {
-      return fullMatch;
-    }
+  const html = marked.parse(content);
+  const rendered = !message || message.role !== 'assistant'
+    ? html
+    : html.replace(/\[(\d+)\]/g, (fullMatch, rawRef) => {
+      const ref = Number(rawRef);
+      const citation = chatStore.findCitation(ref);
+      if (!citation) {
+        return fullMatch;
+      }
 
-    const title = `段落 ${citation.paragraphIndex}`;
-    return `<button class="citation-anchor" type="button" data-citation-ref="${ref}" title="${title}">[${ref}]</button>`;
+      const title = `段落 ${citation.paragraphIndex}`;
+      return `<button class="citation-anchor" type="button" data-citation-ref="${ref}" title="${title}">[${ref}]</button>`;
+    });
+
+  renderCache.set(messageId, {
+    content,
+    citations,
+    rendered
   });
+  if (renderCache.size > 120) {
+    renderCache.delete(renderCache.keys().next().value);
+  }
+
+  return rendered;
 }
 
 async function submitMessage() {
@@ -319,7 +375,16 @@ async function submitMessage() {
     return;
   }
 
-  await sendMessage(draft.value, chatStore.currentMode);
+  await sendMessage(draft.value.trim(), chatStore.currentMode);
+}
+
+function handleComposerKeydown(event) {
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing) {
+    return;
+  }
+
+  event.preventDefault();
+  submitMessage();
 }
 
 async function submitQuickAction(action) {
@@ -464,6 +529,87 @@ function requireConfirmationForPermission(permissionMode) {
   return !['auto_safe_writes', 'full_auto'].includes(permissionMode);
 }
 
+function requestFrame(callback) {
+  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+    return window.requestAnimationFrame(callback);
+  }
+
+  return setTimeout(callback, 16);
+}
+
+function cancelFrame(frameId) {
+  if (!frameId || typeof window === 'undefined') {
+    return;
+  }
+
+  if (typeof window.cancelAnimationFrame === 'function') {
+    window.cancelAnimationFrame(frameId);
+    return;
+  }
+
+  window.clearTimeout(frameId);
+}
+
+function isMessageListNearBottom() {
+  const element = messageListRef.value;
+  if (!element) {
+    return true;
+  }
+
+  const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+  return distance < 96;
+}
+
+function scheduleScrollToBottom(options = {}) {
+  const force = options.force === true;
+  const shouldFollow = force || isMessageListNearBottom();
+  if (!shouldFollow) {
+    return;
+  }
+
+  if (scrollFrameId) {
+    return;
+  }
+
+  scrollFrameId = requestFrame(async () => {
+    scrollFrameId = 0;
+    await nextTick();
+    const element = messageListRef.value;
+    if (!element) {
+      return;
+    }
+
+    element.scrollTop = element.scrollHeight;
+  });
+}
+
+function flushPendingAssistantChunk() {
+  if (!pendingAssistantChunk) {
+    return;
+  }
+
+  const content = pendingAssistantChunk;
+  pendingAssistantChunk = '';
+  chatStore.appendAssistantChunk(content);
+  scheduleScrollToBottom();
+}
+
+function scheduleAssistantChunk(content) {
+  if (!content) {
+    return;
+  }
+
+  pendingAssistantChunk += content;
+  if (chunkFrameId) {
+    return;
+  }
+
+  chunkFrameId = requestFrame(() => {
+    chunkFrameId = 0;
+    flushPendingAssistantChunk();
+  });
+}
+
 function getCancellationMessage() {
   return chatStore.currentMode === 'agent'
     ? '已取消当前任务。已验证的改动会保留，未验证的当前步骤会回滚。'
@@ -528,10 +674,14 @@ async function resumePausedTodoRun(decision) {
 }
 
 function handleAgentEvent(event) {
+  if (event.type === 'stream_chunk') {
+    scheduleAssistantChunk(event.content || '');
+    return;
+  }
+
+  flushPendingAssistantChunk();
+
   switch (event.type) {
-    case 'stream_chunk':
-      chatStore.appendAssistantChunk(event.content || '');
-      break;
     case 'tool_call_started':
       chatStore.startToolCall(event.toolCallId, event.toolName, event.toolInput, {
         requiresConfirmation: event.requiresConfirmation === true,
@@ -697,16 +847,6 @@ async function handleMessageListClick(event) {
   await navigateToParagraph(citation.paragraphIndex);
 }
 
-async function scrollToBottom() {
-  await nextTick();
-  const element = messageListRef.value;
-  if (!element) {
-    return;
-  }
-
-  element.scrollTop = element.scrollHeight;
-}
-
 onMounted(async () => {
   unsubscribeAgentEvent = hostBridge.onAgentEvent(handleAgentEvent);
   await settingsStore.loadSettings();
@@ -717,12 +857,17 @@ onMounted(async () => {
       '我可以帮你总结、审阅、改写或整理当前 Word 文档。你可以直接描述目标，也可以先点击上方常用任务。'
     );
   }
+
+  scheduleScrollToBottom({ force: true });
 });
 
 onUnmounted(() => {
   if (typeof unsubscribeAgentEvent === 'function') {
     unsubscribeAgentEvent();
   }
+
+  cancelFrame(chunkFrameId);
+  cancelFrame(scrollFrameId);
 });
 
 watch(
@@ -736,7 +881,7 @@ watch(
     chatStore.isLoading
   ],
   () => {
-    scrollToBottom();
+    scheduleScrollToBottom({ force: chatStore.messages.length <= 2 });
   }
 );
 
@@ -1218,6 +1363,371 @@ watch(
   40% {
     transform: translateY(-3px);
     opacity: 1;
+  }
+}
+
+/* 窄侧边栏的最终覆盖层：统一层级、密度和状态反馈。 */
+:global(html, body, #app) {
+  background: var(--sw-bg);
+  color: var(--sw-text);
+}
+
+:global(body) {
+  min-width: 280px;
+  overflow: hidden;
+}
+
+.chat-window {
+  width: 100%;
+  max-width: 360px;
+  height: 100vh;
+  min-height: 0;
+  padding: 10px;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.chat-header {
+  display: block;
+  flex: 0 0 auto;
+  padding: 12px;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-md);
+  background: var(--sw-surface);
+  box-shadow: var(--sw-shadow-soft);
+}
+
+.chat-header__top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.eyebrow {
+  margin-bottom: 3px;
+  color: var(--sw-text-muted);
+  letter-spacing: 0.1em;
+}
+
+.chat-header h1 {
+  font-size: 19px;
+  color: var(--sw-text);
+}
+
+.settings-summary {
+  max-width: 100%;
+  margin-top: 8px;
+  overflow: hidden;
+  color: var(--sw-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.toolbar-button {
+  min-width: 0;
+  min-height: 30px;
+  padding: 6px 4px;
+  overflow: hidden;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-sm);
+  background: transparent;
+  color: var(--sw-text-soft);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background var(--sw-transition), border-color var(--sw-transition), color var(--sw-transition);
+}
+
+.toolbar-button:hover {
+  border-color: var(--sw-border-strong);
+  background: var(--sw-surface-strong);
+  color: var(--sw-text);
+}
+
+.toolbar-button--active {
+  border-color: rgba(37, 99, 235, 0.32);
+  background: var(--sw-primary-soft);
+  color: var(--sw-primary-strong);
+}
+
+.mode-pill {
+  flex: 0 0 auto;
+  max-width: 92px;
+  padding: 5px 8px;
+  overflow: hidden;
+  border-radius: var(--sw-radius-pill);
+  background: var(--sw-primary-soft);
+  color: var(--sw-primary-strong);
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ghost-button {
+  border-color: var(--sw-border);
+  border-radius: var(--sw-radius-sm);
+  background: var(--sw-surface);
+  color: var(--sw-text-soft);
+  transition: background var(--sw-transition), border-color var(--sw-transition), transform var(--sw-transition);
+}
+
+.ghost-button:hover:not(:disabled) {
+  border-color: var(--sw-border-strong);
+  background: var(--sw-surface-strong);
+}
+
+.settings-panel,
+.composer {
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-md);
+  background: var(--sw-surface);
+  box-shadow: var(--sw-shadow-soft);
+}
+
+.settings-panel {
+  max-height: 48vh;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.settings-panel__header p,
+.settings-field,
+.environment-hint,
+.mode-selector__label {
+  color: var(--sw-text-soft);
+}
+
+.settings-field input,
+.settings-field select,
+.settings-field textarea,
+.composer-input {
+  border-color: var(--sw-border);
+  border-radius: var(--sw-radius-sm);
+  background: var(--sw-surface-muted);
+  color: var(--sw-text);
+}
+
+.settings-field input:focus,
+.settings-field select:focus,
+.settings-field textarea:focus,
+.composer-input:focus {
+  outline: none;
+  border-color: rgba(37, 99, 235, 0.5);
+  box-shadow: var(--sw-focus);
+}
+
+.message-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 8px;
+  padding: 2px 3px 4px 0;
+  scrollbar-color: rgba(82, 97, 115, 0.3) transparent;
+  scrollbar-width: thin;
+}
+
+.message-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.message-list::-webkit-scrollbar-thumb {
+  border-radius: var(--sw-radius-pill);
+  background: rgba(82, 97, 115, 0.28);
+}
+
+.message-card {
+  padding: 10px;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-md);
+  box-shadow: none;
+  contain: content;
+  content-visibility: auto;
+  contain-intrinsic-size: 120px;
+}
+
+.message-card--assistant {
+  background: var(--sw-surface);
+}
+
+.message-card--user {
+  border-color: transparent;
+  background: var(--sw-primary);
+  color: #ffffff;
+}
+
+.message-meta {
+  margin-bottom: 6px;
+  color: var(--sw-text-muted);
+}
+
+.message-card--user .message-meta {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.message-body {
+  font-size: 12.5px;
+  line-height: 1.62;
+}
+
+.message-body :deep(.citation-anchor) {
+  color: var(--sw-accent);
+  font-weight: 700;
+}
+
+.composer {
+  flex: 0 0 auto;
+  max-height: 43vh;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.composer-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.composer-label {
+  margin-bottom: 0;
+  color: var(--sw-text);
+  font-size: 12px;
+}
+
+.composer-counter {
+  color: var(--sw-text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mode-selector {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  margin: 8px 0;
+}
+
+.mode-option {
+  display: flex;
+  min-height: 42px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 7px;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-sm);
+  background: var(--sw-surface-muted);
+  color: var(--sw-text-soft);
+  font-size: 11px;
+  line-height: 1.2;
+  transition: background var(--sw-transition), border-color var(--sw-transition), color var(--sw-transition);
+}
+
+.mode-option span {
+  font-weight: 700;
+}
+
+.mode-option small {
+  color: var(--sw-text-muted);
+  font-size: 10px;
+}
+
+.mode-option--active {
+  border-color: rgba(37, 99, 235, 0.42);
+  background: var(--sw-primary-soft);
+  color: var(--sw-primary-strong);
+  box-shadow: none;
+}
+
+.mode-option--active small {
+  color: var(--sw-primary);
+}
+
+.advanced-options {
+  margin-bottom: 8px;
+  padding: 7px 8px;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-sm);
+  background: var(--sw-surface-muted);
+}
+
+.advanced-options summary {
+  color: var(--sw-text-soft);
+  font-size: 11px;
+}
+
+.composer-input {
+  min-height: 72px;
+  padding: 9px 10px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.composer-footer {
+  align-items: center;
+  margin-top: 8px;
+}
+
+.environment-hint {
+  max-width: 190px;
+  font-size: 10px;
+}
+
+.send-button {
+  min-width: 72px;
+  min-height: 34px;
+  padding: 8px 12px;
+  border-radius: var(--sw-radius-sm);
+  background: var(--sw-primary);
+  box-shadow: var(--sw-shadow-button);
+  transition: background var(--sw-transition), transform var(--sw-transition), box-shadow var(--sw-transition);
+}
+
+.send-button:hover:not(:disabled) {
+  background: var(--sw-primary-strong);
+  box-shadow: 0 10px 20px rgba(37, 99, 235, 0.26);
+  transform: translateY(-1px);
+}
+
+.composer-cancel-button {
+  min-width: 72px;
+}
+
+.skill-chip {
+  border-color: var(--sw-border);
+  border-radius: var(--sw-radius-xs);
+  background: var(--sw-surface);
+  color: var(--sw-text-soft);
+}
+
+.skill-chip--active {
+  border-color: rgba(37, 99, 235, 0.3);
+  background: var(--sw-primary-soft);
+  color: var(--sw-primary-strong);
+}
+
+@media (max-height: 700px) {
+  .chat-window {
+    padding: 8px;
+  }
+
+  .chat-header {
+    padding: 9px;
+  }
+
+  .composer {
+    max-height: 38vh;
   }
 }
 </style>
