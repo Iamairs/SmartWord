@@ -133,8 +133,8 @@ const actionGroups = [
 <style scoped>
 .quick-actions {
   flex: 0 0 auto;
-  max-height: 31vh;
-  overflow-y: auto;
+  max-height: none;
+  overflow: visible;
   padding: 10px;
   border: 1px solid var(--sw-border);
   border-radius: var(--sw-radius-md);

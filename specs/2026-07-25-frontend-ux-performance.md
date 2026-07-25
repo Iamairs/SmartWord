@@ -10,6 +10,7 @@ SmartWord 前端运行在 Word VSTO 侧边栏中，实际宽度通常约 280-320
 - 流式输出期间每个 chunk 都可能触发响应式更新、Markdown 渲染和滚动计算，容易造成 WebView2 侧边栏卡顿。
 - 消息 Markdown 通过模板方法直接渲染，频繁重渲染时会重复解析历史消息。
 - 多个卡片视觉风格接近但不完全统一，状态反馈和焦点可见性还可以更清晰。
+- 首轮窄栏验收发现，QuickActions、设置等面板放在消息区外侧并各自滚动时，会把输入输出消息挤到很小的高度，形成多层滚动条。
 
 ## 参考原则
 
@@ -55,9 +56,11 @@ SmartWord 前端运行在 Word VSTO 侧边栏中，实际宽度通常约 280-320
    - 流式 `stream_chunk` 事件使用 requestAnimationFrame 批量 flush，减少高频响应式更新。
    - Markdown 渲染结果按消息 id、内容和 citation 版本缓存，避免历史消息重复解析。
    - 自动滚动改为 requestAnimationFrame 调度，并只在接近底部时跟随，避免用户回看历史时被强制拉回。
-   - 对消息卡片启用 `content-visibility` / `contain` 等浏览器渲染提示，降低长对话渲染成本。
+   - 消息卡片保留稳定真实高度，不使用会延迟高度计算的 `content-visibility`，避免自动滚动后内容再次扩张。
 4. 优化关键面板：
-   - QuickActions 改为可折叠面板，默认展示但可收起。
+   - 将 QuickActions、设置、历史和 Skill 面板纳入同一个消息滚动容器，避免面板之间争抢固定高度。
+   - QuickActions 保留可折叠入口，但不再使用独立高度和嵌套滚动；对话开始后它自然位于消息流顶部，不影响输入区。
+   - 初始欢迎态保持在消息滚动区顶部，开始对话后自动跟随最新消息，保证用户能够看到输入和输出。
    - Tool trace 与确认面板统一使用主题 token，状态点、风险标签和按钮层级更明确。
    - 增强 hover / focus-visible / disabled 状态。
 
@@ -70,6 +73,6 @@ SmartWord 前端运行在 Word VSTO 侧边栏中，实际宽度通常约 280-320
 
 ## 风险与注意事项
 
-- WebView2 版本差异可能影响 `content-visibility`，该属性为渐进增强，不影响基础功能。
+- 长消息的实际高度必须在自动滚动前稳定计算，不能使用会改变滚动高度的延迟渲染方案。
 - Markdown 缓存需要在 citation 变化时失效，否则引用按钮可能不刷新，因此缓存 key 包含 citation 版本。
 - 流式 chunk 批量 flush 会把多个小片段合并到一帧内显示，视觉上更顺滑，但不会改变最终内容。

@@ -15,7 +15,7 @@
           :class="{ 'toolbar-button--active': taskHistoryStore.isPanelOpen }"
           type="button"
           :aria-pressed="taskHistoryStore.isPanelOpen"
-          @click="taskHistoryStore.togglePanel()"
+          @click="toggleTaskHistoryPanel"
         >
           任务历史
         </button>
@@ -24,7 +24,7 @@
           :class="{ 'toolbar-button--active': skillsStore.isPanelOpen }"
           type="button"
           :aria-pressed="skillsStore.isPanelOpen"
-          @click="skillsStore.togglePanel()"
+          @click="toggleSkillsPanel"
         >
           Skill
         </button>
@@ -33,22 +33,22 @@
           :class="{ 'toolbar-button--active': settingsStore.isPanelOpen }"
           type="button"
           :aria-pressed="settingsStore.isPanelOpen"
-          @click="settingsStore.togglePanel()"
+          @click="toggleSettingsPanel"
         >
           设置
         </button>
       </nav>
     </header>
 
-    <SettingsPanel v-if="settingsStore.isPanelOpen" />
-    <TaskHistoryPanel
-      v-if="taskHistoryStore.isPanelOpen"
-      @navigate="navigateToParagraph"
-    />
-    <SkillPanel v-if="skillsStore.isPanelOpen" />
-    <QuickActionsPanel v-if="shouldShowQuickActions" @select="submitQuickAction" />
-
     <section class="message-list" ref="messageListRef" @click="handleMessageListClick">
+      <SettingsPanel v-if="settingsStore.isPanelOpen" />
+      <TaskHistoryPanel
+        v-if="taskHistoryStore.isPanelOpen"
+        @navigate="navigateToParagraph"
+      />
+      <SkillPanel v-if="skillsStore.isPanelOpen" />
+      <QuickActionsPanel v-if="shouldShowQuickActions" @select="submitQuickAction" />
+
       <ThoughtActionTrace :tool-calls="chatStore.activeToolCalls" />
       <ContentPreviewPanel
         v-if="chatStore.pendingConfirmation"
@@ -248,7 +248,6 @@ const renderCache = new Map();
 let unsubscribeAgentEvent = null;
 let pendingAssistantChunk = '';
 let chunkFrameId = 0;
-let scrollFrameId = 0;
 const modeOptions = [
   { value: 'ask', label: '问答', hint: '只读' },
   { value: 'plan', label: '规划', hint: '先确认' },
@@ -308,6 +307,10 @@ const shouldShowQuickActions = computed(() => {
     !settingsStore.isPanelOpen &&
     !taskHistoryStore.isPanelOpen &&
     !skillsStore.isPanelOpen;
+});
+
+const hasUserMessages = computed(() => {
+  return chatStore.messages.some((message) => message.role === 'user');
 });
 
 const citationCacheKey = computed(() => {
@@ -567,20 +570,49 @@ function scheduleScrollToBottom(options = {}) {
     return;
   }
 
-  if (scrollFrameId) {
-    return;
-  }
-
-  scrollFrameId = requestFrame(async () => {
-    scrollFrameId = 0;
-    await nextTick();
-    const element = messageListRef.value;
-    if (!element) {
-      return;
+  nextTick(() => {
+    if (messageListRef.value) {
+      messageListRef.value.scrollTop = messageListRef.value.scrollHeight;
     }
-
-    element.scrollTop = element.scrollHeight;
   });
+}
+
+function scheduleScrollToTop() {
+  nextTick(() => {
+    if (messageListRef.value) {
+      messageListRef.value.scrollTop = 0;
+    }
+  });
+}
+
+async function toggleTaskHistoryPanel() {
+  const willOpen = !taskHistoryStore.isPanelOpen;
+  settingsStore.closePanel();
+  skillsStore.isPanelOpen = false;
+  await taskHistoryStore.togglePanel();
+  if (willOpen) {
+    scheduleScrollToTop();
+  }
+}
+
+function toggleSkillsPanel() {
+  const willOpen = !skillsStore.isPanelOpen;
+  settingsStore.closePanel();
+  taskHistoryStore.isPanelOpen = false;
+  skillsStore.togglePanel();
+  if (willOpen) {
+    scheduleScrollToTop();
+  }
+}
+
+function toggleSettingsPanel() {
+  const willOpen = !settingsStore.isPanelOpen;
+  taskHistoryStore.isPanelOpen = false;
+  skillsStore.isPanelOpen = false;
+  settingsStore.togglePanel();
+  if (willOpen) {
+    scheduleScrollToTop();
+  }
 }
 
 function flushPendingAssistantChunk() {
@@ -773,6 +805,7 @@ function handleAgentEvent(event) {
       isCancelling.value = false;
       if (event.message) {
         chatStore.appendAssistantMessage(event.message);
+        scheduleScrollToBottom({ force: true });
       }
       break;
     case 'todo_reminder_injected':
@@ -798,6 +831,7 @@ function handleAgentEvent(event) {
       isCancelling.value = false;
       if (event.message) {
         chatStore.appendAssistantMessage(event.message);
+        scheduleScrollToBottom({ force: true });
       }
       break;
     case 'cancelled':
@@ -806,6 +840,7 @@ function handleAgentEvent(event) {
       chatStore.finishLoading();
       chatStore.finalizeTaskChanges();
       chatStore.appendAssistantMessage(getCancellationMessage());
+      scheduleScrollToBottom({ force: true });
       if (taskHistoryStore.isPanelOpen) {
         taskHistoryStore.loadRecentTasks();
       }
@@ -822,6 +857,7 @@ function handleAgentEvent(event) {
       isCancelling.value = false;
       if (event.message) {
         chatStore.appendAssistantMessage(event.message);
+        scheduleScrollToBottom({ force: true });
       }
       if (taskHistoryStore.isPanelOpen) {
         taskHistoryStore.loadRecentTasks();
@@ -858,7 +894,9 @@ onMounted(async () => {
     );
   }
 
-  scheduleScrollToBottom({ force: true });
+  if (hasUserMessages.value || chatStore.isLoading) {
+    scheduleScrollToBottom({ force: true });
+  }
 });
 
 onUnmounted(() => {
@@ -867,7 +905,6 @@ onUnmounted(() => {
   }
 
   cancelFrame(chunkFrameId);
-  cancelFrame(scrollFrameId);
 });
 
 watch(
@@ -881,7 +918,11 @@ watch(
     chatStore.isLoading
   ],
   () => {
-    scheduleScrollToBottom({ force: chatStore.messages.length <= 2 });
+    if (!hasUserMessages.value && !chatStore.isLoading) {
+      return;
+    }
+
+    scheduleScrollToBottom({ force: hasUserMessages.value && chatStore.messages.length <= 2 });
   }
 );
 
@@ -1496,8 +1537,8 @@ watch(
 }
 
 .settings-panel {
-  max-height: 48vh;
-  overflow-y: auto;
+  max-height: none;
+  overflow: visible;
   padding: 12px;
 }
 
@@ -1532,6 +1573,7 @@ watch(
   min-height: 0;
   gap: 8px;
   padding: 2px 3px 4px 0;
+  overscroll-behavior: contain;
   scrollbar-color: rgba(82, 97, 115, 0.3) transparent;
   scrollbar-width: thin;
 }
@@ -1550,9 +1592,6 @@ watch(
   border: 1px solid var(--sw-border);
   border-radius: var(--sw-radius-md);
   box-shadow: none;
-  contain: content;
-  content-visibility: auto;
-  contain-intrinsic-size: 120px;
 }
 
 .message-card--assistant {
