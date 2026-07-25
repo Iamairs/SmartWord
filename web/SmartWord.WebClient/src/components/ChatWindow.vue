@@ -1,219 +1,216 @@
 <template>
   <div class="chat-window">
-    <header class="chat-header">
-      <div class="chat-header__top">
-        <div>
-          <p class="eyebrow">SmartWord</p>
-          <h1>文档副驾</h1>
-        </div>
-        <span class="mode-pill">{{ modeLabel }}</span>
+    <header class="app-bar">
+      <button
+        class="icon-button menu-button"
+        type="button"
+        :aria-expanded="isNavigationOpen"
+        aria-controls="smartword-navigation"
+        @click="toggleNavigation"
+      >
+        <span class="menu-icon" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="sr-only">打开导航</span>
+      </button>
+      <div class="app-bar__title">
+        <p>SmartWord</p>
+        <h1>{{ viewTitle }}</h1>
       </div>
-      <p class="settings-summary">{{ settingsSummary }}</p>
-      <nav class="header-actions" aria-label="功能面板">
-        <button
-          class="toolbar-button"
-          :class="{ 'toolbar-button--active': taskHistoryStore.isPanelOpen }"
-          type="button"
-          :aria-pressed="taskHistoryStore.isPanelOpen"
-          @click="toggleTaskHistoryPanel"
-        >
-          任务历史
-        </button>
-        <button
-          class="toolbar-button"
-          :class="{ 'toolbar-button--active': skillsStore.isPanelOpen }"
-          type="button"
-          :aria-pressed="skillsStore.isPanelOpen"
-          @click="toggleSkillsPanel"
-        >
-          Skill
-        </button>
-        <button
-          class="toolbar-button"
-          :class="{ 'toolbar-button--active': settingsStore.isPanelOpen }"
-          type="button"
-          :aria-pressed="settingsStore.isPanelOpen"
-          @click="toggleSettingsPanel"
-        >
-          设置
-        </button>
-      </nav>
+      <span v-if="activeView === 'chat'" class="mode-pill">{{ modeLabel }}</span>
     </header>
 
-    <section class="message-list" ref="messageListRef" @click="handleMessageListClick">
-      <SettingsPanel v-if="settingsStore.isPanelOpen" />
-      <TaskHistoryPanel
-        v-if="taskHistoryStore.isPanelOpen"
-        @navigate="navigateToParagraph"
-      />
-      <SkillPanel v-if="skillsStore.isPanelOpen" />
-      <QuickActionsPanel v-if="shouldShowQuickActions" @select="submitQuickAction" />
-
-      <ThoughtActionTrace :tool-calls="chatStore.activeToolCalls" />
-      <ContentPreviewPanel
-        v-if="chatStore.pendingConfirmation"
-        :confirmation="chatStore.pendingConfirmation"
-        @confirm="confirmPendingToolCall"
-        @remember="rememberPendingToolCall"
-        @skip="skipPendingToolCall"
-        @cancel="cancelCurrentRun"
-      />
-      <ChangesSummaryPanel
-        v-if="chatStore.completedTaskChanges.length"
-        :changes="chatStore.completedTaskChanges"
-        @navigate="navigateToParagraph"
-      />
-      <TodoBoardRecoveryPanel
-        v-if="chatStore.pendingTodoRecovery"
-        :recovery="chatStore.pendingTodoRecovery"
-        @recover="submitTodoRecoveryDecision"
-      />
-      <TodoBoardPausePanel
-        v-if="chatStore.pendingTodoPause"
-        :pause="chatStore.pendingTodoPause"
-        @resume="resumePausedTodoRun"
-      />
-      <TodoBoardPanel
-        v-if="shouldShowTodoBoard"
-        :board="chatStore.activeTodoBoard"
-        :current-todo-id="chatStore.currentTodoId"
-        :notice="chatStore.todoBoardNotice"
-      />
-
-      <article
-        v-for="message in chatStore.messages"
-        :key="message.id"
-        class="message-card"
-        :class="`message-card--${message.role}`"
-      >
-        <div class="message-meta">
-          <span>{{ message.role === 'user' ? '你' : 'SmartWord' }}</span>
-          <span>{{ message.timestamp }}</span>
-        </div>
-        <div class="message-body" v-html="renderMessage(message)"></div>
-      </article>
-
-      <!-- Plan 模式：采访问题面板 -->
-      <div v-if="chatStore.pendingQuestion" class="question-panel">
-        <p class="question-panel__text">{{ chatStore.pendingQuestion.question }}</p>
-        <div class="question-panel__options">
-          <button
-            v-for="(opt, idx) in chatStore.pendingQuestion.options"
-            :key="idx"
-            class="question-option-btn"
-            type="button"
-            @click="submitQuestionAnswer(opt)"
-          >{{ opt }}</button>
-        </div>
-        <div class="question-panel__custom">
-          <input
-            v-model="customQuestionAnswer"
-            type="text"
-            placeholder="或输入自定义回答..."
-            @keydown.enter="submitQuestionAnswer(customQuestionAnswer)"
+    <main class="app-content">
+      <section v-if="activeView === 'chat'" class="chat-view">
+        <section class="message-list" ref="messageListRef" @click="handleMessageListClick">
+          <ThoughtActionTrace :tool-calls="chatStore.activeToolCalls" />
+          <ContentPreviewPanel
+            v-if="chatStore.pendingConfirmation"
+            :confirmation="chatStore.pendingConfirmation"
+            @confirm="confirmPendingToolCall"
+            @remember="rememberPendingToolCall"
+            @skip="skipPendingToolCall"
+            @cancel="cancelCurrentRun"
           />
-          <button type="button" class="send-button" @click="submitQuestionAnswer(customQuestionAnswer)">发送</button>
-        </div>
-        <button type="button" class="ghost-button ghost-button--full" @click="cancelCurrentRun">
-          取消规划
-        </button>
-      </div>
+          <ChangesSummaryPanel
+            v-if="chatStore.completedTaskChanges.length"
+            :changes="chatStore.completedTaskChanges"
+            @navigate="navigateToParagraph"
+          />
+          <TodoBoardRecoveryPanel
+            v-if="chatStore.pendingTodoRecovery"
+            :recovery="chatStore.pendingTodoRecovery"
+            @recover="submitTodoRecoveryDecision"
+          />
+          <TodoBoardPausePanel
+            v-if="chatStore.pendingTodoPause"
+            :pause="chatStore.pendingTodoPause"
+            @resume="resumePausedTodoRun"
+          />
+          <TodoBoardPanel
+            v-if="shouldShowTodoBoard"
+            :board="chatStore.activeTodoBoard"
+            :current-todo-id="chatStore.currentTodoId"
+            :notice="chatStore.todoBoardNotice"
+          />
 
-      <!-- Plan 模式：执行计划面板 -->
-      <div v-if="chatStore.activePlan && !chatStore.pendingQuestion" class="plan-panel">
-        <p class="plan-panel__desc">{{ chatStore.activePlan.taskDescription }}</p>
-        <ul class="plan-panel__todo">
-          <li
-            v-for="(item, idx) in chatStore.activePlan.todoList"
-            :key="idx"
-            :class="['todo-item', `todo-item--${item.status || 'pending'}`]"
-          >{{ item.description || item }}</li>
-        </ul>
-        <div v-if="chatStore.activePlan.riskNotes && chatStore.activePlan.riskNotes.length" class="plan-panel__risks">
-          <span v-for="(r, i) in chatStore.activePlan.riskNotes" :key="i" class="risk-note">{{ r }}</span>
-        </div>
-        <button class="send-button send-button--full" type="button" @click="executePlan">开始执行</button>
-      </div>
+          <article
+            v-for="message in chatStore.messages"
+            :key="message.id"
+            class="message-card"
+            :class="`message-card--${message.role}`"
+          >
+            <div class="message-meta">
+              <span>{{ message.role === 'user' ? '你' : 'SmartWord' }}</span>
+              <span>{{ message.timestamp }}</span>
+            </div>
+            <div class="message-body" v-html="renderMessage(message)"></div>
+          </article>
 
-      <div v-if="chatStore.isLoading" class="message-card message-card--assistant">
-        <div class="message-meta">
-          <span>SmartWord</span>
-          <span>处理中</span>
-        </div>
-        <div class="message-body">
-          <span class="typing-dot"></span>
-          <span class="typing-dot"></span>
-          <span class="typing-dot"></span>
-        </div>
-      </div>
-    </section>
+          <div v-if="chatStore.pendingQuestion" class="question-panel">
+            <p class="question-panel__text">{{ chatStore.pendingQuestion.question }}</p>
+            <div class="question-panel__options">
+              <button
+                v-for="(opt, idx) in chatStore.pendingQuestion.options"
+                :key="idx"
+                class="question-option-btn"
+                type="button"
+                @click="submitQuestionAnswer(opt)"
+              >{{ opt }}</button>
+            </div>
+            <div class="question-panel__custom">
+              <input
+                v-model="customQuestionAnswer"
+                type="text"
+                placeholder="或输入自定义回答..."
+                @keydown.enter="submitQuestionAnswer(customQuestionAnswer)"
+              />
+              <button type="button" class="send-button" @click="submitQuestionAnswer(customQuestionAnswer)">发送</button>
+            </div>
+            <button type="button" class="ghost-button ghost-button--full" @click="cancelCurrentRun">取消规划</button>
+          </div>
 
-    <form class="composer" @submit.prevent="submitMessage">
-      <div class="composer-heading">
-        <label class="composer-label" for="chat-input">要处理什么？</label>
-        <span class="composer-counter">{{ draft.length }} / 3000</span>
-      </div>
-      <div class="mode-selector" role="group" aria-label="运行模式">
-        <button
-          v-for="option in modeOptions"
-          :key="option.value"
-          class="mode-option"
-          :class="{ 'mode-option--active': chatStore.currentMode === option.value }"
-          type="button"
-          :disabled="chatStore.isLoading"
-          :aria-pressed="chatStore.currentMode === option.value"
-          @click="chatStore.setMode(option.value)"
-        >
-          <span>{{ option.label }}</span>
-          <small>{{ option.hint }}</small>
-        </button>
-      </div>
-      <details class="advanced-options">
-        <summary>Skill 与运行环境</summary>
-        <div class="skill-selector" v-if="skillsStore.enabledItems.length">
-          <p class="mode-selector__label">使用 Skill</p>
-          <div class="skill-selector__chips">
+          <div v-if="chatStore.activePlan && !chatStore.pendingQuestion" class="plan-panel">
+            <p class="plan-panel__desc">{{ chatStore.activePlan.taskDescription }}</p>
+            <ul class="plan-panel__todo">
+              <li
+                v-for="(item, idx) in chatStore.activePlan.todoList"
+                :key="idx"
+                :class="['todo-item', `todo-item--${item.status || 'pending'}`]"
+              >{{ item.description || item }}</li>
+            </ul>
+            <div v-if="chatStore.activePlan.riskNotes && chatStore.activePlan.riskNotes.length" class="plan-panel__risks">
+              <span v-for="(r, i) in chatStore.activePlan.riskNotes" :key="i" class="risk-note">{{ r }}</span>
+            </div>
+            <button class="send-button send-button--full" type="button" @click="executePlan">开始执行</button>
+          </div>
+
+          <div v-if="chatStore.isLoading" class="message-card message-card--assistant message-card--loading">
+            <div class="message-meta"><span>SmartWord</span><span>处理中</span></div>
+            <div class="message-body"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></div>
+          </div>
+        </section>
+
+        <form class="composer" @submit.prevent="submitMessage">
+          <div class="mode-selector" role="group" aria-label="运行模式">
             <button
-              v-for="skill in skillsStore.enabledItems"
-              :key="skill.name"
-              class="skill-chip"
-              :class="{ 'skill-chip--active': skillsStore.selectedSkillNames.includes(skill.name) }"
+              v-for="option in modeOptions"
+              :key="option.value"
+              class="mode-option"
+              :class="{ 'mode-option--active': chatStore.currentMode === option.value }"
               type="button"
               :disabled="chatStore.isLoading"
-              @click="skillsStore.toggleSelectedSkill(skill.name)"
+              :aria-pressed="chatStore.currentMode === option.value"
+              :title="option.hint"
+              @click="chatStore.setMode(option.value)"
             >
-              {{ skill.displayName || skill.name }}
+              {{ option.label }}
             </button>
           </div>
+          <div class="composer-main">
+            <textarea
+              id="chat-input"
+              ref="composerInputRef"
+              v-model="draft"
+              class="composer-input"
+              rows="1"
+              maxlength="3000"
+              :disabled="chatStore.isLoading"
+              :placeholder="composerPlaceholder"
+              @input="syncComposerHeight"
+              @keydown="handleComposerKeydown"
+            ></textarea>
+            <button
+              v-if="chatStore.isLoading"
+              class="composer-action composer-action--stop"
+              type="button"
+              :disabled="isCancelling"
+              @click="cancelCurrentRun"
+            >{{ isCancelling ? '取消中' : '停止' }}</button>
+            <button v-else class="composer-action composer-action--send" type="submit" :disabled="isSubmitDisabled">发送</button>
+          </div>
+          <div class="composer-tools">
+            <details v-if="skillsStore.enabledItems.length" class="skill-popover">
+              <summary>Skill <span>{{ skillsStore.selectedSkillNames.length }}/3</span></summary>
+              <div class="skill-selector__chips">
+                <button
+                  v-for="skill in skillsStore.enabledItems"
+                  :key="skill.name"
+                  class="skill-chip"
+                  :class="{ 'skill-chip--active': skillsStore.selectedSkillNames.includes(skill.name) }"
+                  type="button"
+                  :disabled="chatStore.isLoading"
+                  @click="skillsStore.toggleSelectedSkill(skill.name)"
+                >{{ skill.displayName || skill.name }}</button>
+              </div>
+            </details>
+            <span class="composer-hint">{{ composerHint }}</span>
+            <span v-if="draft.length" class="composer-counter">{{ draft.length }}/3000</span>
+          </div>
+        </form>
+      </section>
+
+      <section v-else class="page-view">
+        <QuickActionsPanel v-if="activeView === 'quick-actions'" @select="submitQuickAction" />
+        <TaskHistoryPanel v-else-if="activeView === 'history'" @navigate="navigateToParagraph" />
+        <SkillPanel v-else-if="activeView === 'skills'" :show-close-button="false" />
+        <SettingsPanel v-else-if="activeView === 'settings'" :show-close-button="false" />
+      </section>
+    </main>
+
+    <div v-if="isNavigationOpen" class="navigation-backdrop" @click="closeNavigation"></div>
+    <aside
+      id="smartword-navigation"
+      class="navigation-drawer"
+      :class="{ 'navigation-drawer--open': isNavigationOpen }"
+      :aria-hidden="!isNavigationOpen"
+      :inert="!isNavigationOpen"
+      aria-label="主导航"
+    >
+      <div class="navigation-drawer__header">
+        <div>
+          <p>SmartWord</p>
+          <strong>文档副驾</strong>
         </div>
-        <p class="environment-hint environment-hint--wide">{{ environmentHint }}</p>
-      </details>
-      <textarea
-        id="chat-input"
-        v-model="draft"
-        class="composer-input"
-        rows="3"
-        maxlength="3000"
-        :disabled="chatStore.isLoading"
-        :placeholder="composerPlaceholder"
-        @keydown="handleComposerKeydown"
-      ></textarea>
-      <div class="composer-footer">
-        <p class="environment-hint">{{ composerHint }}</p>
-        <button
-          v-if="chatStore.isLoading"
-          class="ghost-button composer-cancel-button"
-          type="button"
-          :disabled="isCancelling"
-          @click="cancelCurrentRun"
-        >
-          {{ isCancelling ? '取消中...' : '取消' }}
-        </button>
-        <button v-else class="send-button" type="submit" :disabled="isSubmitDisabled">
-          发送
-        </button>
+        <button class="icon-button" type="button" aria-label="关闭导航" @click="closeNavigation">×</button>
       </div>
-    </form>
+      <nav class="navigation-list">
+        <button
+          v-for="item in navigationItems"
+          :key="item.id"
+          class="navigation-item"
+          :class="{ 'navigation-item--active': activeView === item.id }"
+          type="button"
+          :aria-current="activeView === item.id ? 'page' : undefined"
+          @click="navigateToView(item.id)"
+        >
+          <span class="navigation-item__icon" aria-hidden="true">{{ item.icon }}</span>
+          <span>{{ item.label }}</span>
+        </button>
+      </nav>
+      <div class="navigation-drawer__footer">
+        <span>{{ settingsStore.form.lightModel || '模型未配置' }}</span>
+        <span>{{ settingsSummary }}</span>
+      </div>
+    </aside>
   </div>
 </template>
 
@@ -242,8 +239,11 @@ const taskHistoryStore = useTaskHistoryStore();
 const skillsStore = useSkillsStore();
 const draft = ref('');
 const messageListRef = ref(null);
+const composerInputRef = ref(null);
 const customQuestionAnswer = ref('');
 const isCancelling = ref(false);
+const activeView = ref('chat');
+const isNavigationOpen = ref(false);
 const renderCache = new Map();
 let unsubscribeAgentEvent = null;
 let pendingAssistantChunk = '';
@@ -252,6 +252,13 @@ const modeOptions = [
   { value: 'ask', label: '问答', hint: '只读' },
   { value: 'plan', label: '规划', hint: '先确认' },
   { value: 'agent', label: '执行', hint: '可写入' }
+];
+const navigationItems = [
+  { id: 'chat', label: '聊天', icon: 'AI' },
+  { id: 'quick-actions', label: '常用任务', icon: 'GO' },
+  { id: 'history', label: '任务历史', icon: 'HI' },
+  { id: 'skills', label: 'Skill', icon: 'SK' },
+  { id: 'settings', label: '设置', icon: 'SE' }
 ];
 const permissionOptions = [
   { value: 'read_only', label: '只读模式' },
@@ -273,6 +280,18 @@ const modeLabel = computed(() => {
   };
 
   return labels[chatStore.currentMode] || '对话交流';
+});
+
+const viewTitle = computed(() => {
+  const titles = {
+    chat: '聊天',
+    'quick-actions': '常用任务',
+    history: '任务历史',
+    skills: 'Skill',
+    settings: '设置'
+  };
+
+  return titles[activeView.value] || '聊天';
 });
 
 const composerPlaceholder = computed(() => {
@@ -302,13 +321,6 @@ const shouldShowTodoBoard = computed(() => {
   return Array.isArray(chatStore.activeTodoBoard.items) && chatStore.activeTodoBoard.items.length > 0;
 });
 
-const shouldShowQuickActions = computed(() => {
-  return !chatStore.isLoading &&
-    !settingsStore.isPanelOpen &&
-    !taskHistoryStore.isPanelOpen &&
-    !skillsStore.isPanelOpen;
-});
-
 const hasUserMessages = computed(() => {
   return chatStore.messages.some((message) => message.role === 'user');
 });
@@ -317,12 +329,6 @@ const citationCacheKey = computed(() => {
   return chatStore.citations
     .map((item) => `${item.ref}:${item.paragraphIndex}`)
     .join('|');
-});
-
-const environmentHint = computed(() => {
-  return hostBridge.isAvailable
-    ? '当前运行在 WebView2 环境，设置会保存到本地应用目录。'
-    : '当前为浏览器预览模式，设置会暂存到本地 localStorage。';
 });
 
 const composerHint = computed(() => {
@@ -395,6 +401,7 @@ async function submitQuickAction(action) {
     return;
   }
 
+  await navigateToView('chat');
   await sendMessage(action.content, action.manualMode || 'ask', action.permissionMode || '');
 }
 
@@ -418,6 +425,7 @@ async function sendMessage(content, manualMode, permissionModeOverride = '') {
   chatStore.setMode(manualMode);
   chatStore.appendUserMessage(content);
   draft.value = '';
+  syncComposerHeight();
   chatStore.startLoading();
 
   try {
@@ -577,42 +585,53 @@ function scheduleScrollToBottom(options = {}) {
   });
 }
 
-function scheduleScrollToTop() {
+function toggleNavigation() {
+  isNavigationOpen.value = !isNavigationOpen.value;
+}
+
+function closeNavigation() {
+  isNavigationOpen.value = false;
+}
+
+async function navigateToView(view) {
+  if (!navigationItems.some((item) => item.id === view)) {
+    return;
+  }
+
+  activeView.value = view;
+  closeNavigation();
+  taskHistoryStore.isPanelOpen = view === 'history';
+  skillsStore.isPanelOpen = view === 'skills';
+  if (view === 'settings') {
+    settingsStore.openPanel();
+  } else {
+    settingsStore.closePanel();
+  }
+
+  if (view === 'history' && !taskHistoryStore.items.length) {
+    await taskHistoryStore.loadRecentTasks();
+  }
+
+  if (view === 'skills' && !skillsStore.items.length) {
+    await skillsStore.loadSkills();
+  }
+
+  if (view === 'chat') {
+    scheduleScrollToBottom({ force: true });
+    nextTick(syncComposerHeight);
+  }
+}
+
+function syncComposerHeight() {
   nextTick(() => {
-    if (messageListRef.value) {
-      messageListRef.value.scrollTop = 0;
+    const element = composerInputRef.value;
+    if (!element) {
+      return;
     }
+
+    element.style.height = 'auto';
+    element.style.height = `${Math.min(element.scrollHeight, 120)}px`;
   });
-}
-
-async function toggleTaskHistoryPanel() {
-  const willOpen = !taskHistoryStore.isPanelOpen;
-  settingsStore.closePanel();
-  skillsStore.isPanelOpen = false;
-  await taskHistoryStore.togglePanel();
-  if (willOpen) {
-    scheduleScrollToTop();
-  }
-}
-
-function toggleSkillsPanel() {
-  const willOpen = !skillsStore.isPanelOpen;
-  settingsStore.closePanel();
-  taskHistoryStore.isPanelOpen = false;
-  skillsStore.togglePanel();
-  if (willOpen) {
-    scheduleScrollToTop();
-  }
-}
-
-function toggleSettingsPanel() {
-  const willOpen = !settingsStore.isPanelOpen;
-  taskHistoryStore.isPanelOpen = false;
-  skillsStore.isPanelOpen = false;
-  settingsStore.togglePanel();
-  if (willOpen) {
-    scheduleScrollToTop();
-  }
 }
 
 function flushPendingAssistantChunk() {
@@ -890,9 +909,11 @@ onMounted(async () => {
 
   if (!chatStore.messages.length) {
     chatStore.appendAssistantMessage(
-      '我可以帮你总结、审阅、改写或整理当前 Word 文档。你可以直接描述目标，也可以先点击上方常用任务。'
+      '我可以帮你总结、审阅、改写或整理当前 Word 文档。直接描述目标即可，也可以从侧边菜单打开常用任务。'
     );
   }
+
+  syncComposerHeight();
 
   if (hasUserMessages.value || chatStore.isLoading) {
     scheduleScrollToBottom({ force: true });
@@ -926,6 +947,8 @@ watch(
   }
 );
 
+watch(draft, syncComposerHeight);
+
 watch(
   () => settingsStore.form.permissionMode,
   (permissionMode) => {
@@ -935,819 +958,461 @@ watch(
 </script>
 
 <style scoped>
-:global(*) {
-  box-sizing: border-box;
-}
-
-:global(html, body, #app) {
-  margin: 0;
-  min-height: 100%;
-  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
-  background:
-    radial-gradient(circle at top, rgba(140, 184, 255, 0.24), transparent 42%),
-    linear-gradient(180deg, #f7f9fc 0%, #eef3f8 100%);
-  color: #18314f;
-}
-
-:global(body) {
-  min-width: 280px;
-}
-
 .chat-window {
-  width: 280px;
-  min-height: 100vh;
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  position: relative;
+  display: grid;
+  grid-template-rows: 48px minmax(0, 1fr);
+  width: 100%;
+  height: 100vh;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--sw-bg);
 }
 
-.chat-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
+.app-bar {
+  position: relative;
+  z-index: 10;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
   gap: 8px;
-  padding: 14px;
-  border: 1px solid rgba(89, 118, 161, 0.18);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.88);
-  box-shadow: 0 14px 36px rgba(24, 49, 79, 0.08);
-}
-
-.eyebrow {
-  margin: 0 0 4px;
-  font-size: 11px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: #6f86a3;
-}
-
-.chat-header h1 {
-  margin: 0;
-  font-size: 22px;
-  line-height: 1.1;
-}
-
-.settings-summary {
-  margin: 6px 0 0;
-  font-size: 11px;
-  line-height: 1.5;
-  color: #60758f;
-}
-
-.header-actions {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
-}
-
-.mode-pill {
+  min-width: 0;
   padding: 6px 10px;
-  border-radius: 999px;
-  background: #18314f;
-  color: #ffffff;
-  font-size: 12px;
-  font-weight: 600;
-  text-align: center;
+  border-bottom: 1px solid var(--sw-border);
+  background: rgba(255, 255, 255, 0.96);
 }
 
-.ghost-button {
-  border: 1px solid rgba(89, 118, 161, 0.22);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.82);
-  color: #244464;
-  font: inherit;
-  font-size: 12px;
-  padding: 8px 10px;
+.app-bar__title {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 7px;
+  overflow: hidden;
+}
+
+.app-bar__title p,
+.app-bar__title h1 {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.app-bar__title p {
+  color: var(--sw-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.app-bar__title h1 {
+  overflow: hidden;
+  color: var(--sw-text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+
+.icon-button {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--sw-radius-sm);
+  background: transparent;
+  color: var(--sw-text-soft);
+  font-size: 20px;
+  line-height: 1;
   cursor: pointer;
 }
 
-.ghost-button--small {
-  padding: 6px 8px;
+.icon-button:hover {
+  border-color: var(--sw-border);
+  background: var(--sw-surface-muted);
+  color: var(--sw-text);
 }
 
-.ghost-button--full {
-  width: 100%;
-}
-
-.settings-panel {
-  padding: 14px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(89, 118, 161, 0.16);
-  box-shadow: 0 18px 40px rgba(24, 49, 79, 0.08);
-}
-
-.settings-panel__header {
+.menu-icon {
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.settings-panel__header h2 {
-  margin: 0;
-  font-size: 16px;
-}
-
-.settings-panel__header p {
-  margin: 4px 0 0;
-  font-size: 11px;
-  line-height: 1.5;
-  color: #60758f;
-}
-
-.settings-grid {
-  display: flex;
+  width: 16px;
   flex-direction: column;
-  gap: 10px;
+  gap: 3px;
 }
 
-.settings-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 12px;
-  color: #395372;
-}
-
-.settings-field input,
-.settings-field select,
-.settings-field textarea {
+.menu-icon i {
+  display: block;
   width: 100%;
-  padding: 10px 12px;
-  border: 1px solid rgba(89, 118, 161, 0.26);
-  border-radius: 14px;
-  font: inherit;
-  color: inherit;
-  background: #f7f9fc;
+  height: 1.5px;
+  border-radius: var(--sw-radius-pill);
+  background: currentColor;
 }
 
-.settings-field textarea {
-  resize: vertical;
-  min-height: 88px;
+.mode-pill {
+  max-width: 78px;
+  padding: 4px 7px;
+  overflow: hidden;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: var(--sw-radius-pill);
+  background: var(--sw-primary-soft);
+  color: var(--sw-primary-strong);
+  font-size: 10px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.settings-field input:focus,
-.settings-field select:focus,
-.settings-field textarea:focus {
-  outline: 2px solid rgba(40, 81, 125, 0.25);
-  border-color: rgba(40, 81, 125, 0.42);
+.app-content,
+.chat-view {
+  min-width: 0;
+  min-height: 0;
 }
 
-.settings-field--checkbox {
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 2px;
+.app-content {
+  overflow: hidden;
 }
 
-.settings-field--checkbox input {
-  width: auto;
-  margin: 0;
-}
-
-.settings-panel__footer {
-  margin-top: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.settings-message {
-  margin: 0;
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.settings-message--success {
-  color: #2d6a4f;
-}
-
-.settings-message--error {
-  color: #b42318;
-}
-
-.send-button--full {
-  width: 100%;
+.chat-view {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  height: 100%;
 }
 
 .message-list {
-  flex: 1;
-  min-height: 0;
   display: flex;
+  min-width: 0;
+  min-height: 0;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+  padding: 14px 12px 18px;
+  overflow-x: hidden;
   overflow-y: auto;
-  padding-right: 4px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.page-view {
+  height: 100%;
+  padding: 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.page-view :deep(.settings-panel),
+.page-view :deep(.skill-panel),
+.page-view :deep(.task-history-panel),
+.page-view :deep(.quick-actions) {
+  min-height: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .message-card {
-  padding: 12px;
-  border-radius: 16px;
-  border: 1px solid rgba(89, 118, 161, 0.16);
-  box-shadow: 0 12px 24px rgba(24, 49, 79, 0.06);
-  word-break: break-word;
-}
-
-.message-card--assistant {
-  background: rgba(255, 255, 255, 0.92);
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .message-card--user {
-  background: linear-gradient(135deg, #18314f 0%, #28517d 100%);
-  color: #ffffff;
+  width: auto;
+  max-width: 88%;
+  align-self: flex-end;
+  padding: 9px 11px;
+  border: 1px solid rgba(37, 99, 235, 0.12);
+  border-radius: 12px 12px 4px 12px;
+  background: #eaf1ff;
+}
+
+.message-card--assistant {
+  align-self: stretch;
 }
 
 .message-meta {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 8px;
-  font-size: 11px;
-  opacity: 0.78;
+  gap: 8px;
+  margin: 0 0 4px;
+  color: var(--sw-text-muted);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.message-card--user .message-meta {
+  margin-bottom: 3px;
+}
+
+.message-meta span:last-child {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .message-body {
+  min-width: 0;
+  color: var(--sw-text);
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.62;
+  overflow-wrap: anywhere;
 }
 
 .message-body :deep(p) {
   margin: 0 0 8px;
 }
 
-.message-body :deep(p:last-child) {
+.message-body :deep(p:last-child),
+.message-body :deep(ul:last-child),
+.message-body :deep(ol:last-child),
+.message-body :deep(pre:last-child) {
   margin-bottom: 0;
+}
+
+.message-body :deep(ul),
+.message-body :deep(ol) {
+  margin: 6px 0 8px;
+  padding-left: 18px;
+}
+
+.message-body :deep(pre) {
+  max-width: 100%;
+  margin: 8px 0;
+  padding: 9px;
+  overflow: auto;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-sm);
+  background: #111827;
+  color: #f9fafb;
+  font-size: 11px;
 }
 
 .message-body :deep(code) {
-  padding: 1px 4px;
-  border-radius: 6px;
-  background: rgba(24, 49, 79, 0.08);
-  font-size: 12px;
+  font-family: Consolas, "Courier New", monospace;
 }
 
-.message-card--user .message-body :deep(code) {
-  background: rgba(255, 255, 255, 0.14);
+.message-body :deep(:not(pre) > code) {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--sw-surface-strong);
+  font-size: 11px;
+}
+
+.message-body :deep(a),
+.message-body :deep(.citation-anchor) {
+  color: var(--sw-primary-strong);
 }
 
 .message-body :deep(.citation-anchor) {
-  border: none;
-  padding: 0 2px;
+  display: inline;
+  padding: 0;
+  border: 0;
   background: transparent;
-  color: #d96f32;
-  font: inherit;
+  font-weight: 700;
   cursor: pointer;
+}
+
+.message-card--loading {
+  min-height: 36px;
 }
 
 .composer {
-  padding: 14px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(89, 118, 161, 0.16);
-  box-shadow: 0 18px 40px rgba(24, 49, 79, 0.08);
-}
-
-.composer-label {
-  display: block;
-  margin-bottom: 8px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #395372;
-}
-
-.advanced-options {
-  margin-bottom: 10px;
-  border: 1px solid rgba(89, 118, 161, 0.18);
-  border-radius: 10px;
-  background: #f7f9fc;
-  padding: 8px;
-}
-
-.advanced-options summary {
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 700;
-  color: #395372;
+  display: grid;
+  flex: initial;
+  gap: 7px;
+  max-height: none;
+  padding: 8px 10px max(8px, env(safe-area-inset-bottom));
+  overflow: visible;
+  border: 0;
+  border-top: 1px solid var(--sw-border);
+  border-radius: 0;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 -5px 18px rgba(17, 24, 39, 0.05);
 }
 
 .mode-selector {
-  margin-top: 10px;
-  margin-bottom: 10px;
-}
-
-.skill-selector {
-  margin-top: 10px;
-}
-
-.mode-selector__label {
-  margin: 0 0 8px;
-  font-size: 11px;
-  color: #60758f;
-}
-
-.mode-selector__options {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.skill-selector__chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-sm);
+  background: var(--sw-surface-muted);
 }
 
 .mode-option {
-  min-height: 38px;
-  padding: 8px 6px;
-  border: 1px solid rgba(89, 118, 161, 0.22);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.84);
-  color: #395372;
+  min-width: 0;
+  min-height: 28px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: var(--sw-radius-xs);
+  background: transparent;
+  color: var(--sw-text-muted);
   font: inherit;
   font-size: 11px;
   font-weight: 600;
-  line-height: 1.3;
+  line-height: 1;
+  white-space: nowrap;
   cursor: pointer;
-  transition:
-    transform 0.16s ease,
-    box-shadow 0.16s ease,
-    border-color 0.16s ease,
-    background 0.16s ease;
 }
 
 .mode-option--active {
-  border-color: rgba(24, 49, 79, 0.48);
-  background: linear-gradient(135deg, #18314f 0%, #28517d 100%);
-  color: #ffffff;
-  box-shadow: 0 10px 18px rgba(24, 49, 79, 0.18);
-}
-
-.composer-input {
-  width: 100%;
-  resize: none;
-  padding: 10px 12px;
-  border: 1px solid rgba(89, 118, 161, 0.26);
-  border-radius: 14px;
-  font: inherit;
-  color: inherit;
-  background: #f7f9fc;
-}
-
-.composer-input:focus {
-  outline: 2px solid rgba(40, 81, 125, 0.25);
-  border-color: rgba(40, 81, 125, 0.42);
-}
-
-.composer-footer {
-  margin-top: 10px;
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  gap: 10px;
-}
-
-.environment-hint {
-  margin: 0;
-  max-width: 130px;
-  font-size: 11px;
-  line-height: 1.5;
-  color: #60758f;
-}
-
-.skill-chip {
-  max-width: 100%;
-  min-height: 30px;
-  padding: 6px 8px;
-  border: 1px solid rgba(89, 118, 161, 0.22);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.84);
-  color: #395372;
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-  overflow-wrap: anywhere;
-}
-
-.skill-chip--active {
-  border-color: rgba(217, 111, 50, 0.46);
-  background: #fff3ea;
-  color: #9a4a1f;
-  font-weight: 700;
-}
-
-.environment-hint--wide {
-  max-width: none;
-}
-
-.send-button {
-  min-width: 76px;
-  padding: 10px 14px;
-  border: none;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #d96f32 0%, #ee8d32 100%);
-  color: #ffffff;
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform 0.16s ease, box-shadow 0.16s ease;
-  box-shadow: 0 10px 18px rgba(217, 111, 50, 0.24);
-}
-
-.composer-cancel-button {
-  min-width: 76px;
-  background: #ffffff;
-}
-
-.send-button:hover:enabled,
-.ghost-button:hover:enabled {
-  transform: translateY(-1px);
-}
-
-.send-button:disabled,
-.ghost-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.65;
-}
-
-.typing-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 6px;
-  border-radius: 50%;
-  background: #28517d;
-  animation: pulse 1s infinite ease-in-out;
-}
-
-.typing-dot:nth-child(2) {
-  animation-delay: 0.2s;
-}
-
-.typing-dot:nth-child(3) {
-  animation-delay: 0.4s;
-  margin-right: 0;
-}
-
-@keyframes pulse {
-  0%,
-  80%,
-  100% {
-    transform: translateY(0);
-    opacity: 0.4;
-  }
-
-  40% {
-    transform: translateY(-3px);
-    opacity: 1;
-  }
-}
-
-/* 窄侧边栏的最终覆盖层：统一层级、密度和状态反馈。 */
-:global(html, body, #app) {
-  background: var(--sw-bg);
+  background: var(--sw-bg-elevated);
   color: var(--sw-text);
+  box-shadow: 0 1px 4px rgba(17, 24, 39, 0.1);
 }
 
-:global(body) {
-  min-width: 280px;
-  overflow: hidden;
-}
-
-.chat-window {
-  width: 100%;
-  max-width: 360px;
-  height: 100vh;
-  min-height: 0;
-  padding: 10px;
-  gap: 8px;
-  overflow: hidden;
-}
-
-.chat-header {
-  display: block;
-  flex: 0 0 auto;
-  padding: 12px;
-  border: 1px solid var(--sw-border);
-  border-radius: var(--sw-radius-md);
-  background: var(--sw-surface);
-  box-shadow: var(--sw-shadow-soft);
-}
-
-.chat-header__top {
+.composer-main {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.eyebrow {
-  margin-bottom: 3px;
-  color: var(--sw-text-muted);
-  letter-spacing: 0.1em;
-}
-
-.chat-header h1 {
-  font-size: 19px;
-  color: var(--sw-text);
-}
-
-.settings-summary {
-  max-width: 100%;
-  margin-top: 8px;
-  overflow: hidden;
-  color: var(--sw-text-muted);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.header-actions {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
-  margin-top: 10px;
-}
-
-.toolbar-button {
   min-width: 0;
-  min-height: 30px;
-  padding: 6px 4px;
-  overflow: hidden;
-  border: 1px solid var(--sw-border);
-  border-radius: var(--sw-radius-sm);
-  background: transparent;
-  color: var(--sw-text-soft);
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  transition: background var(--sw-transition), border-color var(--sw-transition), color var(--sw-transition);
+  align-items: flex-end;
+  gap: 7px;
 }
 
-.toolbar-button:hover {
-  border-color: var(--sw-border-strong);
-  background: var(--sw-surface-strong);
-  color: var(--sw-text);
-}
-
-.toolbar-button--active {
-  border-color: rgba(37, 99, 235, 0.32);
-  background: var(--sw-primary-soft);
-  color: var(--sw-primary-strong);
-}
-
-.mode-pill {
-  flex: 0 0 auto;
-  max-width: 92px;
-  padding: 5px 8px;
-  overflow: hidden;
-  border-radius: var(--sw-radius-pill);
-  background: var(--sw-primary-soft);
-  color: var(--sw-primary-strong);
-  font-size: 11px;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ghost-button {
-  border-color: var(--sw-border);
-  border-radius: var(--sw-radius-sm);
-  background: var(--sw-surface);
-  color: var(--sw-text-soft);
-  transition: background var(--sw-transition), border-color var(--sw-transition), transform var(--sw-transition);
-}
-
-.ghost-button:hover:not(:disabled) {
-  border-color: var(--sw-border-strong);
-  background: var(--sw-surface-strong);
-}
-
-.settings-panel,
-.composer {
-  border: 1px solid var(--sw-border);
-  border-radius: var(--sw-radius-md);
-  background: var(--sw-surface);
-  box-shadow: var(--sw-shadow-soft);
-}
-
-.settings-panel {
-  max-height: none;
-  overflow: visible;
-  padding: 12px;
-}
-
-.settings-panel__header p,
-.settings-field,
-.environment-hint,
-.mode-selector__label {
-  color: var(--sw-text-soft);
-}
-
-.settings-field input,
-.settings-field select,
-.settings-field textarea,
 .composer-input {
-  border-color: var(--sw-border);
-  border-radius: var(--sw-radius-sm);
-  background: var(--sw-surface-muted);
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  max-height: 120px;
+  padding: 10px 11px;
+  overflow-y: auto;
+  border: 1px solid var(--sw-border-strong);
+  border-radius: var(--sw-radius-md);
+  background: var(--sw-bg-elevated);
   color: var(--sw-text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: none;
 }
 
-.settings-field input:focus,
-.settings-field select:focus,
-.settings-field textarea:focus,
 .composer-input:focus {
+  border-color: rgba(37, 99, 235, 0.48);
   outline: none;
-  border-color: rgba(37, 99, 235, 0.5);
   box-shadow: var(--sw-focus);
 }
 
-.message-list {
-  flex: 1 1 auto;
-  min-height: 0;
-  gap: 8px;
-  padding: 2px 3px 4px 0;
-  overscroll-behavior: contain;
-  scrollbar-color: rgba(82, 97, 115, 0.3) transparent;
-  scrollbar-width: thin;
+.composer-input::placeholder {
+  color: var(--sw-text-muted);
 }
 
-.message-list::-webkit-scrollbar {
-  width: 6px;
-}
-
-.message-list::-webkit-scrollbar-thumb {
-  border-radius: var(--sw-radius-pill);
-  background: rgba(82, 97, 115, 0.28);
-}
-
-.message-card {
-  padding: 10px;
-  border: 1px solid var(--sw-border);
+.composer-action {
+  width: 50px;
+  height: 42px;
+  flex: 0 0 50px;
+  padding: 0 8px;
   border-radius: var(--sw-radius-md);
-  box-shadow: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
-.message-card--assistant {
-  background: var(--sw-surface);
-}
-
-.message-card--user {
-  border-color: transparent;
+.composer-action--send {
+  border: 0;
   background: var(--sw-primary);
   color: #ffffff;
 }
 
-.message-meta {
-  margin-bottom: 6px;
-  color: var(--sw-text-muted);
+.composer-action--send:hover:not(:disabled) {
+  background: var(--sw-primary-strong);
 }
 
-.message-card--user .message-meta {
-  color: rgba(255, 255, 255, 0.72);
+.composer-action--stop {
+  border: 1px solid rgba(190, 18, 60, 0.22);
+  background: var(--sw-danger-soft);
+  color: var(--sw-danger);
 }
 
-.message-body {
-  font-size: 12.5px;
-  line-height: 1.62;
-}
-
-.message-body :deep(.citation-anchor) {
-  color: var(--sw-accent);
-  font-weight: 700;
-}
-
-.composer {
-  flex: 0 0 auto;
-  max-height: 43vh;
-  overflow-y: auto;
-  padding: 10px;
-}
-
-.composer-heading {
+.composer-tools {
+  position: relative;
   display: flex;
+  min-width: 0;
+  min-height: 20px;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 7px;
 }
 
-.composer-label {
-  margin-bottom: 0;
-  color: var(--sw-text);
-  font-size: 12px;
+.composer-hint {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--sw-text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .composer-counter {
+  flex: 0 0 auto;
   color: var(--sw-text-muted);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
+  font-size: 9px;
+  white-space: nowrap;
 }
 
-.mode-selector {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 5px;
-  margin: 8px 0;
+.skill-popover {
+  position: relative;
+  flex: 0 0 auto;
 }
 
-.mode-option {
-  display: flex;
-  min-height: 42px;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 2px;
-  padding: 6px 7px;
-  border: 1px solid var(--sw-border);
-  border-radius: var(--sw-radius-sm);
-  background: var(--sw-surface-muted);
-  color: var(--sw-text-soft);
-  font-size: 11px;
-  line-height: 1.2;
-  transition: background var(--sw-transition), border-color var(--sw-transition), color var(--sw-transition);
-}
-
-.mode-option span {
-  font-weight: 700;
-}
-
-.mode-option small {
-  color: var(--sw-text-muted);
-  font-size: 10px;
-}
-
-.mode-option--active {
-  border-color: rgba(37, 99, 235, 0.42);
-  background: var(--sw-primary-soft);
-  color: var(--sw-primary-strong);
-  box-shadow: none;
-}
-
-.mode-option--active small {
-  color: var(--sw-primary);
-}
-
-.advanced-options {
-  margin-bottom: 8px;
-  padding: 7px 8px;
-  border: 1px solid var(--sw-border);
-  border-radius: var(--sw-radius-sm);
-  background: var(--sw-surface-muted);
-}
-
-.advanced-options summary {
-  color: var(--sw-text-soft);
-  font-size: 11px;
-}
-
-.composer-input {
-  min-height: 72px;
-  padding: 9px 10px;
-  resize: vertical;
-  line-height: 1.5;
-}
-
-.composer-footer {
+.skill-popover summary {
+  display: inline-flex;
   align-items: center;
-  margin-top: 8px;
-}
-
-.environment-hint {
-  max-width: 190px;
+  gap: 3px;
+  min-height: 22px;
+  padding: 3px 6px;
+  border-radius: var(--sw-radius-xs);
+  color: var(--sw-text-soft);
   font-size: 10px;
+  font-weight: 600;
+  list-style: none;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
-.send-button {
-  min-width: 72px;
-  min-height: 34px;
-  padding: 8px 12px;
-  border-radius: var(--sw-radius-sm);
-  background: var(--sw-primary);
-  box-shadow: var(--sw-shadow-button);
-  transition: background var(--sw-transition), transform var(--sw-transition), box-shadow var(--sw-transition);
+.skill-popover summary::-webkit-details-marker {
+  display: none;
 }
 
-.send-button:hover:not(:disabled) {
-  background: var(--sw-primary-strong);
-  box-shadow: 0 10px 20px rgba(37, 99, 235, 0.26);
-  transform: translateY(-1px);
+.skill-popover summary:hover {
+  background: var(--sw-surface-muted);
 }
 
-.composer-cancel-button {
-  min-width: 72px;
+.skill-selector__chips {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 25;
+  display: flex;
+  width: min(260px, calc(100vw - 20px));
+  max-height: 160px;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 9px;
+  overflow-y: auto;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-md);
+  background: var(--sw-bg-elevated);
+  box-shadow: var(--sw-shadow-soft);
 }
 
 .skill-chip {
-  border-color: var(--sw-border);
+  max-width: 100%;
+  min-height: 28px;
+  padding: 5px 8px;
+  overflow: hidden;
+  border: 1px solid var(--sw-border);
   border-radius: var(--sw-radius-xs);
-  background: var(--sw-surface);
+  background: var(--sw-surface-muted);
   color: var(--sw-text-soft);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 .skill-chip--active {
@@ -1756,17 +1421,299 @@ watch(
   color: var(--sw-primary-strong);
 }
 
-@media (max-height: 700px) {
-  .chat-window {
-    padding: 8px;
+.navigation-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(17, 24, 39, 0.36);
+}
+
+.navigation-drawer {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 50;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(86vw, 268px);
+  padding: 10px;
+  overflow: hidden;
+  border-right: 1px solid var(--sw-border);
+  background: var(--sw-bg-elevated);
+  box-shadow: 16px 0 36px rgba(17, 24, 39, 0.16);
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(-104%);
+  transition: transform 180ms ease, visibility 0s linear 180ms;
+}
+
+.navigation-drawer--open {
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateX(0);
+  transition: transform 180ms ease;
+}
+
+.navigation-drawer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 2px 2px 12px 8px;
+  border-bottom: 1px solid var(--sw-border);
+}
+
+.navigation-drawer__header p,
+.navigation-drawer__header strong {
+  display: block;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.navigation-drawer__header p {
+  color: var(--sw-text-muted);
+  font-size: 10px;
+}
+
+.navigation-drawer__header strong {
+  margin-top: 2px;
+  color: var(--sw-text);
+  font-size: 14px;
+}
+
+.navigation-list {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 0;
+  overflow-y: auto;
+}
+
+.navigation-item {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  min-height: 40px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: var(--sw-radius-sm);
+  background: transparent;
+  color: var(--sw-text-soft);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.navigation-item:hover {
+  background: var(--sw-surface-muted);
+  color: var(--sw-text);
+}
+
+.navigation-item--active {
+  background: var(--sw-primary-soft);
+  color: var(--sw-primary-strong);
+}
+
+.navigation-item__icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-xs);
+  background: var(--sw-bg-elevated);
+  color: var(--sw-text-muted);
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.navigation-item--active .navigation-item__icon {
+  border-color: rgba(37, 99, 235, 0.2);
+  color: var(--sw-primary-strong);
+}
+
+.navigation-drawer__footer {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 8px 4px;
+  border-top: 1px solid var(--sw-border);
+  color: var(--sw-text-muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.navigation-drawer__footer span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.question-panel,
+.plan-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 11px;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-md);
+  background: var(--sw-bg-elevated);
+  box-shadow: none;
+}
+
+.question-panel__text,
+.plan-panel__desc {
+  margin: 0;
+  color: var(--sw-text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.question-panel__options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.question-option-btn {
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-sm);
+  background: var(--sw-surface-muted);
+  color: var(--sw-text-soft);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.question-panel__custom {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.question-panel__custom input {
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-sm);
+  background: var(--sw-bg-elevated);
+}
+
+.send-button,
+.ghost-button {
+  min-height: 34px;
+  padding: 7px 10px;
+  border-radius: var(--sw-radius-sm);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.send-button {
+  border: 0;
+  background: var(--sw-primary);
+  color: #ffffff;
+}
+
+.ghost-button {
+  border: 1px solid var(--sw-border);
+  background: var(--sw-bg-elevated);
+  color: var(--sw-text-soft);
+}
+
+.send-button--full,
+.ghost-button--full {
+  width: 100%;
+}
+
+.plan-panel__todo {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--sw-text-soft);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.plan-panel__risks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.risk-note {
+  padding: 3px 6px;
+  border-radius: var(--sw-radius-pill);
+  background: var(--sw-warning-soft);
+  color: var(--sw-warning);
+  font-size: 9px;
+}
+
+.typing-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 3px;
+  border-radius: 50%;
+  background: var(--sw-text-muted);
+  animation: typing-pulse 1.2s infinite ease-in-out;
+}
+
+.typing-dot:nth-child(2) {
+  animation-delay: 120ms;
+}
+
+.typing-dot:nth-child(3) {
+  animation-delay: 240ms;
+}
+
+@keyframes typing-pulse {
+  0%,
+  100% {
+    opacity: 0.28;
+    transform: translateY(0);
   }
 
-  .chat-header {
-    padding: 9px;
+  50% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-height: 700px) {
+  .chat-window {
+    padding: 0;
   }
 
   .composer {
-    max-height: 38vh;
+    max-height: none;
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+
+  .message-list {
+    padding-top: 10px;
   }
 }
 </style>

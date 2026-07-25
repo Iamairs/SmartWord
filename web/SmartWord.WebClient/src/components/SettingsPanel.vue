@@ -5,7 +5,12 @@
         <h2>连接设置</h2>
         <p>基础配置用于日常请求，高级配置只在需要单独路由模型时调整。</p>
       </div>
-      <button class="ghost-button ghost-button--small" type="button" @click="settingsStore.closePanel()">
+      <button
+        v-if="showCloseButton"
+        class="ghost-button ghost-button--small"
+        type="button"
+        @click="$emit('close')"
+      >
         关闭
       </button>
     </div>
@@ -171,6 +176,15 @@
 <script setup>
 import { computed, ref } from 'vue';
 import { useSettingsStore } from '../stores/settings';
+
+defineProps({
+  showCloseButton: {
+    type: Boolean,
+    default: true
+  }
+});
+
+defineEmits(['close']);
 
 const settingsStore = useSettingsStore();
 const providerPreset = ref('openai');

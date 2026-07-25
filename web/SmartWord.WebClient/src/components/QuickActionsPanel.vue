@@ -1,14 +1,10 @@
 <template>
   <section class="quick-actions">
-    <details open>
-      <summary class="quick-actions__header">
-        <span>
-          <strong>常用任务</strong>
-          <small>从常见工作流快速开始</small>
-        </span>
-        <span class="quick-actions__toggle">收起</span>
-      </summary>
-
+    <header class="quick-actions__header">
+      <strong>从常见工作流快速开始</strong>
+      <small>点击任务后会自动返回聊天并开始执行。</small>
+    </header>
+    <div class="quick-actions__content">
       <div class="quick-actions__group" v-for="group in actionGroups" :key="group.title">
         <p>{{ group.title }}</p>
         <div class="quick-actions__grid">
@@ -24,7 +20,7 @@
           </button>
         </div>
       </div>
-    </details>
+    </div>
   </section>
 </template>
 
@@ -132,34 +128,14 @@ const actionGroups = [
 
 <style scoped>
 .quick-actions {
-  flex: 0 0 auto;
-  max-height: none;
-  overflow: visible;
-  padding: 10px;
-  border: 1px solid var(--sw-border);
-  border-radius: var(--sw-radius-md);
-  background: var(--sw-surface);
-  box-shadow: var(--sw-shadow-soft);
+  padding: 2px;
 }
 
 .quick-actions__header {
   display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  align-items: center;
-  cursor: pointer;
-  list-style: none;
-}
-
-.quick-actions__header::-webkit-details-marker {
-  display: none;
-}
-
-.quick-actions__header > span:first-child {
-  display: flex;
-  min-width: 0;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
+  padding: 4px 2px 10px;
 }
 
 .quick-actions__header strong {
@@ -174,24 +150,8 @@ const actionGroups = [
   font-size: 10px;
 }
 
-.quick-actions__toggle {
-  flex: 0 0 auto;
-  color: var(--sw-primary-strong);
-  font-size: 10px;
-  font-weight: 700;
-}
-
-.quick-actions details:not([open]) .quick-actions__toggle {
-  font-size: 0;
-}
-
-.quick-actions details:not([open]) .quick-actions__toggle::after {
-  content: '展开';
-  font-size: 10px;
-}
-
 .quick-actions__group {
-  margin-top: 9px;
+  margin-top: 12px;
 }
 
 .quick-actions__group p {
@@ -206,8 +166,8 @@ const actionGroups = [
 }
 
 .quick-action {
-  min-height: 42px;
-  padding: 7px;
+  min-height: 54px;
+  padding: 9px;
   border: 1px solid var(--sw-border);
   border-radius: var(--sw-radius-sm);
   background: var(--sw-surface-muted);
@@ -232,5 +192,6 @@ const actionGroups = [
 .quick-action span {
   font-size: 12px;
   font-weight: 700;
+  white-space: nowrap;
 }
 </style>
