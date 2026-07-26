@@ -18,6 +18,7 @@ using SmartWord.Core.Telemetry;
 using SmartWord.Infrastructure.LlmClients;
 using SmartWord.Infrastructure.Persistence;
 using SmartWord.Infrastructure.Telemetry;
+using SmartWord.OfficeIntegration.ComInterop;
 using SmartWord.OfficeIntegration.Scripting;
 using SmartWord.OfficeIntegration.Tools;
 using SmartWord.OfficeIntegration.WordWrappers;
@@ -106,6 +107,7 @@ namespace SmartWord.EvalRunner
             {
                 object wordApp = null;
                 object openedDocument = null;
+                object documents = null;
                 WordApplicationWrapper wordWrapper = null;
                 try
                 {
@@ -116,8 +118,8 @@ namespace SmartWord.EvalRunner
 
                     wordApp = Activator.CreateInstance(Type.GetTypeFromProgID("Word.Application"));
                     ProgramAccessor.SetComProperty(wordApp, "Visible", options.KeepWordVisible);
-                    dynamic documents = ProgramAccessor.GetComProperty(wordApp, "Documents");
-                    openedDocument = documents.Open(inputCopyPath, ReadOnly: false, Visible: options.KeepWordVisible);
+                    documents = ProgramAccessor.GetComProperty(wordApp, "Documents");
+                    openedDocument = ((dynamic)documents).Open(inputCopyPath, ReadOnly: false, Visible: options.KeepWordVisible);
                     if (openedDocument == null)
                     {
                         throw new InvalidOperationException("Word 未返回已打开的文档对象。");
@@ -146,8 +148,12 @@ namespace SmartWord.EvalRunner
                     dynamic activeDocument = openedDocument;
                     activeDocument.SaveAs2(outputDocxPath);
                     activeDocument.Close(false);
+                    ComObjectReleaser.ReleaseOwned(openedDocument, "EvalRunner.Program.Document");
                     openedDocument = null;
+                    ComObjectReleaser.ReleaseOwned(documents, "EvalRunner.Program.Documents");
+                    documents = null;
                     ProgramAccessor.QuitWord(wordApp);
+                    wordApp = null;
 
                     var score = BenchmarkScorer.Score(
                         benchmarkCase,
@@ -185,7 +191,6 @@ namespace SmartWord.EvalRunner
                 catch (Exception ex)
                 {
                     var rootException = UnwrapException(ex);
-                    ProgramAccessor.TryCloseWord(wordApp);
                     var failed = new CaseRunResult
                     {
                         CaseId = benchmarkCase.Id,
@@ -209,6 +214,9 @@ namespace SmartWord.EvalRunner
                 {
                     wordWrapper?.Dispose();
                     ProgramAccessor.TryCloseDocument(openedDocument);
+                    ComObjectReleaser.ReleaseOwned(openedDocument, "EvalRunner.Program.Document");
+                    ComObjectReleaser.ReleaseOwned(documents, "EvalRunner.Program.Documents");
+                    ProgramAccessor.TryCloseWord(wordApp);
                 }
             }
         }
