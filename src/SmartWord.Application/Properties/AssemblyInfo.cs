@@ -31,3 +31,6 @@ using System.Runtime.InteropServices;
 //
 [assembly: AssemblyVersion("1.0.0.0")]
 [assembly: AssemblyFileVersion("1.0.0.0")]
+
+// 仅向测试程序集开放内部编排组件，避免为了测试扩大生产 API。
+[assembly: InternalsVisibleTo("SmartWord.Application.Tests")]
