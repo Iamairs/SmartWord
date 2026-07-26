@@ -117,4 +117,3 @@ if ($AddIn -or $All) {
 }
 
 Write-Host 'SmartWord 验证完成。' -ForegroundColor Green
-
