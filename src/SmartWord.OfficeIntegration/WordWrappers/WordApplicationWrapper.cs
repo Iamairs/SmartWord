@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -1128,10 +1129,25 @@ namespace SmartWord.OfficeIntegration.WordWrappers
 
         private static string ReadParagraphStyleInternal(dynamic paragraph)
         {
-            dynamic style = null;
+            object style = null;
+            object range = null;
             try
             {
-                style = paragraph == null ? null : paragraph.get_Style();
+                if (paragraph == null)
+                {
+                    return string.Empty;
+                }
+
+                try
+                {
+                    style = ReadComProperty((object)paragraph, "Style");
+                }
+                catch
+                {
+                    range = ReadComProperty((object)paragraph, "Range");
+                    style = range == null ? null : ReadComProperty(range, "Style");
+                }
+
                 if (style == null)
                 {
                     return string.Empty;
@@ -1139,7 +1155,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
 
                 try
                 {
-                    return Convert.ToString(style.NameLocal);
+                    return Convert.ToString(ReadComProperty(style, "NameLocal"));
                 }
                 catch
                 {
@@ -1153,7 +1169,23 @@ namespace SmartWord.OfficeIntegration.WordWrappers
             finally
             {
                 TryReleaseComObject(style);
+                TryReleaseComObject(range);
             }
+        }
+
+        private static object ReadComProperty(object target, string propertyName)
+        {
+            if (target == null)
+            {
+                return null;
+            }
+
+            return target.GetType().InvokeMember(
+                propertyName,
+                BindingFlags.GetProperty,
+                null,
+                target,
+                null);
         }
 
         private static int GetParagraphIndexFromRangeStartInternal(dynamic document, int rangeStart)

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading;
@@ -176,12 +177,12 @@ namespace SmartWord.OfficeIntegration.Tools
                             insertedRange.Text = NormalizeTextForParagraph(operation.Text) + "\r";
                             if (!string.IsNullOrWhiteSpace(operation.Style))
                             {
-                                insertedRange.set_Style(operation.Style);
+                                SetComProperty((object)insertedRange, "Style", operation.Style);
                             }
 
                             return PatchRangeExecutionResult.Ok(operation.ParagraphIndex + 1, "新段落已插入。");
                         case "set_paragraph_style":
-                            range.set_Style(operation.Style ?? string.Empty);
+                            SetComProperty((object)range, "Style", operation.Style ?? string.Empty);
                             return PatchRangeExecutionResult.Ok(operation.ParagraphIndex, "段落样式已更新。");
                         case "delete_paragraph":
                             range.Delete();
@@ -202,6 +203,21 @@ namespace SmartWord.OfficeIntegration.Tools
                     TryReleaseComObject(paragraphs);
                 }
             });
+        }
+
+        private static void SetComProperty(object target, string propertyName, object value)
+        {
+            if (target == null)
+            {
+                throw new InvalidOperationException("Word COM 目标对象为空，无法设置属性 " + propertyName + "。");
+            }
+
+            target.GetType().InvokeMember(
+                propertyName,
+                BindingFlags.SetProperty,
+                null,
+                target,
+                new[] { value });
         }
 
         private static string NormalizeTextForParagraph(string text)
