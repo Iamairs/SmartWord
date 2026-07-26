@@ -5,9 +5,9 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using System.Windows.Forms;
 using Serilog;
 using SmartWord.Core.Interfaces;
+using SmartWord.OfficeIntegration.ComInterop;
 using SmartWord.Core.Models;
 using SmartWord.OfficeIntegration.Models;
 using SmartWord.OfficeIntegration.Reading;
@@ -20,9 +20,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
     public sealed class WordApplicationWrapper : IDisposable, IUndoScopeFactory
     {
         private readonly dynamic _wordApplication;
-        private readonly Control _uiThreadInvoker;
-        private readonly int _ownerThreadId;
-        private readonly bool _useDirectInvoke;
+        private readonly WordUiDispatcher _uiThreadDispatcher;
 
         public WordApplicationWrapper(object wordApplication)
             : this(wordApplication, false)
@@ -32,43 +30,18 @@ namespace SmartWord.OfficeIntegration.WordWrappers
         public WordApplicationWrapper(object wordApplication, bool useDirectInvoke)
         {
             _wordApplication = wordApplication ?? throw new ArgumentNullException(nameof(wordApplication));
-            _ownerThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
-            _useDirectInvoke = useDirectInvoke;
-
-            if (!_useDirectInvoke)
-            {
-                // 在创建包装器时显式绑定一个 WinForms 控件句柄，后续统一用它把 COM 访问切回宿主 UI 线程。
-                _uiThreadInvoker = new Control();
-                var handle = _uiThreadInvoker.Handle;
-            }
+            _uiThreadDispatcher = new WordUiDispatcher(useDirectInvoke);
         }
 
         public Task<T> InvokeAsync<T>(Func<T> action)
         {
-            if (action == null)
-            {
-                throw new ArgumentNullException(nameof(action));
-            }
+            return _uiThreadDispatcher.InvokeAsync(action);
+        }
 
-            if (_useDirectInvoke || System.Threading.Thread.CurrentThread.ManagedThreadId == _ownerThreadId)
-            {
-                return Task.FromResult(action());
-            }
-
-            var taskCompletionSource = new TaskCompletionSource<T>();
-            _uiThreadInvoker.BeginInvoke(new Action(() =>
-            {
-                try
-                {
-                    taskCompletionSource.TrySetResult(action());
-                }
-                catch (Exception ex)
-                {
-                    taskCompletionSource.TrySetException(ex);
-                }
-            }));
-
-            return taskCompletionSource.Task;
+        private Task<T> InvokeReadAsync<T>(string operationName, Func<T> action)
+        {
+            return _uiThreadDispatcher.InvokeAsync(
+                () => ComBusyRetryPolicy.ExecuteRead(action, operationName));
         }
 
         public async Task InvokeAsync(Action action)
@@ -82,68 +55,75 @@ namespace SmartWord.OfficeIntegration.WordWrappers
 
         public Task<string> GetActiveDocumentPath()
         {
-            return InvokeAsync<string>(() =>
+            return InvokeReadAsync<string>("GetActiveDocumentPath", () =>
             {
-                dynamic activeDocument = null;
-                try
+                using (var comScope = new ComScope())
                 {
-                    activeDocument = _wordApplication.ActiveDocument;
-                    return activeDocument == null ? string.Empty : Convert.ToString(activeDocument.FullName);
-                }
-                catch
-                {
-                    return string.Empty;
-                }
-                finally
-                {
-                    TryReleaseComObject(activeDocument);
+                    try
+                    {
+                        dynamic activeDocument = comScope.Track(
+                            (object)_wordApplication.ActiveDocument,
+                            "WordApplicationWrapper.GetActiveDocumentPath.ActiveDocument");
+                        return activeDocument == null ? string.Empty : Convert.ToString(activeDocument.FullName);
+                    }
+                    catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+                    {
+                        throw;
+                    }
+                    catch
+                    {
+                        return string.Empty;
+                    }
                 }
             });
         }
 
         public Task<DocumentStatus> GetDocumentStatusAsync()
         {
-            return InvokeAsync(() =>
+            return InvokeReadAsync("GetDocumentStatusAsync", () =>
             {
-                dynamic activeDocument = null;
-                try
+                using (var comScope = new ComScope())
                 {
-                    activeDocument = _wordApplication.ActiveDocument;
-                    if (activeDocument == null)
+                    try
+                    {
+                        dynamic activeDocument = comScope.Track(
+                            (object)_wordApplication.ActiveDocument,
+                            "WordApplicationWrapper.GetDocumentStatus.ActiveDocument");
+                        if (activeDocument == null)
+                        {
+                            return new DocumentStatus
+                            {
+                                IsWritable = false,
+                                Reason = "当前没有活动文档。"
+                            };
+                        }
+
+                        var isReadOnly = SafeConvertToBool(() => activeDocument.ReadOnly);
+                        var hasProtection = SafeConvertToInt(() => activeDocument.ProtectionType) > 0;
+                        var trackRevisions = SafeConvertToBool(() => activeDocument.TrackRevisions);
+                        return new DocumentStatus
+                        {
+                            IsWritable = !isReadOnly && !hasProtection,
+                            IsReadOnly = isReadOnly,
+                            IsPasswordProtected = hasProtection,
+                            IsTrackChangesEnforced = trackRevisions,
+                            Reason = isReadOnly
+                                ? "当前活动文档处于只读状态。"
+                                : (hasProtection ? "当前活动文档处于受保护状态。" : string.Empty)
+                        };
+                    }
+                    catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
                     {
                         return new DocumentStatus
                         {
                             IsWritable = false,
-                            Reason = "当前没有活动文档。"
+                            Reason = ex.Message
                         };
                     }
-
-                    var isReadOnly = SafeConvertToBool(() => activeDocument.ReadOnly);
-                    var hasProtection = SafeConvertToInt(() => activeDocument.ProtectionType) > 0;
-                    var trackRevisions = SafeConvertToBool(() => activeDocument.TrackRevisions);
-
-                    return new DocumentStatus
-                    {
-                        IsWritable = !isReadOnly && !hasProtection,
-                        IsReadOnly = isReadOnly,
-                        IsPasswordProtected = hasProtection,
-                        IsTrackChangesEnforced = trackRevisions,
-                        Reason = isReadOnly
-                            ? "当前活动文档处于只读状态。"
-                            : (hasProtection ? "当前活动文档处于受保护状态。" : string.Empty)
-                    };
-                }
-                catch (Exception ex)
-                {
-                    return new DocumentStatus
-                    {
-                        IsWritable = false,
-                        Reason = ex.Message
-                    };
-                }
-                finally
-                {
-                    TryReleaseComObject(activeDocument);
                 }
             });
         }
@@ -184,57 +164,63 @@ namespace SmartWord.OfficeIntegration.WordWrappers
 
         public Task<int> GetParagraphCountAsync()
         {
-            return InvokeAsync<int>(() =>
+            return InvokeReadAsync<int>("GetParagraphCountAsync", () =>
             {
-                dynamic document = null;
-                try
+                using (var comScope = new ComScope())
                 {
-                    document = _wordApplication.ActiveDocument;
-                    return document == null ? 0 : Convert.ToInt32(document.Paragraphs.Count);
-                }
-                catch
-                {
-                    return 0;
-                }
-                finally
-                {
-                    TryReleaseComObject(document);
+                    try
+                    {
+                        dynamic document = comScope.Track(
+                            (object)_wordApplication.ActiveDocument,
+                            "WordApplicationWrapper.GetParagraphCount.Document");
+                        dynamic paragraphs = comScope.Track(
+                            document == null ? null : (object)document.Paragraphs,
+                            "WordApplicationWrapper.GetParagraphCount.Paragraphs");
+                        return paragraphs == null ? 0 : Convert.ToInt32(paragraphs.Count);
+                    }
+                    catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+                    {
+                        throw;
+                    }
+                    catch
+                    {
+                        return 0;
+                    }
                 }
             });
         }
 
         public Task<int> GetWordCountAsync()
         {
-            return InvokeAsync<int>(() =>
+            return InvokeReadAsync<int>("GetWordCountAsync", () =>
             {
-                dynamic document = null;
-                dynamic words = null;
-                try
+                using (var comScope = new ComScope())
                 {
-                    document = _wordApplication.ActiveDocument;
-                    if (document == null)
+                    try
+                    {
+                        dynamic document = comScope.Track(
+                            (object)_wordApplication.ActiveDocument,
+                            "WordApplicationWrapper.GetWordCount.Document");
+                        dynamic words = comScope.Track(
+                            document == null ? null : (object)document.Words,
+                            "WordApplicationWrapper.GetWordCount.Words");
+                        return words == null ? 0 : Convert.ToInt32(words.Count);
+                    }
+                    catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+                    {
+                        throw;
+                    }
+                    catch
                     {
                         return 0;
                     }
-
-                    words = document.Words;
-                    return words == null ? 0 : Convert.ToInt32(words.Count);
-                }
-                catch
-                {
-                    return 0;
-                }
-                finally
-                {
-                    TryReleaseComObject(words);
-                    TryReleaseComObject(document);
                 }
             });
         }
 
         public Task<(int CurrentPage, int TotalPages)> GetPageInfoAsync()
         {
-            return InvokeAsync<(int CurrentPage, int TotalPages)>(() =>
+            return InvokeReadAsync<(int CurrentPage, int TotalPages)>("GetPageInfoAsync", () =>
             {
                 dynamic document = null;
                 dynamic selection = null;
@@ -245,6 +231,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                     var currentPage = selection == null ? 0 : SafeConvertToInt(() => selection.get_Information(3));
                     var totalPages = document == null ? 0 : SafeConvertToInt(() => document.ComputeStatistics(2));
                     return (currentPage, totalPages);
+                }
+                catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+                {
+                    throw;
                 }
                 catch
                 {
@@ -260,7 +250,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
 
         public Task<int> GetCursorParagraphIndexAsync()
         {
-            return InvokeAsync<int>(() =>
+            return InvokeReadAsync<int>("GetCursorParagraphIndexAsync", () =>
             {
                 dynamic document = null;
                 dynamic selection = null;
@@ -273,6 +263,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                     return document == null || range == null
                         ? -1
                         : GetParagraphIndexFromRangeStartInternal(document, SafeConvertToInt(() => range.Start));
+                }
+                catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -301,7 +295,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
 
         public Task<SelectionSnapshot> GetSelectionSnapshotAsync()
         {
-            return InvokeAsync(() =>
+            return InvokeReadAsync("GetSelectionSnapshotAsync", () =>
             {
                 var stopwatch = Stopwatch.StartNew();
                 dynamic document = null;
@@ -363,6 +357,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                         + stopwatch.ElapsedMilliseconds);
                     return snapshot;
                 }
+                catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+                {
+                    throw;
+                }
                 catch (Exception ex)
                 {
                     WriteDiagnosticWarning("读取选区信息失败：" + ex);
@@ -379,7 +377,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
 
         public Task<List<DocumentHeading>> GetHeadingsAsync()
         {
-            return InvokeAsync<List<DocumentHeading>>(() =>
+            return InvokeReadAsync<List<DocumentHeading>>("GetHeadingsAsync", () =>
             {
                 var stopwatch = Stopwatch.StartNew();
                 var headings = new List<DocumentHeading>();
@@ -458,6 +456,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                         + stopwatch.ElapsedMilliseconds);
                     return headings;
                 }
+                catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+                {
+                    throw;
+                }
                 catch (Exception ex)
                 {
                     var documentPath = SafeGetDocumentPath(document);
@@ -474,7 +476,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
 
         public Task<List<(int Index, string Style, string Text)>> ReadParagraphsAsync(int fromIndex, int toIndex)
         {
-            return InvokeAsync<List<(int Index, string Style, string Text)>>(() =>
+            return InvokeReadAsync<List<(int Index, string Style, string Text)>>("ReadParagraphsAsync", () =>
             {
                 var stopwatch = Stopwatch.StartNew();
                 var paragraphs = new List<(int Index, string Style, string Text)>();
@@ -536,6 +538,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                         + stopwatch.ElapsedMilliseconds);
                     return paragraphs;
                 }
+                catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+                {
+                    throw;
+                }
                 catch (Exception ex)
                 {
                     var documentPath = SafeGetDocumentPath(document);
@@ -563,7 +569,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
             bool useRegex,
             int maxResults)
         {
-            return InvokeAsync<List<(int ParagraphIndex, int CharOffset, string ParagraphText)>>(() =>
+            return InvokeReadAsync<List<(int ParagraphIndex, int CharOffset, string ParagraphText)>>("SearchTextAsync", () =>
             {
                 var stopwatch = Stopwatch.StartNew();
                 var results = new List<(int ParagraphIndex, int CharOffset, string ParagraphText)>();
@@ -645,6 +651,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                         + stopwatch.ElapsedMilliseconds);
                     return results;
                 }
+                catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+                {
+                    throw;
+                }
                 catch (Exception ex)
                 {
                     var documentPath = SafeGetDocumentPath(document);
@@ -669,7 +679,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
 
         public Task<string> GetParagraphTextAsync(int paragraphIndex)
         {
-            return InvokeAsync<string>(() =>
+            return InvokeReadAsync<string>("GetParagraphTextAsync", () =>
             {
                 dynamic document = null;
                 dynamic paragraphs = null;
@@ -694,6 +704,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                     range = paragraph == null ? null : paragraph.Range;
                     return NormalizeParagraphText(range == null ? string.Empty : Convert.ToString(range.Text));
                 }
+                catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+                {
+                    throw;
+                }
                 catch
                 {
                     return string.Empty;
@@ -710,7 +724,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
 
         public Task<string> GetParagraphStyleAsync(int paragraphIndex)
         {
-            return InvokeAsync<string>(() =>
+            return InvokeReadAsync<string>("GetParagraphStyleAsync", () =>
             {
                 dynamic document = null;
                 dynamic paragraphs = null;
@@ -732,6 +746,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
 
                     paragraph = paragraphs[paragraphIndex + 1];
                     return ReadParagraphStyleInternal(paragraph);
+                }
+                catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+                {
+                    throw;
                 }
                 catch
                 {
@@ -784,67 +802,62 @@ namespace SmartWord.OfficeIntegration.WordWrappers
 
         public Task<DocumentStructureStats> GetDocumentStatsAsync()
         {
-            return InvokeAsync(() =>
+            return InvokeReadAsync("GetDocumentStatsAsync", () =>
             {
                 var stopwatch = Stopwatch.StartNew();
-                dynamic document = null;
-                dynamic tables = null;
-                dynamic inlineShapes = null;
-                dynamic shapes = null;
-                dynamic comments = null;
-                try
+                using (var comScope = new ComScope())
                 {
-                    document = _wordApplication.ActiveDocument;
-                    if (document == null)
+                    try
                     {
+                        dynamic document = comScope.Track(
+                            (object)_wordApplication.ActiveDocument,
+                            "WordApplicationWrapper.GetDocumentStats.Document");
+                        if (document == null)
+                        {
+                            return new DocumentStructureStats();
+                        }
+
+                        dynamic tables = comScope.Track((object)document.Tables, "WordApplicationWrapper.GetDocumentStats.Tables");
+                        dynamic inlineShapes = comScope.Track((object)document.InlineShapes, "WordApplicationWrapper.GetDocumentStats.InlineShapes");
+                        dynamic shapes = comScope.Track((object)document.Shapes, "WordApplicationWrapper.GetDocumentStats.Shapes");
+                        dynamic comments = comScope.Track((object)document.Comments, "WordApplicationWrapper.GetDocumentStats.Comments");
+                        var stats = new DocumentStructureStats
+                        {
+                            TableCount = tables == null ? 0 : Convert.ToInt32(tables.Count),
+                            ImageCount = (inlineShapes == null ? 0 : Convert.ToInt32(inlineShapes.Count))
+                                + (shapes == null ? 0 : Convert.ToInt32(shapes.Count)),
+                            AnnotationCount = comments == null ? 0 : Convert.ToInt32(comments.Count)
+                        };
+                        var documentPath = SafeGetDocumentPath(document);
+                        WriteDiagnosticInfo(
+                            "读取文档统计成功。DocumentPath="
+                            + documentPath
+                            + ", TableCount="
+                            + stats.TableCount
+                            + ", ImageCount="
+                            + stats.ImageCount
+                            + ", AnnotationCount="
+                            + stats.AnnotationCount
+                            + ", DurationMs="
+                            + stopwatch.ElapsedMilliseconds);
+                        return stats;
+                    }
+                    catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        WriteDiagnosticWarning("读取文档统计失败。Exception=" + ex);
                         return new DocumentStructureStats();
                     }
-
-                    tables = document.Tables;
-                    inlineShapes = document.InlineShapes;
-                    shapes = document.Shapes;
-                    comments = document.Comments;
-                    var stats = new DocumentStructureStats
-                    {
-                        TableCount = tables == null ? 0 : Convert.ToInt32(tables.Count),
-                        ImageCount = (inlineShapes == null ? 0 : Convert.ToInt32(inlineShapes.Count))
-                            + (shapes == null ? 0 : Convert.ToInt32(shapes.Count)),
-                        AnnotationCount = comments == null ? 0 : Convert.ToInt32(comments.Count)
-                    };
-                    var documentPath = SafeGetDocumentPath(document);
-                    WriteDiagnosticInfo(
-                        "读取文档统计成功。DocumentPath="
-                        + documentPath
-                        + ", TableCount="
-                        + stats.TableCount
-                        + ", ImageCount="
-                        + stats.ImageCount
-                        + ", AnnotationCount="
-                        + stats.AnnotationCount
-                        + ", DurationMs="
-                        + stopwatch.ElapsedMilliseconds);
-                    return stats;
-                }
-                catch (Exception ex)
-                {
-                    var documentPath = SafeGetDocumentPath(document);
-                    WriteDiagnosticWarning("读取文档统计失败。DocumentPath=" + documentPath + "，Exception=" + ex);
-                    return new DocumentStructureStats();
-                }
-                finally
-                {
-                    TryReleaseComObject(comments);
-                    TryReleaseComObject(shapes);
-                    TryReleaseComObject(inlineShapes);
-                    TryReleaseComObject(tables);
-                    TryReleaseComObject(document);
                 }
             });
         }
 
         public Task<TableReadResult> ReadTableAsync(int tableIndex, int maxRows, int maxColumns)
         {
-            return InvokeAsync<TableReadResult>(() =>
+            return InvokeReadAsync<TableReadResult>("ReadTableAsync", () =>
             {
                 var stopwatch = Stopwatch.StartNew();
                 var diagnostics = new ReadDiagnostics();
@@ -913,6 +926,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                         + failureReason);
                     return CreateTableReadFailure(failureReason, diagnostics);
                 }
+                catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+                {
+                    throw;
+                }
                 catch (Exception ex)
                 {
                     var documentPath = SafeGetDocumentPath(document);
@@ -937,7 +954,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
 
         public Task<IReadOnlyList<AnnotationSnapshot>> ReadAnnotationsAsync(string authorFilter, int maxResults)
         {
-            return InvokeAsync<IReadOnlyList<AnnotationSnapshot>>(() =>
+            return InvokeReadAsync<IReadOnlyList<AnnotationSnapshot>>("ReadAnnotationsAsync", () =>
             {
                 var stopwatch = Stopwatch.StartNew();
                 var annotations = new List<AnnotationSnapshot>();
@@ -1014,6 +1031,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                         + stopwatch.ElapsedMilliseconds);
                     return annotations;
                 }
+                catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+                {
+                    throw;
+                }
                 catch (Exception ex)
                 {
                     var documentPath = SafeGetDocumentPath(document);
@@ -1080,7 +1101,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
 
         public void Dispose()
         {
-            _uiThreadInvoker?.Dispose();
+            _uiThreadDispatcher.Dispose();
         }
 
         private static int SafeConvertToInt(Func<object> accessor)
@@ -1089,6 +1110,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
             {
                 var value = accessor();
                 return value == null ? 0 : Convert.ToInt32(value);
+            }
+            catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+            {
+                throw;
             }
             catch
             {
@@ -1105,6 +1130,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                 errorMessage = string.Empty;
                 return true;
             }
+            catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 value = 0;
@@ -1119,6 +1148,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
             {
                 var value = accessor();
                 return value != null && Convert.ToBoolean(value);
+            }
+            catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+            {
+                throw;
             }
             catch
             {
@@ -1141,10 +1174,18 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                 {
                     return Convert.ToString(style.NameLocal);
                 }
+                catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+                {
+                    throw;
+                }
                 catch
                 {
                     return Convert.ToString(style);
                 }
+            }
+            catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+            {
+                throw;
             }
             catch
             {
@@ -1162,6 +1203,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
             {
                 var paragraphRanges = GetParagraphRangeBoundsInternal((object)document);
                 return ParagraphRangeLocator.LocateParagraphIndex(paragraphRanges, rangeStart);
+            }
+            catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -1233,6 +1278,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
             {
                 return document == null ? string.Empty : Convert.ToString(document.FullName);
             }
+            catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+            {
+                throw;
+            }
             catch
             {
                 return string.Empty;
@@ -1244,6 +1293,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
             try
             {
                 return accessor() ?? string.Empty;
+            }
+            catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+            {
+                throw;
             }
             catch
             {
@@ -1336,6 +1389,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                         rowMap[zeroBasedColumnIndex] = NormalizeParagraphText(
                             cellRange == null ? string.Empty : Convert.ToString(cellRange.Text));
                     }
+                    catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+                    {
+                        throw;
+                    }
                     catch (Exception ex)
                     {
                         skippedCellCount++;
@@ -1376,6 +1433,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                     maxColumns,
                     matrix);
                 return true;
+            }
+            catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -1462,6 +1523,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                                 rowMap[cellIndex - 1] = NormalizeParagraphText(
                                     cellRange == null ? string.Empty : Convert.ToString(cellRange.Text));
                             }
+                            catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+                            {
+                                throw;
+                            }
                             catch (Exception ex)
                             {
                                 skippedCellCount++;
@@ -1512,6 +1577,10 @@ namespace SmartWord.OfficeIntegration.WordWrappers
                     maxColumns,
                     matrix);
                 return true;
+            }
+            catch (COMException busyException) when (ComBusyRetryPolicy.IsWordBusy(busyException))
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -1622,28 +1691,9 @@ namespace SmartWord.OfficeIntegration.WordWrappers
             };
         }
 
-        internal static void TryReleaseComObjectSilently(object comObject)
-        {
-            TryReleaseComObject(comObject);
-        }
-
         private static void TryReleaseComObject(object comObject)
         {
-            if (comObject == null)
-            {
-                return;
-            }
-
-            try
-            {
-                if (Marshal.IsComObject(comObject))
-                {
-                    Marshal.ReleaseComObject(comObject);
-                }
-            }
-            catch
-            {
-            }
+            ComObjectReleaser.ReleaseOwned(comObject, "WordApplicationWrapper");
         }
     }
 }

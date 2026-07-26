@@ -1,4 +1,5 @@
 using System;
+using SmartWord.OfficeIntegration.ComInterop;
 
 namespace SmartWord.EvalRunner
 {
@@ -7,21 +8,29 @@ namespace SmartWord.EvalRunner
         public static string ReadText(string docxPath)
         {
             object wordApp = null;
+            object documents = null;
+            object document = null;
+            object content = null;
             try
             {
                 wordApp = Activator.CreateInstance(Type.GetTypeFromProgID("Word.Application"));
                 ProgramAccessor.SetComProperty(wordApp, "Visible", false);
-                dynamic documents = ProgramAccessor.GetComProperty(wordApp, "Documents");
-                dynamic document = documents.Open(docxPath, ReadOnly: true, Visible: false);
-                string text = Convert.ToString(document.Content.Text);
-                document.Close(false);
-                ProgramAccessor.QuitWord(wordApp);
-                return text ?? string.Empty;
+                documents = ProgramAccessor.GetComProperty(wordApp, "Documents");
+                document = ((dynamic)documents).Open(docxPath, ReadOnly: true, Visible: false);
+                content = document == null ? null : ((dynamic)document).Content;
+                return content == null ? string.Empty : Convert.ToString(((dynamic)content).Text) ?? string.Empty;
             }
             catch
             {
-                ProgramAccessor.TryCloseWord(wordApp);
                 return string.Empty;
+            }
+            finally
+            {
+                ProgramAccessor.TryCloseDocument(document);
+                ComObjectReleaser.ReleaseOwned(content, "EvalRunner.WordTextReader.Content");
+                ComObjectReleaser.ReleaseOwned(document, "EvalRunner.WordTextReader.Document");
+                ComObjectReleaser.ReleaseOwned(documents, "EvalRunner.WordTextReader.Documents");
+                ProgramAccessor.TryCloseWord(wordApp);
             }
         }
     }
@@ -45,8 +54,14 @@ namespace SmartWord.EvalRunner
                 return;
             }
 
-            wordApp.GetType().InvokeMember("Quit", System.Reflection.BindingFlags.InvokeMethod, null, wordApp, new object[] { false });
-            System.Runtime.InteropServices.Marshal.FinalReleaseComObject(wordApp);
+            try
+            {
+                wordApp.GetType().InvokeMember("Quit", System.Reflection.BindingFlags.InvokeMethod, null, wordApp, new object[] { false });
+            }
+            finally
+            {
+                ComObjectReleaser.FinalReleaseOwned(wordApp, "EvalRunner.WordApplication");
+            }
         }
 
         public static void InvokeComMethod(object target, string name)
