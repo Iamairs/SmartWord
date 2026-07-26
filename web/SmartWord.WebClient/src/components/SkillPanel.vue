@@ -6,7 +6,12 @@
         <h2>文档能力包</h2>
         <p>选择、创建和管理当前本机的 Word 文档工作流。</p>
       </div>
-      <button class="ghost-button ghost-button--small" type="button" @click="skillsStore.togglePanel()">
+      <button
+        v-if="showCloseButton"
+        class="ghost-button ghost-button--small"
+        type="button"
+        @click="$emit('close')"
+      >
         收起
       </button>
     </div>
@@ -134,6 +139,15 @@
 <script setup>
 import { computed, onMounted } from 'vue';
 import { useSkillsStore } from '../stores/skills';
+
+defineProps({
+  showCloseButton: {
+    type: Boolean,
+    default: true
+  }
+});
+
+defineEmits(['close']);
 
 const skillsStore = useSkillsStore();
 

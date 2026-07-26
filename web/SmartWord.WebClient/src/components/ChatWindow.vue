@@ -1,140 +1,116 @@
 <template>
   <div class="chat-window">
-    <header class="chat-header">
-      <div>
-        <p class="eyebrow">SmartWord</p>
-        <h1>文档副驾</h1>
-        <p class="settings-summary">{{ settingsSummary }}</p>
+    <header class="app-bar">
+      <button
+        class="icon-button menu-button"
+        type="button"
+        :aria-expanded="isNavigationOpen"
+        aria-controls="smartword-navigation"
+        @click="toggleNavigation"
+      >
+        <span class="menu-icon" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="sr-only">打开导航</span>
+      </button>
+      <div class="app-bar__title">
+        <p>SmartWord</p>
+        <h1>{{ viewTitle }}</h1>
       </div>
-      <div class="header-actions">
-        <button class="ghost-button" type="button" @click="taskHistoryStore.togglePanel()">
-          {{ taskHistoryStore.isPanelOpen ? '收起历史' : '历史' }}
-        </button>
-        <button class="ghost-button" type="button" @click="skillsStore.togglePanel()">
-          {{ skillsStore.isPanelOpen ? '收起Skill' : 'Skill' }}
-        </button>
-        <button class="ghost-button" type="button" @click="settingsStore.togglePanel()">
-          {{ settingsStore.isPanelOpen ? '收起设置' : '设置' }}
-        </button>
-        <span class="mode-pill">{{ modeBadgeText }}</span>
-      </div>
+      <span v-if="activeView === 'chat'" class="mode-pill">{{ modeLabel }}</span>
     </header>
 
-    <SettingsPanel v-if="settingsStore.isPanelOpen" />
-    <TaskHistoryPanel
-      v-if="taskHistoryStore.isPanelOpen"
-      @navigate="navigateToParagraph"
-    />
-    <SkillPanel v-if="skillsStore.isPanelOpen" />
-    <QuickActionsPanel v-if="!chatStore.isLoading" @select="submitQuickAction" />
-
-    <section class="message-list" ref="messageListRef" @click="handleMessageListClick">
-      <ThoughtActionTrace :tool-calls="chatStore.activeToolCalls" />
-      <ContentPreviewPanel
-        v-if="chatStore.pendingConfirmation"
-        :confirmation="chatStore.pendingConfirmation"
-        @confirm="confirmPendingToolCall"
-        @remember="rememberPendingToolCall"
-        @skip="skipPendingToolCall"
-        @cancel="cancelCurrentRun"
-      />
-      <ChangesSummaryPanel
-        v-if="chatStore.completedTaskChanges.length"
-        :changes="chatStore.completedTaskChanges"
-        @navigate="navigateToParagraph"
-      />
-      <TodoBoardRecoveryPanel
-        v-if="chatStore.pendingTodoRecovery"
-        :recovery="chatStore.pendingTodoRecovery"
-        @recover="submitTodoRecoveryDecision"
-      />
-      <TodoBoardPausePanel
-        v-if="chatStore.pendingTodoPause"
-        :pause="chatStore.pendingTodoPause"
-        @resume="resumePausedTodoRun"
-      />
-      <TodoBoardPanel
-        v-if="shouldShowTodoBoard"
-        :board="chatStore.activeTodoBoard"
-        :current-todo-id="chatStore.currentTodoId"
-        :notice="chatStore.todoBoardNotice"
-      />
-
-      <article
-        v-for="message in chatStore.messages"
-        :key="message.id"
-        class="message-card"
-        :class="`message-card--${message.role}`"
-      >
-        <div class="message-meta">
-          <span>{{ message.role === 'user' ? '你' : 'SmartWord' }}</span>
-          <span>{{ message.timestamp }}</span>
-        </div>
-        <div class="message-body" v-html="renderMessage(message)"></div>
-      </article>
-
-      <!-- Plan 模式：采访问题面板 -->
-      <div v-if="chatStore.pendingQuestion" class="question-panel">
-        <p class="question-panel__text">{{ chatStore.pendingQuestion.question }}</p>
-        <div class="question-panel__options">
-          <button
-            v-for="(opt, idx) in chatStore.pendingQuestion.options"
-            :key="idx"
-            class="question-option-btn"
-            type="button"
-            @click="submitQuestionAnswer(opt)"
-          >{{ opt }}</button>
-        </div>
-        <div class="question-panel__custom">
-          <input
-            v-model="customQuestionAnswer"
-            type="text"
-            placeholder="或输入自定义回答..."
-            @keydown.enter="submitQuestionAnswer(customQuestionAnswer)"
+    <main class="app-content">
+      <section v-if="activeView === 'chat'" class="chat-view">
+        <section class="message-list" ref="messageListRef" @click="handleMessageListClick">
+          <ThoughtActionTrace :tool-calls="chatStore.activeToolCalls" />
+          <ContentPreviewPanel
+            v-if="chatStore.pendingConfirmation"
+            :confirmation="chatStore.pendingConfirmation"
+            @confirm="confirmPendingToolCall"
+            @remember="rememberPendingToolCall"
+            @skip="skipPendingToolCall"
+            @cancel="cancelCurrentRun"
           />
-          <button type="button" class="send-button" @click="submitQuestionAnswer(customQuestionAnswer)">发送</button>
-        </div>
-        <button type="button" class="ghost-button ghost-button--full" @click="cancelCurrentRun">
-          取消规划
-        </button>
-      </div>
+          <ChangesSummaryPanel
+            v-if="chatStore.completedTaskChanges.length"
+            :changes="chatStore.completedTaskChanges"
+            @navigate="navigateToParagraph"
+          />
+          <TodoBoardRecoveryPanel
+            v-if="chatStore.pendingTodoRecovery"
+            :recovery="chatStore.pendingTodoRecovery"
+            @recover="submitTodoRecoveryDecision"
+          />
+          <TodoBoardPausePanel
+            v-if="chatStore.pendingTodoPause"
+            :pause="chatStore.pendingTodoPause"
+            @resume="resumePausedTodoRun"
+          />
+          <TodoBoardPanel
+            v-if="shouldShowTodoBoard"
+            :board="chatStore.activeTodoBoard"
+            :current-todo-id="chatStore.currentTodoId"
+            :notice="chatStore.todoBoardNotice"
+          />
 
-      <!-- Plan 模式：执行计划面板 -->
-      <div v-if="chatStore.activePlan && !chatStore.pendingQuestion" class="plan-panel">
-        <p class="plan-panel__desc">{{ chatStore.activePlan.taskDescription }}</p>
-        <ul class="plan-panel__todo">
-          <li
-            v-for="(item, idx) in chatStore.activePlan.todoList"
-            :key="idx"
-            :class="['todo-item', `todo-item--${item.status || 'pending'}`]"
-          >{{ item.description || item }}</li>
-        </ul>
-        <div v-if="chatStore.activePlan.riskNotes && chatStore.activePlan.riskNotes.length" class="plan-panel__risks">
-          <span v-for="(r, i) in chatStore.activePlan.riskNotes" :key="i" class="risk-note">{{ r }}</span>
-        </div>
-        <button class="send-button send-button--full" type="button" @click="executePlan">开始执行</button>
-      </div>
+          <article
+            v-for="message in chatStore.messages"
+            :key="message.id"
+            class="message-card"
+            :class="`message-card--${message.role}`"
+          >
+            <div class="message-meta">
+              <span>{{ message.role === 'user' ? '你' : 'SmartWord' }}</span>
+              <span>{{ message.timestamp }}</span>
+            </div>
+            <div class="message-body" v-html="renderMessage(message)"></div>
+          </article>
 
-      <div v-if="chatStore.isLoading" class="message-card message-card--assistant">
-        <div class="message-meta">
-          <span>SmartWord</span>
-          <span>处理中</span>
-        </div>
-        <div class="message-body">
-          <span class="typing-dot"></span>
-          <span class="typing-dot"></span>
-          <span class="typing-dot"></span>
-        </div>
-      </div>
-    </section>
+          <div v-if="chatStore.pendingQuestion" class="question-panel">
+            <p class="question-panel__text">{{ chatStore.pendingQuestion.question }}</p>
+            <div class="question-panel__options">
+              <button
+                v-for="(opt, idx) in chatStore.pendingQuestion.options"
+                :key="idx"
+                class="question-option-btn"
+                type="button"
+                @click="submitQuestionAnswer(opt)"
+              >{{ opt }}</button>
+            </div>
+            <div class="question-panel__custom">
+              <input
+                v-model="customQuestionAnswer"
+                type="text"
+                placeholder="或输入自定义回答..."
+                @keydown.enter="submitQuestionAnswer(customQuestionAnswer)"
+              />
+              <button type="button" class="send-button" @click="submitQuestionAnswer(customQuestionAnswer)">发送</button>
+            </div>
+            <button type="button" class="ghost-button ghost-button--full" @click="cancelCurrentRun">取消规划</button>
+          </div>
 
-    <form class="composer" @submit.prevent="submitMessage">
-      <label class="composer-label" for="chat-input">输入自然语言指令</label>
-      <details class="advanced-options">
-        <summary>高级执行选项</summary>
-        <div class="mode-selector">
-          <p class="mode-selector__label">运行模式</p>
-          <div class="mode-selector__options">
+          <div v-if="chatStore.activePlan && !chatStore.pendingQuestion" class="plan-panel">
+            <p class="plan-panel__desc">{{ chatStore.activePlan.taskDescription }}</p>
+            <ul class="plan-panel__todo">
+              <li
+                v-for="(item, idx) in chatStore.activePlan.todoList"
+                :key="idx"
+                :class="['todo-item', `todo-item--${item.status || 'pending'}`]"
+              >{{ item.description || item }}</li>
+            </ul>
+            <div v-if="chatStore.activePlan.riskNotes && chatStore.activePlan.riskNotes.length" class="plan-panel__risks">
+              <span v-for="(r, i) in chatStore.activePlan.riskNotes" :key="i" class="risk-note">{{ r }}</span>
+            </div>
+            <button class="send-button send-button--full" type="button" @click="executePlan">开始执行</button>
+          </div>
+
+          <div v-if="chatStore.isLoading" class="message-card message-card--assistant message-card--loading">
+            <div class="message-meta"><span>SmartWord</span><span>处理中</span></div>
+            <div class="message-body"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></div>
+          </div>
+        </section>
+
+        <form class="composer" @submit.prevent="submitMessage">
+          <div class="mode-selector" role="group" aria-label="运行模式">
             <button
               v-for="option in modeOptions"
               :key="option.value"
@@ -142,55 +118,99 @@
               :class="{ 'mode-option--active': chatStore.currentMode === option.value }"
               type="button"
               :disabled="chatStore.isLoading"
+              :aria-pressed="chatStore.currentMode === option.value"
+              :title="option.hint"
               @click="chatStore.setMode(option.value)"
             >
               {{ option.label }}
             </button>
           </div>
-        </div>
-        <div class="skill-selector" v-if="skillsStore.enabledItems.length">
-          <p class="mode-selector__label">使用 Skill</p>
-          <div class="skill-selector__chips">
-            <button
-              v-for="skill in skillsStore.enabledItems"
-              :key="skill.name"
-              class="skill-chip"
-              :class="{ 'skill-chip--active': skillsStore.selectedSkillNames.includes(skill.name) }"
-              type="button"
+          <div class="composer-main">
+            <textarea
+              id="chat-input"
+              ref="composerInputRef"
+              v-model="draft"
+              class="composer-input"
+              rows="1"
+              maxlength="3000"
               :disabled="chatStore.isLoading"
-              @click="skillsStore.toggleSelectedSkill(skill.name)"
-            >
-              {{ skill.displayName || skill.name }}
-            </button>
+              :placeholder="composerPlaceholder"
+              @input="syncComposerHeight"
+              @keydown="handleComposerKeydown"
+            ></textarea>
+            <button
+              v-if="chatStore.isLoading"
+              class="composer-action composer-action--stop"
+              type="button"
+              :disabled="isCancelling"
+              @click="cancelCurrentRun"
+            >{{ isCancelling ? '取消中' : '停止' }}</button>
+            <button v-else class="composer-action composer-action--send" type="submit" :disabled="isSubmitDisabled">发送</button>
           </div>
+          <div class="composer-tools">
+            <details v-if="skillsStore.enabledItems.length" class="skill-popover">
+              <summary>Skill <span>{{ skillsStore.selectedSkillNames.length }}/3</span></summary>
+              <div class="skill-selector__chips">
+                <button
+                  v-for="skill in skillsStore.enabledItems"
+                  :key="skill.name"
+                  class="skill-chip"
+                  :class="{ 'skill-chip--active': skillsStore.selectedSkillNames.includes(skill.name) }"
+                  type="button"
+                  :disabled="chatStore.isLoading"
+                  @click="skillsStore.toggleSelectedSkill(skill.name)"
+                >{{ skill.displayName || skill.name }}</button>
+              </div>
+            </details>
+            <span class="composer-hint">{{ composerHint }}</span>
+            <span v-if="draft.length" class="composer-counter">{{ draft.length }}/3000</span>
+          </div>
+        </form>
+      </section>
+
+      <section v-else class="page-view">
+        <QuickActionsPanel v-if="activeView === 'quick-actions'" @select="submitQuickAction" />
+        <TaskHistoryPanel v-else-if="activeView === 'history'" @navigate="navigateToParagraph" />
+        <SkillPanel v-else-if="activeView === 'skills'" :show-close-button="false" />
+        <SettingsPanel v-else-if="activeView === 'settings'" :show-close-button="false" />
+      </section>
+    </main>
+
+    <div v-if="isNavigationOpen" class="navigation-backdrop" @click="closeNavigation"></div>
+    <aside
+      id="smartword-navigation"
+      class="navigation-drawer"
+      :class="{ 'navigation-drawer--open': isNavigationOpen }"
+      :aria-hidden="!isNavigationOpen"
+      :inert="!isNavigationOpen"
+      aria-label="主导航"
+    >
+      <div class="navigation-drawer__header">
+        <div>
+          <p>SmartWord</p>
+          <strong>文档副驾</strong>
         </div>
-        <p class="environment-hint environment-hint--wide">{{ environmentHint }}</p>
-      </details>
-      <textarea
-        id="chat-input"
-        v-model.trim="draft"
-        class="composer-input"
-        rows="4"
-        maxlength="3000"
-        :disabled="chatStore.isLoading"
-        :placeholder="composerPlaceholder"
-      ></textarea>
-      <div class="composer-footer">
-        <p class="environment-hint">{{ composerHint }}</p>
-        <button
-          v-if="chatStore.isLoading"
-          class="ghost-button composer-cancel-button"
-          type="button"
-          :disabled="isCancelling"
-          @click="cancelCurrentRun"
-        >
-          {{ isCancelling ? '取消中...' : '取消' }}
-        </button>
-        <button v-else class="send-button" type="submit" :disabled="isSubmitDisabled">
-          发送
-        </button>
+        <button class="icon-button" type="button" aria-label="关闭导航" @click="closeNavigation">×</button>
       </div>
-    </form>
+      <nav class="navigation-list">
+        <button
+          v-for="item in navigationItems"
+          :key="item.id"
+          class="navigation-item"
+          :class="{ 'navigation-item--active': activeView === item.id }"
+          type="button"
+          :aria-current="activeView === item.id ? 'page' : undefined"
+          @click="navigateToView(item.id)"
+        >
+          <span class="navigation-item__icon" aria-hidden="true">{{ item.icon }}</span>
+          <span>{{ item.label }}</span>
+        </button>
+      </nav>
+      <div class="navigation-drawer__footer">
+        <span>{{ settingsStore.form.lightModel || '模型未配置' }}</span>
+        <span>{{ settingsSummary }}</span>
+      </div>
+    </aside>
   </div>
 </template>
 
@@ -219,13 +239,26 @@ const taskHistoryStore = useTaskHistoryStore();
 const skillsStore = useSkillsStore();
 const draft = ref('');
 const messageListRef = ref(null);
+const composerInputRef = ref(null);
 const customQuestionAnswer = ref('');
 const isCancelling = ref(false);
+const activeView = ref('chat');
+const isNavigationOpen = ref(false);
+const renderCache = new Map();
 let unsubscribeAgentEvent = null;
+let pendingAssistantChunk = '';
+let chunkFrameId = 0;
 const modeOptions = [
-  { value: 'ask', label: '对话交流' },
-  { value: 'plan', label: '规划任务' },
-  { value: 'agent', label: '自主执行' }
+  { value: 'ask', label: '问答', hint: '只读' },
+  { value: 'plan', label: '规划', hint: '先确认' },
+  { value: 'agent', label: '执行', hint: '可写入' }
+];
+const navigationItems = [
+  { id: 'chat', label: '聊天', icon: 'AI' },
+  { id: 'quick-actions', label: '常用任务', icon: 'GO' },
+  { id: 'history', label: '任务历史', icon: 'HI' },
+  { id: 'skills', label: 'Skill', icon: 'SK' },
+  { id: 'settings', label: '设置', icon: 'SE' }
 ];
 const permissionOptions = [
   { value: 'read_only', label: '只读模式' },
@@ -249,8 +282,16 @@ const modeLabel = computed(() => {
   return labels[chatStore.currentMode] || '对话交流';
 });
 
-const modeBadgeText = computed(() => {
-  return `当前模式 · ${modeLabel.value}`;
+const viewTitle = computed(() => {
+  const titles = {
+    chat: '聊天',
+    'quick-actions': '常用任务',
+    history: '任务历史',
+    skills: 'Skill',
+    settings: '设置'
+  };
+
+  return titles[activeView.value] || '聊天';
 });
 
 const composerPlaceholder = computed(() => {
@@ -269,7 +310,7 @@ const settingsSummary = computed(() => {
   }
 
   const permission = permissionOptions.find((item) => item.value === settingsStore.form.permissionMode);
-  return `轻量：${settingsStore.form.lightModel} / 重量：${settingsStore.form.heavyModel} / ${permission?.label || '写入前确认'}`;
+  return `${settingsStore.form.lightModel} · ${settingsStore.form.heavyModel} · ${permission?.label || '写入前确认'}`;
 });
 
 const shouldShowTodoBoard = computed(() => {
@@ -280,38 +321,62 @@ const shouldShowTodoBoard = computed(() => {
   return Array.isArray(chatStore.activeTodoBoard.items) && chatStore.activeTodoBoard.items.length > 0;
 });
 
-const environmentHint = computed(() => {
-  return hostBridge.isAvailable
-    ? '当前运行在 WebView2 环境，设置会保存到本地应用目录。'
-    : '当前为浏览器预览模式，设置会暂存到本地 localStorage。';
+const hasUserMessages = computed(() => {
+  return chatStore.messages.some((message) => message.role === 'user');
+});
+
+const citationCacheKey = computed(() => {
+  return chatStore.citations
+    .map((item) => `${item.ref}:${item.paragraphIndex}`)
+    .join('|');
 });
 
 const composerHint = computed(() => {
-  return chatStore.currentMode === 'agent'
-    ? '写入会按权限设置确认。'
-    : '默认先读取证据再回答。';
+  const hints = {
+    ask: '先读取证据，再给出回答。',
+    plan: '先澄清目标，再生成计划。',
+    agent: '按当前权限执行并验证改动。'
+  };
+  return hints[chatStore.currentMode] || hints.ask;
 });
 
 const isSubmitDisabled = computed(() => {
-  return chatStore.isLoading || draft.value.length === 0 || settingsStore.isLoading;
+  return chatStore.isLoading || draft.value.trim().length === 0 || settingsStore.isLoading;
 });
 
 function renderMessage(message) {
-  const html = marked.parse(message?.content || '');
-  if (!message || message.role !== 'assistant') {
-    return html;
+  const messageId = message?.id || '';
+  const content = message?.content || '';
+  const citations = message?.role === 'assistant' ? citationCacheKey.value : '';
+  const cached = renderCache.get(messageId);
+  if (cached && cached.content === content && cached.citations === citations) {
+    return cached.rendered;
   }
 
-  return html.replace(/\[(\d+)\]/g, (fullMatch, rawRef) => {
-    const ref = Number(rawRef);
-    const citation = chatStore.findCitation(ref);
-    if (!citation) {
-      return fullMatch;
-    }
+  const html = marked.parse(content);
+  const rendered = !message || message.role !== 'assistant'
+    ? html
+    : html.replace(/\[(\d+)\]/g, (fullMatch, rawRef) => {
+      const ref = Number(rawRef);
+      const citation = chatStore.findCitation(ref);
+      if (!citation) {
+        return fullMatch;
+      }
 
-    const title = `段落 ${citation.paragraphIndex}`;
-    return `<button class="citation-anchor" type="button" data-citation-ref="${ref}" title="${title}">[${ref}]</button>`;
+      const title = `段落 ${citation.paragraphIndex}`;
+      return `<button class="citation-anchor" type="button" data-citation-ref="${ref}" title="${title}">[${ref}]</button>`;
+    });
+
+  renderCache.set(messageId, {
+    content,
+    citations,
+    rendered
   });
+  if (renderCache.size > 120) {
+    renderCache.delete(renderCache.keys().next().value);
+  }
+
+  return rendered;
 }
 
 async function submitMessage() {
@@ -319,7 +384,16 @@ async function submitMessage() {
     return;
   }
 
-  await sendMessage(draft.value, chatStore.currentMode);
+  await sendMessage(draft.value.trim(), chatStore.currentMode);
+}
+
+function handleComposerKeydown(event) {
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing) {
+    return;
+  }
+
+  event.preventDefault();
+  submitMessage();
 }
 
 async function submitQuickAction(action) {
@@ -327,6 +401,7 @@ async function submitQuickAction(action) {
     return;
   }
 
+  await navigateToView('chat');
   await sendMessage(action.content, action.manualMode || 'ask', action.permissionMode || '');
 }
 
@@ -350,6 +425,7 @@ async function sendMessage(content, manualMode, permissionModeOverride = '') {
   chatStore.setMode(manualMode);
   chatStore.appendUserMessage(content);
   draft.value = '';
+  syncComposerHeight();
   chatStore.startLoading();
 
   try {
@@ -464,6 +540,127 @@ function requireConfirmationForPermission(permissionMode) {
   return !['auto_safe_writes', 'full_auto'].includes(permissionMode);
 }
 
+function requestFrame(callback) {
+  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+    return window.requestAnimationFrame(callback);
+  }
+
+  return setTimeout(callback, 16);
+}
+
+function cancelFrame(frameId) {
+  if (!frameId || typeof window === 'undefined') {
+    return;
+  }
+
+  if (typeof window.cancelAnimationFrame === 'function') {
+    window.cancelAnimationFrame(frameId);
+    return;
+  }
+
+  window.clearTimeout(frameId);
+}
+
+function isMessageListNearBottom() {
+  const element = messageListRef.value;
+  if (!element) {
+    return true;
+  }
+
+  const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+  return distance < 96;
+}
+
+function scheduleScrollToBottom(options = {}) {
+  const force = options.force === true;
+  const shouldFollow = force || isMessageListNearBottom();
+  if (!shouldFollow) {
+    return;
+  }
+
+  nextTick(() => {
+    if (messageListRef.value) {
+      messageListRef.value.scrollTop = messageListRef.value.scrollHeight;
+    }
+  });
+}
+
+function toggleNavigation() {
+  isNavigationOpen.value = !isNavigationOpen.value;
+}
+
+function closeNavigation() {
+  isNavigationOpen.value = false;
+}
+
+async function navigateToView(view) {
+  if (!navigationItems.some((item) => item.id === view)) {
+    return;
+  }
+
+  activeView.value = view;
+  closeNavigation();
+  taskHistoryStore.isPanelOpen = view === 'history';
+  skillsStore.isPanelOpen = view === 'skills';
+  if (view === 'settings') {
+    settingsStore.openPanel();
+  } else {
+    settingsStore.closePanel();
+  }
+
+  if (view === 'history' && !taskHistoryStore.items.length) {
+    await taskHistoryStore.loadRecentTasks();
+  }
+
+  if (view === 'skills' && !skillsStore.items.length) {
+    await skillsStore.loadSkills();
+  }
+
+  if (view === 'chat') {
+    scheduleScrollToBottom({ force: true });
+    nextTick(syncComposerHeight);
+  }
+}
+
+function syncComposerHeight() {
+  nextTick(() => {
+    const element = composerInputRef.value;
+    if (!element) {
+      return;
+    }
+
+    element.style.height = 'auto';
+    element.style.height = `${Math.min(element.scrollHeight, 120)}px`;
+  });
+}
+
+function flushPendingAssistantChunk() {
+  if (!pendingAssistantChunk) {
+    return;
+  }
+
+  const content = pendingAssistantChunk;
+  pendingAssistantChunk = '';
+  chatStore.appendAssistantChunk(content);
+  scheduleScrollToBottom();
+}
+
+function scheduleAssistantChunk(content) {
+  if (!content) {
+    return;
+  }
+
+  pendingAssistantChunk += content;
+  if (chunkFrameId) {
+    return;
+  }
+
+  chunkFrameId = requestFrame(() => {
+    chunkFrameId = 0;
+    flushPendingAssistantChunk();
+  });
+}
+
 function getCancellationMessage() {
   return chatStore.currentMode === 'agent'
     ? '已取消当前任务。已验证的改动会保留，未验证的当前步骤会回滚。'
@@ -528,10 +725,14 @@ async function resumePausedTodoRun(decision) {
 }
 
 function handleAgentEvent(event) {
+  if (event.type === 'stream_chunk') {
+    scheduleAssistantChunk(event.content || '');
+    return;
+  }
+
+  flushPendingAssistantChunk();
+
   switch (event.type) {
-    case 'stream_chunk':
-      chatStore.appendAssistantChunk(event.content || '');
-      break;
     case 'tool_call_started':
       chatStore.startToolCall(event.toolCallId, event.toolName, event.toolInput, {
         requiresConfirmation: event.requiresConfirmation === true,
@@ -623,6 +824,7 @@ function handleAgentEvent(event) {
       isCancelling.value = false;
       if (event.message) {
         chatStore.appendAssistantMessage(event.message);
+        scheduleScrollToBottom({ force: true });
       }
       break;
     case 'todo_reminder_injected':
@@ -648,6 +850,7 @@ function handleAgentEvent(event) {
       isCancelling.value = false;
       if (event.message) {
         chatStore.appendAssistantMessage(event.message);
+        scheduleScrollToBottom({ force: true });
       }
       break;
     case 'cancelled':
@@ -656,6 +859,7 @@ function handleAgentEvent(event) {
       chatStore.finishLoading();
       chatStore.finalizeTaskChanges();
       chatStore.appendAssistantMessage(getCancellationMessage());
+      scheduleScrollToBottom({ force: true });
       if (taskHistoryStore.isPanelOpen) {
         taskHistoryStore.loadRecentTasks();
       }
@@ -672,6 +876,7 @@ function handleAgentEvent(event) {
       isCancelling.value = false;
       if (event.message) {
         chatStore.appendAssistantMessage(event.message);
+        scheduleScrollToBottom({ force: true });
       }
       if (taskHistoryStore.isPanelOpen) {
         taskHistoryStore.loadRecentTasks();
@@ -697,16 +902,6 @@ async function handleMessageListClick(event) {
   await navigateToParagraph(citation.paragraphIndex);
 }
 
-async function scrollToBottom() {
-  await nextTick();
-  const element = messageListRef.value;
-  if (!element) {
-    return;
-  }
-
-  element.scrollTop = element.scrollHeight;
-}
-
 onMounted(async () => {
   unsubscribeAgentEvent = hostBridge.onAgentEvent(handleAgentEvent);
   await settingsStore.loadSettings();
@@ -714,8 +909,14 @@ onMounted(async () => {
 
   if (!chatStore.messages.length) {
     chatStore.appendAssistantMessage(
-      '我可以帮你总结、审阅、改写或整理当前 Word 文档。你可以直接描述目标，也可以先点击上方常用任务。'
+      '我可以帮你总结、审阅、改写或整理当前 Word 文档。直接描述目标即可，也可以从侧边菜单打开常用任务。'
     );
+  }
+
+  syncComposerHeight();
+
+  if (hasUserMessages.value || chatStore.isLoading) {
+    scheduleScrollToBottom({ force: true });
   }
 });
 
@@ -723,6 +924,8 @@ onUnmounted(() => {
   if (typeof unsubscribeAgentEvent === 'function') {
     unsubscribeAgentEvent();
   }
+
+  cancelFrame(chunkFrameId);
 });
 
 watch(
@@ -736,9 +939,15 @@ watch(
     chatStore.isLoading
   ],
   () => {
-    scrollToBottom();
+    if (!hasUserMessages.value && !chatStore.isLoading) {
+      return;
+    }
+
+    scheduleScrollToBottom({ force: hasUserMessages.value && chatStore.messages.length <= 2 });
   }
 );
+
+watch(draft, syncComposerHeight);
 
 watch(
   () => settingsStore.form.permissionMode,
@@ -749,475 +958,762 @@ watch(
 </script>
 
 <style scoped>
-:global(*) {
-  box-sizing: border-box;
-}
-
-:global(html, body, #app) {
-  margin: 0;
-  min-height: 100%;
-  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
-  background:
-    radial-gradient(circle at top, rgba(140, 184, 255, 0.24), transparent 42%),
-    linear-gradient(180deg, #f7f9fc 0%, #eef3f8 100%);
-  color: #18314f;
-}
-
-:global(body) {
-  min-width: 280px;
-}
-
 .chat-window {
-  width: 280px;
-  min-height: 100vh;
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  position: relative;
+  display: grid;
+  grid-template-rows: 48px minmax(0, 1fr);
+  width: 100%;
+  height: 100vh;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--sw-bg);
 }
 
-.chat-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
+.app-bar {
+  position: relative;
+  z-index: 10;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
   gap: 8px;
-  padding: 14px;
-  border: 1px solid rgba(89, 118, 161, 0.18);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.88);
-  box-shadow: 0 14px 36px rgba(24, 49, 79, 0.08);
-}
-
-.eyebrow {
-  margin: 0 0 4px;
-  font-size: 11px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: #6f86a3;
-}
-
-.chat-header h1 {
-  margin: 0;
-  font-size: 22px;
-  line-height: 1.1;
-}
-
-.settings-summary {
-  margin: 6px 0 0;
-  font-size: 11px;
-  line-height: 1.5;
-  color: #60758f;
-}
-
-.header-actions {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
-}
-
-.mode-pill {
+  min-width: 0;
   padding: 6px 10px;
-  border-radius: 999px;
-  background: #18314f;
-  color: #ffffff;
-  font-size: 12px;
-  font-weight: 600;
-  text-align: center;
+  border-bottom: 1px solid var(--sw-border);
+  background: rgba(255, 255, 255, 0.96);
 }
 
-.ghost-button {
-  border: 1px solid rgba(89, 118, 161, 0.22);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.82);
-  color: #244464;
-  font: inherit;
-  font-size: 12px;
-  padding: 8px 10px;
+.app-bar__title {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 7px;
+  overflow: hidden;
+}
+
+.app-bar__title p,
+.app-bar__title h1 {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.app-bar__title p {
+  color: var(--sw-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.app-bar__title h1 {
+  overflow: hidden;
+  color: var(--sw-text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+
+.icon-button {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--sw-radius-sm);
+  background: transparent;
+  color: var(--sw-text-soft);
+  font-size: 20px;
+  line-height: 1;
   cursor: pointer;
 }
 
-.ghost-button--small {
-  padding: 6px 8px;
+.icon-button:hover {
+  border-color: var(--sw-border);
+  background: var(--sw-surface-muted);
+  color: var(--sw-text);
 }
 
-.ghost-button--full {
-  width: 100%;
-}
-
-.settings-panel {
-  padding: 14px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(89, 118, 161, 0.16);
-  box-shadow: 0 18px 40px rgba(24, 49, 79, 0.08);
-}
-
-.settings-panel__header {
+.menu-icon {
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.settings-panel__header h2 {
-  margin: 0;
-  font-size: 16px;
-}
-
-.settings-panel__header p {
-  margin: 4px 0 0;
-  font-size: 11px;
-  line-height: 1.5;
-  color: #60758f;
-}
-
-.settings-grid {
-  display: flex;
+  width: 16px;
   flex-direction: column;
-  gap: 10px;
+  gap: 3px;
 }
 
-.settings-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 12px;
-  color: #395372;
-}
-
-.settings-field input,
-.settings-field select,
-.settings-field textarea {
+.menu-icon i {
+  display: block;
   width: 100%;
-  padding: 10px 12px;
-  border: 1px solid rgba(89, 118, 161, 0.26);
-  border-radius: 14px;
-  font: inherit;
-  color: inherit;
-  background: #f7f9fc;
+  height: 1.5px;
+  border-radius: var(--sw-radius-pill);
+  background: currentColor;
 }
 
-.settings-field textarea {
-  resize: vertical;
-  min-height: 88px;
+.mode-pill {
+  max-width: 78px;
+  padding: 4px 7px;
+  overflow: hidden;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: var(--sw-radius-pill);
+  background: var(--sw-primary-soft);
+  color: var(--sw-primary-strong);
+  font-size: 10px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.settings-field input:focus,
-.settings-field select:focus,
-.settings-field textarea:focus {
-  outline: 2px solid rgba(40, 81, 125, 0.25);
-  border-color: rgba(40, 81, 125, 0.42);
+.app-content,
+.chat-view {
+  min-width: 0;
+  min-height: 0;
 }
 
-.settings-field--checkbox {
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 2px;
+.app-content {
+  overflow: hidden;
 }
 
-.settings-field--checkbox input {
-  width: auto;
-  margin: 0;
-}
-
-.settings-panel__footer {
-  margin-top: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.settings-message {
-  margin: 0;
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.settings-message--success {
-  color: #2d6a4f;
-}
-
-.settings-message--error {
-  color: #b42318;
-}
-
-.send-button--full {
-  width: 100%;
+.chat-view {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  height: 100%;
 }
 
 .message-list {
-  flex: 1;
-  min-height: 0;
   display: flex;
+  min-width: 0;
+  min-height: 0;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+  padding: 14px 12px 18px;
+  overflow-x: hidden;
   overflow-y: auto;
-  padding-right: 4px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.page-view {
+  height: 100%;
+  padding: 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.page-view :deep(.settings-panel),
+.page-view :deep(.skill-panel),
+.page-view :deep(.task-history-panel),
+.page-view :deep(.quick-actions) {
+  min-height: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .message-card {
-  padding: 12px;
-  border-radius: 16px;
-  border: 1px solid rgba(89, 118, 161, 0.16);
-  box-shadow: 0 12px 24px rgba(24, 49, 79, 0.06);
-  word-break: break-word;
-}
-
-.message-card--assistant {
-  background: rgba(255, 255, 255, 0.92);
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .message-card--user {
-  background: linear-gradient(135deg, #18314f 0%, #28517d 100%);
-  color: #ffffff;
+  width: auto;
+  max-width: 88%;
+  align-self: flex-end;
+  padding: 9px 11px;
+  border: 1px solid rgba(37, 99, 235, 0.12);
+  border-radius: 12px 12px 4px 12px;
+  background: #eaf1ff;
+}
+
+.message-card--assistant {
+  align-self: stretch;
 }
 
 .message-meta {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 8px;
-  font-size: 11px;
-  opacity: 0.78;
+  gap: 8px;
+  margin: 0 0 4px;
+  color: var(--sw-text-muted);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.message-card--user .message-meta {
+  margin-bottom: 3px;
+}
+
+.message-meta span:last-child {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .message-body {
+  min-width: 0;
+  color: var(--sw-text);
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.62;
+  overflow-wrap: anywhere;
 }
 
 .message-body :deep(p) {
   margin: 0 0 8px;
 }
 
-.message-body :deep(p:last-child) {
+.message-body :deep(p:last-child),
+.message-body :deep(ul:last-child),
+.message-body :deep(ol:last-child),
+.message-body :deep(pre:last-child) {
   margin-bottom: 0;
 }
 
-.message-body :deep(code) {
-  padding: 1px 4px;
-  border-radius: 6px;
-  background: rgba(24, 49, 79, 0.08);
-  font-size: 12px;
+.message-body :deep(ul),
+.message-body :deep(ol) {
+  margin: 6px 0 8px;
+  padding-left: 18px;
 }
 
-.message-card--user .message-body :deep(code) {
-  background: rgba(255, 255, 255, 0.14);
+.message-body :deep(pre) {
+  max-width: 100%;
+  margin: 8px 0;
+  padding: 9px;
+  overflow: auto;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-sm);
+  background: #111827;
+  color: #f9fafb;
+  font-size: 11px;
+}
+
+.message-body :deep(code) {
+  font-family: Consolas, "Courier New", monospace;
+}
+
+.message-body :deep(:not(pre) > code) {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--sw-surface-strong);
+  font-size: 11px;
+}
+
+.message-body :deep(a),
+.message-body :deep(.citation-anchor) {
+  color: var(--sw-primary-strong);
 }
 
 .message-body :deep(.citation-anchor) {
-  border: none;
-  padding: 0 2px;
+  display: inline;
+  padding: 0;
+  border: 0;
   background: transparent;
-  color: #d96f32;
-  font: inherit;
+  font-weight: 700;
   cursor: pointer;
+}
+
+.message-card--loading {
+  min-height: 36px;
 }
 
 .composer {
-  padding: 14px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(89, 118, 161, 0.16);
-  box-shadow: 0 18px 40px rgba(24, 49, 79, 0.08);
-}
-
-.composer-label {
-  display: block;
-  margin-bottom: 8px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #395372;
-}
-
-.advanced-options {
-  margin-bottom: 10px;
-  border: 1px solid rgba(89, 118, 161, 0.18);
-  border-radius: 10px;
-  background: #f7f9fc;
-  padding: 8px;
-}
-
-.advanced-options summary {
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 700;
-  color: #395372;
+  display: grid;
+  flex: initial;
+  gap: 7px;
+  max-height: none;
+  padding: 8px 10px max(8px, env(safe-area-inset-bottom));
+  overflow: visible;
+  border: 0;
+  border-top: 1px solid var(--sw-border);
+  border-radius: 0;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 -5px 18px rgba(17, 24, 39, 0.05);
 }
 
 .mode-selector {
-  margin-top: 10px;
-  margin-bottom: 10px;
-}
-
-.skill-selector {
-  margin-top: 10px;
-}
-
-.mode-selector__label {
-  margin: 0 0 8px;
-  font-size: 11px;
-  color: #60758f;
-}
-
-.mode-selector__options {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.skill-selector__chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-sm);
+  background: var(--sw-surface-muted);
 }
 
 .mode-option {
-  min-height: 38px;
-  padding: 8px 6px;
-  border: 1px solid rgba(89, 118, 161, 0.22);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.84);
-  color: #395372;
+  min-width: 0;
+  min-height: 28px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: var(--sw-radius-xs);
+  background: transparent;
+  color: var(--sw-text-muted);
   font: inherit;
   font-size: 11px;
   font-weight: 600;
-  line-height: 1.3;
+  line-height: 1;
+  white-space: nowrap;
   cursor: pointer;
-  transition:
-    transform 0.16s ease,
-    box-shadow 0.16s ease,
-    border-color 0.16s ease,
-    background 0.16s ease;
 }
 
 .mode-option--active {
-  border-color: rgba(24, 49, 79, 0.48);
-  background: linear-gradient(135deg, #18314f 0%, #28517d 100%);
-  color: #ffffff;
-  box-shadow: 0 10px 18px rgba(24, 49, 79, 0.18);
+  background: var(--sw-bg-elevated);
+  color: var(--sw-text);
+  box-shadow: 0 1px 4px rgba(17, 24, 39, 0.1);
+}
+
+.composer-main {
+  display: flex;
+  min-width: 0;
+  align-items: flex-end;
+  gap: 7px;
 }
 
 .composer-input {
   width: 100%;
-  resize: none;
-  padding: 10px 12px;
-  border: 1px solid rgba(89, 118, 161, 0.26);
-  border-radius: 14px;
+  min-width: 0;
+  min-height: 42px;
+  max-height: 120px;
+  padding: 10px 11px;
+  overflow-y: auto;
+  border: 1px solid var(--sw-border-strong);
+  border-radius: var(--sw-radius-md);
+  background: var(--sw-bg-elevated);
+  color: var(--sw-text);
   font: inherit;
-  color: inherit;
-  background: #f7f9fc;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: none;
 }
 
 .composer-input:focus {
-  outline: 2px solid rgba(40, 81, 125, 0.25);
-  border-color: rgba(40, 81, 125, 0.42);
+  border-color: rgba(37, 99, 235, 0.48);
+  outline: none;
+  box-shadow: var(--sw-focus);
 }
 
-.composer-footer {
-  margin-top: 10px;
+.composer-input::placeholder {
+  color: var(--sw-text-muted);
+}
+
+.composer-action {
+  width: 50px;
+  height: 42px;
+  flex: 0 0 50px;
+  padding: 0 8px;
+  border-radius: var(--sw-radius-md);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.composer-action--send {
+  border: 0;
+  background: var(--sw-primary);
+  color: #ffffff;
+}
+
+.composer-action--send:hover:not(:disabled) {
+  background: var(--sw-primary-strong);
+}
+
+.composer-action--stop {
+  border: 1px solid rgba(190, 18, 60, 0.22);
+  background: var(--sw-danger-soft);
+  color: var(--sw-danger);
+}
+
+.composer-tools {
+  position: relative;
   display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  gap: 10px;
+  min-width: 0;
+  min-height: 20px;
+  align-items: center;
+  gap: 7px;
 }
 
-.environment-hint {
-  margin: 0;
-  max-width: 130px;
-  font-size: 11px;
-  line-height: 1.5;
-  color: #60758f;
+.composer-hint {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--sw-text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-counter {
+  flex: 0 0 auto;
+  color: var(--sw-text-muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.skill-popover {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.skill-popover summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 22px;
+  padding: 3px 6px;
+  border-radius: var(--sw-radius-xs);
+  color: var(--sw-text-soft);
+  font-size: 10px;
+  font-weight: 600;
+  list-style: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.skill-popover summary::-webkit-details-marker {
+  display: none;
+}
+
+.skill-popover summary:hover {
+  background: var(--sw-surface-muted);
+}
+
+.skill-selector__chips {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 25;
+  display: flex;
+  width: min(260px, calc(100vw - 20px));
+  max-height: 160px;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 9px;
+  overflow-y: auto;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-md);
+  background: var(--sw-bg-elevated);
+  box-shadow: var(--sw-shadow-soft);
 }
 
 .skill-chip {
   max-width: 100%;
-  min-height: 30px;
-  padding: 6px 8px;
-  border: 1px solid rgba(89, 118, 161, 0.22);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.84);
-  color: #395372;
-  font: inherit;
-  font-size: 11px;
+  min-height: 28px;
+  padding: 5px 8px;
+  overflow: hidden;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-xs);
+  background: var(--sw-surface-muted);
+  color: var(--sw-text-soft);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: pointer;
-  overflow-wrap: anywhere;
 }
 
 .skill-chip--active {
-  border-color: rgba(217, 111, 50, 0.46);
-  background: #fff3ea;
-  color: #9a4a1f;
-  font-weight: 700;
+  border-color: rgba(37, 99, 235, 0.3);
+  background: var(--sw-primary-soft);
+  color: var(--sw-primary-strong);
 }
 
-.environment-hint--wide {
-  max-width: none;
+.navigation-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(17, 24, 39, 0.36);
+}
+
+.navigation-drawer {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 50;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(86vw, 268px);
+  padding: 10px;
+  overflow: hidden;
+  border-right: 1px solid var(--sw-border);
+  background: var(--sw-bg-elevated);
+  box-shadow: 16px 0 36px rgba(17, 24, 39, 0.16);
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(-104%);
+  transition: transform 180ms ease, visibility 0s linear 180ms;
+}
+
+.navigation-drawer--open {
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateX(0);
+  transition: transform 180ms ease;
+}
+
+.navigation-drawer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 2px 2px 12px 8px;
+  border-bottom: 1px solid var(--sw-border);
+}
+
+.navigation-drawer__header p,
+.navigation-drawer__header strong {
+  display: block;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.navigation-drawer__header p {
+  color: var(--sw-text-muted);
+  font-size: 10px;
+}
+
+.navigation-drawer__header strong {
+  margin-top: 2px;
+  color: var(--sw-text);
+  font-size: 14px;
+}
+
+.navigation-list {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 0;
+  overflow-y: auto;
+}
+
+.navigation-item {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  min-height: 40px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: var(--sw-radius-sm);
+  background: transparent;
+  color: var(--sw-text-soft);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.navigation-item:hover {
+  background: var(--sw-surface-muted);
+  color: var(--sw-text);
+}
+
+.navigation-item--active {
+  background: var(--sw-primary-soft);
+  color: var(--sw-primary-strong);
+}
+
+.navigation-item__icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-xs);
+  background: var(--sw-bg-elevated);
+  color: var(--sw-text-muted);
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.navigation-item--active .navigation-item__icon {
+  border-color: rgba(37, 99, 235, 0.2);
+  color: var(--sw-primary-strong);
+}
+
+.navigation-drawer__footer {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 8px 4px;
+  border-top: 1px solid var(--sw-border);
+  color: var(--sw-text-muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.navigation-drawer__footer span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.question-panel,
+.plan-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 11px;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-md);
+  background: var(--sw-bg-elevated);
+  box-shadow: none;
+}
+
+.question-panel__text,
+.plan-panel__desc {
+  margin: 0;
+  color: var(--sw-text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.question-panel__options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.question-option-btn {
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-sm);
+  background: var(--sw-surface-muted);
+  color: var(--sw-text-soft);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.question-panel__custom {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.question-panel__custom input {
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-sm);
+  background: var(--sw-bg-elevated);
+}
+
+.send-button,
+.ghost-button {
+  min-height: 34px;
+  padding: 7px 10px;
+  border-radius: var(--sw-radius-sm);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 .send-button {
-  min-width: 76px;
-  padding: 10px 14px;
-  border: none;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #d96f32 0%, #ee8d32 100%);
+  border: 0;
+  background: var(--sw-primary);
   color: #ffffff;
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform 0.16s ease, box-shadow 0.16s ease;
-  box-shadow: 0 10px 18px rgba(217, 111, 50, 0.24);
 }
 
-.composer-cancel-button {
-  min-width: 76px;
-  background: #ffffff;
+.ghost-button {
+  border: 1px solid var(--sw-border);
+  background: var(--sw-bg-elevated);
+  color: var(--sw-text-soft);
 }
 
-.send-button:hover:enabled,
-.ghost-button:hover:enabled {
-  transform: translateY(-1px);
+.send-button--full,
+.ghost-button--full {
+  width: 100%;
 }
 
-.send-button:disabled,
-.ghost-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.65;
+.plan-panel__todo {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--sw-text-soft);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.plan-panel__risks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.risk-note {
+  padding: 3px 6px;
+  border-radius: var(--sw-radius-pill);
+  background: var(--sw-warning-soft);
+  color: var(--sw-warning);
+  font-size: 9px;
 }
 
 .typing-dot {
   display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 6px;
+  width: 5px;
+  height: 5px;
+  margin-right: 3px;
   border-radius: 50%;
-  background: #28517d;
-  animation: pulse 1s infinite ease-in-out;
+  background: var(--sw-text-muted);
+  animation: typing-pulse 1.2s infinite ease-in-out;
 }
 
 .typing-dot:nth-child(2) {
-  animation-delay: 0.2s;
+  animation-delay: 120ms;
 }
 
 .typing-dot:nth-child(3) {
-  animation-delay: 0.4s;
-  margin-right: 0;
+  animation-delay: 240ms;
 }
 
-@keyframes pulse {
+@keyframes typing-pulse {
   0%,
-  80%,
   100% {
+    opacity: 0.28;
     transform: translateY(0);
-    opacity: 0.4;
   }
 
-  40% {
-    transform: translateY(-3px);
+  50% {
     opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-height: 700px) {
+  .chat-window {
+    padding: 0;
+  }
+
+  .composer {
+    max-height: none;
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+
+  .message-list {
+    padding-top: 10px;
   }
 }
 </style>

@@ -456,4 +456,93 @@ function getToolDisplayName(toolName) {
   color: #9f1239;
   border: 1px solid rgba(159, 18, 57, 0.18);
 }
+
+.preview-panel {
+  padding: 12px;
+  border-radius: var(--sw-radius-md);
+  border-color: rgba(180, 83, 9, 0.26);
+  background: var(--sw-surface);
+  box-shadow: var(--sw-shadow-soft);
+}
+
+.preview-panel__header h2 {
+  color: var(--sw-text);
+}
+
+.preview-panel__status {
+  border-radius: var(--sw-radius-pill);
+  background: var(--sw-warning-soft);
+  color: var(--sw-warning);
+}
+
+.preview-panel__status--low {
+  background: var(--sw-success-soft);
+  color: var(--sw-success);
+}
+
+.preview-panel__status--medium {
+  background: var(--sw-warning-soft);
+  color: var(--sw-warning);
+}
+
+.preview-panel__status--high {
+  background: var(--sw-danger-soft);
+  color: var(--sw-danger);
+}
+
+.preview-panel__description,
+.preview-panel__summary div,
+.preview-panel__operations li,
+.preview-panel__safety {
+  color: var(--sw-text-soft);
+}
+
+.preview-panel__summary div,
+.preview-panel__operations,
+.preview-panel__script,
+.preview-panel__details pre {
+  border: 1px solid var(--sw-border);
+  background: var(--sw-surface-muted);
+}
+
+.preview-panel__summary strong,
+.preview-panel__operations p,
+.preview-panel__script p,
+.preview-panel__details summary {
+  color: var(--sw-text);
+}
+
+.preview-panel__button {
+  min-height: 36px;
+  border-radius: var(--sw-radius-sm);
+  transition: background var(--sw-transition), border-color var(--sw-transition), transform var(--sw-transition);
+}
+
+.preview-panel__button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.preview-panel__button--confirm {
+  background: var(--sw-primary);
+}
+
+.preview-panel__button--confirm:hover:not(:disabled) {
+  background: var(--sw-primary-strong);
+}
+
+.preview-panel__button--remember {
+  background: var(--sw-text);
+}
+
+.preview-panel__button--skip {
+  background: var(--sw-surface);
+  color: var(--sw-text-soft);
+  border-color: var(--sw-border);
+}
+
+.preview-panel__button--cancel {
+  background: var(--sw-surface);
+  color: var(--sw-danger);
+  border-color: rgba(190, 18, 60, 0.2);
+}
 </style>

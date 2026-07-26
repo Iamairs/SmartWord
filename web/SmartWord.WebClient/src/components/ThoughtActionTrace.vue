@@ -154,4 +154,48 @@ function getToolDisplayName(toolName) {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+.trace-card {
+  border-color: var(--sw-border);
+  border-radius: var(--sw-radius-sm);
+  background: var(--sw-surface);
+  contain: content;
+}
+
+.trace-header {
+  padding: 9px 10px;
+  color: var(--sw-text-soft);
+}
+
+.trace-status--running {
+  background: var(--sw-accent);
+  box-shadow: 0 0 0 3px var(--sw-accent-soft);
+}
+
+.trace-status--success {
+  background: var(--sw-success);
+  box-shadow: 0 0 0 3px var(--sw-success-soft);
+}
+
+.trace-status--failed,
+.trace-status--denied {
+  background: var(--sw-danger);
+  box-shadow: 0 0 0 3px var(--sw-danger-soft);
+}
+
+.trace-status--skipped {
+  background: var(--sw-text-muted);
+}
+
+.trace-technical,
+.trace-toggle,
+.trace-label {
+  color: var(--sw-text-muted);
+}
+
+.trace-block {
+  border-radius: var(--sw-radius-xs);
+  background: var(--sw-surface-muted);
+  color: var(--sw-text-soft);
+}
 </style>
