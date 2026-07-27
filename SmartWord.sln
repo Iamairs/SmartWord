@@ -36,6 +36,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0AB3BF05
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartWord.OfficeIntegration.Tests", "tests\SmartWord.OfficeIntegration.Tests\SmartWord.OfficeIntegration.Tests.csproj", "{7978BC6A-B5A4-4E02-9BCA-339B16BF6F48}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartWord.EvalRunner.Tests", "tests\SmartWord.EvalRunner.Tests\SmartWord.EvalRunner.Tests.csproj", "{2495276C-77EC-484A-A9A2-45F29BB5B2C8}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -142,6 +144,10 @@ Global
 		{7978BC6A-B5A4-4E02-9BCA-339B16BF6F48}.Release|x64.Build.0 = Release|Any CPU
 		{7978BC6A-B5A4-4E02-9BCA-339B16BF6F48}.Release|x86.ActiveCfg = Release|Any CPU
 		{7978BC6A-B5A4-4E02-9BCA-339B16BF6F48}.Release|x86.Build.0 = Release|Any CPU
+		{2495276C-77EC-484A-A9A2-45F29BB5B2C8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2495276C-77EC-484A-A9A2-45F29BB5B2C8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2495276C-77EC-484A-A9A2-45F29BB5B2C8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2495276C-77EC-484A-A9A2-45F29BB5B2C8}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -155,6 +161,7 @@ Global
 		{6EE80CE9-B8BF-4E09-9DB7-D2FB5C6D9155} = {41CB7A97-7277-43C6-A99C-F1C077FDA409}
 		{1930AB4A-4091-4FE8-9B38-78594E13DDB1} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
 		{7978BC6A-B5A4-4E02-9BCA-339B16BF6F48} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{2495276C-77EC-484A-A9A2-45F29BB5B2C8} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {C2EEA98F-B6B8-435E-A4E7-31CC0FC44C6A}

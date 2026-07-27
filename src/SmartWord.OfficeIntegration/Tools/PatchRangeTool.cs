@@ -2,13 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
-using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using SmartWord.Core.Enums;
 using SmartWord.Core.Interfaces;
 using SmartWord.Core.Models;
+using SmartWord.OfficeIntegration.ComInterop;
 using SmartWord.OfficeIntegration.WordWrappers;
 
 namespace SmartWord.OfficeIntegration.Tools
@@ -130,30 +130,28 @@ namespace SmartWord.OfficeIntegration.Tools
         {
             return _wordApplicationWrapper.InvokeWithActiveDocumentAsync((wordApplicationObject, documentObject) =>
             {
+                _ = wordApplicationObject;
                 dynamic document = documentObject;
-                dynamic paragraphs = null;
-                dynamic paragraph = null;
-                dynamic range = null;
-                dynamic insertedParagraphs = null;
-                dynamic insertedParagraph = null;
-                dynamic insertedRange = null;
-
-                try
+                using (var comScope = new ComScope())
                 {
                     if (document == null)
                     {
                         return PatchRangeExecutionResult.Fail(operation.ParagraphIndex, "当前没有活动文档。");
                     }
 
-                    paragraphs = document.Paragraphs;
+                    dynamic paragraphs = comScope.Track((object)document.Paragraphs, "PatchRangeTool.Paragraphs");
                     var paragraphCount = paragraphs == null ? 0 : Convert.ToInt32(paragraphs.Count);
                     if (operation.ParagraphIndex < 0 || operation.ParagraphIndex >= paragraphCount)
                     {
                         return PatchRangeExecutionResult.Fail(operation.ParagraphIndex, "目标段落索引超出范围。");
                     }
 
-                    paragraph = paragraphs[operation.ParagraphIndex + 1];
-                    range = paragraph == null ? null : paragraph.Range;
+                    dynamic paragraph = comScope.Track(
+                        (object)paragraphs[operation.ParagraphIndex + 1],
+                        "PatchRangeTool.Paragraph");
+                    dynamic range = comScope.Track(
+                        paragraph == null ? null : (object)paragraph.Range,
+                        "PatchRangeTool.Range");
                     if (range == null)
                     {
                         return PatchRangeExecutionResult.Fail(operation.ParagraphIndex, "无法获取目标段落范围。");
@@ -166,9 +164,12 @@ namespace SmartWord.OfficeIntegration.Tools
                             return PatchRangeExecutionResult.Ok(operation.ParagraphIndex, "段落文本已替换。");
                         case "insert_paragraph_after":
                             range.InsertParagraphAfter();
-                            insertedParagraphs = document.Paragraphs;
-                            insertedParagraph = insertedParagraphs[operation.ParagraphIndex + 2];
-                            insertedRange = insertedParagraph == null ? null : insertedParagraph.Range;
+                            dynamic insertedParagraph = comScope.Track(
+                                (object)paragraphs[operation.ParagraphIndex + 2],
+                                "PatchRangeTool.InsertedParagraph");
+                            dynamic insertedRange = comScope.Track(
+                                insertedParagraph == null ? null : (object)insertedParagraph.Range,
+                                "PatchRangeTool.InsertedRange");
                             if (insertedRange == null)
                             {
                                 return PatchRangeExecutionResult.Fail(operation.ParagraphIndex, "插入新段落后无法读取结果。");
@@ -192,15 +193,6 @@ namespace SmartWord.OfficeIntegration.Tools
                                 operation.ParagraphIndex,
                                 "未知的操作类型。当前支持 replace_text、insert_paragraph_after、set_paragraph_style、delete_paragraph。");
                     }
-                }
-                finally
-                {
-                    TryReleaseComObject(insertedRange);
-                    TryReleaseComObject(insertedParagraph);
-                    TryReleaseComObject(insertedParagraphs);
-                    TryReleaseComObject(range);
-                    TryReleaseComObject(paragraph);
-                    TryReleaseComObject(paragraphs);
                 }
             });
         }
@@ -246,24 +238,6 @@ namespace SmartWord.OfficeIntegration.Tools
             return string.Empty;
         }
 
-        private static void TryReleaseComObject(object comObject)
-        {
-            if (comObject == null)
-            {
-                return;
-            }
-
-            try
-            {
-                if (Marshal.IsComObject(comObject))
-                {
-                    Marshal.ReleaseComObject(comObject);
-                }
-            }
-            catch
-            {
-            }
-        }
     }
 
     public sealed class PatchRangeRequest

@@ -1,6 +1,7 @@
 using System;
 using Serilog;
 using SmartWord.Core.Interfaces;
+using SmartWord.OfficeIntegration.ComInterop;
 
 namespace SmartWord.OfficeIntegration.WordWrappers
 {
@@ -43,7 +44,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
             }
             finally
             {
-                WordApplicationWrapper.TryReleaseComObjectSilently(undoRecord);
+                ComObjectReleaser.ReleaseOwned(undoRecord, "UndoRecordWrapper.UndoRecord");
             }
         }
 
@@ -141,7 +142,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
             }
             finally
             {
-                WordApplicationWrapper.TryReleaseComObjectSilently(undoRecord);
+                ComObjectReleaser.ReleaseOwned(undoRecord, "UndoRecordWrapper.UndoRecord");
             }
         }
 
@@ -159,7 +160,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
             }
             finally
             {
-                WordApplicationWrapper.TryReleaseComObjectSilently(activeDocument);
+                ComObjectReleaser.ReleaseOwned(activeDocument, "UndoRecordWrapper.ActiveDocument");
             }
         }
 
@@ -205,7 +206,7 @@ namespace SmartWord.OfficeIntegration.WordWrappers
             }
             finally
             {
-                WordApplicationWrapper.TryReleaseComObjectSilently(activeDocument);
+                ComObjectReleaser.ReleaseOwned(activeDocument, "UndoRecordWrapper.ActiveDocument");
             }
         }
     }
