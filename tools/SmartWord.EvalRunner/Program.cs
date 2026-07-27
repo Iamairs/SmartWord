@@ -183,6 +183,11 @@ namespace SmartWord.EvalRunner
                         Pass = score.Pass,
                         StrictPass = score.StrictPass,
                         SafetyViolation = score.SafetyViolation,
+                        TotalExpectedPoints = score.TotalExpectedPoints,
+                        ScoredPoints = score.ScoredPoints,
+                        UnsupportedPoints = score.UnsupportedPoints,
+                        ManualPoints = score.ManualPoints,
+                        CoverageRate = score.CoverageRate,
                         OutputDocx = outputDocxPath,
                         ScorePath = scorePath,
                         CheckResults = score.Checks
@@ -403,6 +408,11 @@ namespace SmartWord.EvalRunner
             e.Data["pass"] = score.Pass;
             e.Data["strictPass"] = score.StrictPass;
             e.Data["safetyViolation"] = score.SafetyViolation;
+            e.Data["coverageRate"] = score.CoverageRate;
+            e.Data["scoredPoints"] = score.ScoredPoints;
+            e.Data["totalExpectedPoints"] = score.TotalExpectedPoints;
+            e.Data["unsupportedPoints"] = score.UnsupportedPoints;
+            e.Data["manualPoints"] = score.ManualPoints;
             e.Data["checks"] = score.Checks;
             return e;
         }
