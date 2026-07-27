@@ -45,6 +45,10 @@ namespace SmartWord.Application.Tests.PromptBuilder
             Assert.Contains("简单任务不需要 Todo Board", agentPrompt);
             Assert.Contains("同类安全改动应合并到一次 `patch_range.operations`", agentPrompt);
             Assert.Contains("不要把它当作所有问题的固定第一步", askPrompt);
+            Assert.Contains("本轮必须调用至少一个与问题匹配的最窄只读工具刷新证据", askPrompt);
+            Assert.Contains("不得仅凭历史回答或历史工具结果直接作答", askPrompt);
+            Assert.Contains("本轮必须调用至少一个与任务匹配的最窄只读工具刷新证据", planPrompt);
+            Assert.Contains("不得仅凭用户描述、历史回答或历史工具结果直接生成计划", planPrompt);
             Assert.DoesNotContain("每次新任务必须首先调用 probe_document", agentPrompt);
             Assert.Contains("不要把微小操作拆成过细 Todo", planPrompt);
         }
