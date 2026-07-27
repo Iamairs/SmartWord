@@ -31,8 +31,8 @@
 
 1. 保留 `-Core`、`-WordIntegration`、`-AddIn`、`-All` 参数，新增 `-Frontend` 和 `-Configuration`。
 2. 通过 `vswhere.exe` 枚举 Visual Studio 实例，从实际同时包含 `MSBuild.exe` 和 `Microsoft.VisualStudio.Tools.Office.targets` 的实例中选择构建环境；找不到时输出 Visual Studio Installer 组件提示。
-3. AddIn 构建前检查 .NET Framework 4.7.2 reference assemblies，并始终调用 Visual Studio MSBuild。
-4. 前端构建检查 `node`、`npm` 和 `package.json`，在需要时执行 `npm ci`，然后执行 `npm run build`。
+3. AddIn 构建前检查 .NET Framework 4.7.2 reference assemblies、VSTO 引用程序集和 Office PIA，并始终调用 Visual Studio MSBuild。
+4. 前端构建检查 `node`、`npm`、`package.json` 和关键依赖文件，在需要时使用独立临时缓存执行 `npm ci`，然后执行 `npm run build`。
 5. Core 路径继续使用 `dotnet`，执行 Application 构建和非宿主单元测试；真实 Word 测试保持显式入口。
 6. `-All` 执行 Core、前端、AddIn 和真实 Word 集成测试，满足完整本地验证；默认无参数仍执行不启动 Word 的 Core 验证。
 7. README 记录安装依赖、标准命令、常见报错和 `dotnet build` 的适用边界。
@@ -49,6 +49,6 @@
 ## 风险与注意事项
 
 - 真实 Word 集成测试依赖交互式 Windows 会话、桌面版 Word 和首次启动配置，仍不适合普通无 Office CI。
-- `npm ci` 会依据 lockfile 重建 `node_modules`；仅在依赖目录缺失时执行，避免每次构建产生不必要开销。
+- `npm ci` 会依据 lockfile 重建 `node_modules`；仅在关键依赖缺失时执行，并使用独立临时缓存降低共享缓存锁冲突风险。
 - Visual Studio 安装布局可能随版本变化；发现逻辑优先使用 `vswhere` 并通过实际文件存在性判断，不依赖固定盘符。
 - 当前主工作区存在其他任务的未提交改动，本任务在独立 worktree 中精准暂存和提交，不得混入这些改动。

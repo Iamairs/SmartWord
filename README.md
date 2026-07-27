@@ -319,10 +319,24 @@ AddIn → Infrastructure → Core
 
 ### 15.1 本地验证入口
 
-普通验证不会启动 Word：
+SmartWord 的 VSTO 宿主是传统 .NET Framework 4.7.2 工程。开发机需要安装：
+
+- Visual Studio 2022 或 Build Tools，并包含 MSBuild。
+- “Office/SharePoint 开发”和“.NET 桌面开发”工作负载。
+- .NET Framework 4.7.2 SDK 与 targeting pack。
+- Node.js LTS；构建前端时使用其自带的 npm。
+- 桌面版 Microsoft Word；仅 AddIn 调试和真实 Word 集成测试需要。
+
+普通验证不会启动 Word，适合日常开发和无 Office 环境：
 
 ```powershell
 .\build.ps1 -Core
+```
+
+前端构建会在关键依赖缺失时使用独立临时缓存执行 `npm ci`，然后将产物输出到 AddIn 资源目录：
+
+```powershell
+.\build.ps1 -Frontend
 ```
 
 真实 Word 集成测试必须显式运行，并要求本机安装 Word：
@@ -331,13 +345,23 @@ AddIn → Infrastructure → Core
 .\build.ps1 -WordIntegration
 ```
 
-VSTO AddIn 构建会检查 VS MSBuild 与 Office targets，并自动执行 NuGet restore：
+VSTO AddIn 构建会通过 `vswhere` 自动发现 Visual Studio MSBuild，检查 Office targets 和 .NET Framework 4.7.2 reference assemblies，并自动执行 NuGet restore：
 
 ```powershell
 .\build.ps1 -AddIn
 ```
 
-`-All` 按顺序执行上述三类验证。真实 Word 测试只关闭测试自己创建并识别出的 Word 进程，不会清理用户已打开的 Word。
+完整本地验证按顺序执行 Core、前端、AddIn 和真实 Word 集成测试：
+
+```powershell
+.\build.ps1 -All
+```
+
+多个入口可以组合，例如 `.\build.ps1 -Core -Frontend -AddIn -Configuration Release` 可完成不启动 Word 的发布构建验证。无参数运行脚本时默认执行 `-Core`。
+
+不要使用 `dotnet build SmartWord.sln` 验证 VSTO AddIn。`.NET SDK` 自带的 MSBuild 不包含 `Microsoft.VisualStudio.Tools.Office.targets`，可能把 `VSToolsPath` 错误解析到 `dotnet\sdk` 目录。Core 项目可以继续使用 `dotnet build`；AddIn 必须通过本脚本或 Visual Studio 自带的 `MSBuild.exe` 构建。
+
+脚本找不到 VSTO targets 时，请打开 Visual Studio Installer，修改对应实例并安装“Office/SharePoint 开发”工作负载。只安装 `Microsoft.Office.Interop.Word` NuGet 包或 VSTO Runtime 不能提供编译所需的 targets。真实 Word 测试只关闭测试自己创建并识别出的 Word 进程，不会清理用户已打开的 Word。
 
 
 ## 附录 ADR架构决策记录
