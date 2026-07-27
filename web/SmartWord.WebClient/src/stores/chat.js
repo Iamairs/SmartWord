@@ -8,8 +8,13 @@ function createMessage(role, content) {
     timestamp: new Date().toLocaleTimeString('zh-CN', {
       hour: '2-digit',
       minute: '2-digit'
-    })
+    }),
+    toolCalls: []
   };
+}
+
+function cloneToolCalls(toolCalls) {
+  return toolCalls.map((toolCall) => ({ ...toolCall }));
 }
 
 function cloneParagraphs(affectedParagraphs) {
@@ -143,6 +148,27 @@ export const useChatStore = defineStore('chat', {
     setMode(mode) {
       this.currentMode = mode || 'ask';
     },
+    syncActiveToolCallsToCurrentAssistantMessage() {
+      if (!this.activeToolCalls.length) {
+        return;
+      }
+
+      const lastUserIndex = this.messages.map((message) => message.role).lastIndexOf('user');
+      let target = null;
+      for (let index = this.messages.length - 1; index > lastUserIndex; index -= 1) {
+        if (this.messages[index].role === 'assistant') {
+          target = this.messages[index];
+          break;
+        }
+      }
+
+      if (!target) {
+        target = createMessage('assistant', '');
+        this.messages.push(target);
+      }
+
+      target.toolCalls = cloneToolCalls(this.activeToolCalls);
+    },
     startToolCall(toolCallId, toolName, toolInput, metadata = {}) {
       const startedAt = Date.now();
       const existing = this.activeToolCalls.find((item) => item.id === toolCallId);
@@ -155,6 +181,7 @@ export const useChatStore = defineStore('chat', {
         existing.operationDescription = metadata.operationDescription || existing.operationDescription || '';
         existing.requiresConfirmation =
           metadata.requiresConfirmation ?? existing.requiresConfirmation ?? false;
+        this.syncActiveToolCallsToCurrentAssistantMessage();
         return;
       }
 
@@ -169,6 +196,7 @@ export const useChatStore = defineStore('chat', {
         requiresConfirmation: metadata.requiresConfirmation === true,
         operationDescription: metadata.operationDescription || ''
       });
+      this.syncActiveToolCallsToCurrentAssistantMessage();
 
       if (metadata.requiresConfirmation === true) {
         this.pendingConfirmation = {
@@ -203,6 +231,8 @@ export const useChatStore = defineStore('chat', {
       if (this.pendingConfirmation && this.pendingConfirmation.toolCallId === toolCallId) {
         this.pendingConfirmation = null;
       }
+
+      this.syncActiveToolCallsToCurrentAssistantMessage();
     },
     setCitations(citationList) {
       this.citations = Array.isArray(citationList) ? citationList : [];
