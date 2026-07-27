@@ -317,6 +317,28 @@ AddIn → Infrastructure → Core
 
 **第十五章（分阶段开发里程碑）内容详见文件`docs\instructions\开发里程碑与交付计划.md`(L1-L388)，务必在开发这部分内容前仔细阅读**
 
+### 15.1 本地验证入口
+
+普通验证不会启动 Word：
+
+```powershell
+.\build.ps1 -Core
+```
+
+真实 Word 集成测试必须显式运行，并要求本机安装 Word：
+
+```powershell
+.\build.ps1 -WordIntegration
+```
+
+VSTO AddIn 构建会检查 VS MSBuild 与 Office targets，并自动执行 NuGet restore：
+
+```powershell
+.\build.ps1 -AddIn
+```
+
+`-All` 按顺序执行上述三类验证。真实 Word 测试只关闭测试自己创建并识别出的 Word 进程，不会清理用户已打开的 Word。
+
 
 ## 附录 ADR架构决策记录
 
