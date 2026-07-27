@@ -144,11 +144,14 @@ export const useChatStore = defineStore('chat', {
       this.currentMode = mode || 'ask';
     },
     startToolCall(toolCallId, toolName, toolInput, metadata = {}) {
+      const startedAt = Date.now();
       const existing = this.activeToolCalls.find((item) => item.id === toolCallId);
       if (existing) {
         existing.name = toolName || existing.name;
         existing.input = toolInput || existing.input;
         existing.status = 'running';
+        existing.startedAt = existing.startedAt || startedAt;
+        existing.endedAt = null;
         existing.operationDescription = metadata.operationDescription || existing.operationDescription || '';
         existing.requiresConfirmation =
           metadata.requiresConfirmation ?? existing.requiresConfirmation ?? false;
@@ -161,6 +164,8 @@ export const useChatStore = defineStore('chat', {
         input: toolInput || '',
         output: '',
         status: 'running',
+        startedAt,
+        endedAt: null,
         requiresConfirmation: metadata.requiresConfirmation === true,
         operationDescription: metadata.operationDescription || ''
       });
@@ -176,6 +181,7 @@ export const useChatStore = defineStore('chat', {
       }
     },
     completeToolCall(toolCallId, success, output, status = null) {
+      const endedAt = Date.now();
       const target = this.activeToolCalls.find((item) => item.id === toolCallId);
       if (!target) {
         this.activeToolCalls.push({
@@ -183,11 +189,15 @@ export const useChatStore = defineStore('chat', {
           name: 'unknown_tool',
           input: '',
           output: output || '',
-          status: status || (success ? 'success' : 'failed')
+          status: status || (success ? 'success' : 'failed'),
+          startedAt: endedAt,
+          endedAt
         });
       } else {
         target.output = output || '';
         target.status = status || (success ? 'success' : 'failed');
+        target.startedAt = target.startedAt || endedAt;
+        target.endedAt = endedAt;
       }
 
       if (this.pendingConfirmation && this.pendingConfirmation.toolCallId === toolCallId) {

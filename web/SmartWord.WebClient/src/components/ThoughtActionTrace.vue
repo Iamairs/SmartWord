@@ -1,37 +1,31 @@
 <template>
   <section v-if="toolCalls.length" class="trace-panel">
-    <button
-      class="trace-summary"
-      type="button"
-      :aria-expanded="isExpanded"
-      @click="togglePanel"
-    >
-      <span class="trace-summary-icon" aria-hidden="true">{{ isExpanded ? '−' : '+' }}</span>
-      <span class="trace-summary-title">工具调用轨迹</span>
-      <span class="trace-summary-count">{{ toolCalls.length }} 次</span>
-      <span class="trace-summary-latest">最近：{{ getToolDisplayName(latestToolCall.name) }}</span>
-      <span class="trace-summary-toggle">{{ isExpanded ? '收起全部' : '查看全部' }}</span>
+    <button class="trace-summary" type="button" :aria-expanded="isExpanded" @click="togglePanel">
+      <span class="trace-summary-label">{{ hasRunningCall ? '处理中' : '已处理' }}</span>
+      <span class="trace-summary-duration">{{ formatDuration(totalDuration) }}</span>
+      <span class="trace-summary-chevron" aria-hidden="true">{{ isExpanded ? '⌃' : '⌄' }}</span>
     </button>
 
-    <div class="trace-list" :class="{ 'trace-list--expanded': isExpanded }">
-      <article v-for="toolCall in visibleToolCalls" :key="toolCall.id" class="trace-card">
-        <button
-          class="trace-header"
-          type="button"
-          :aria-expanded="expandedIds.has(toolCall.id)"
-          @click="toggle(toolCall.id)"
-        >
-          <span class="trace-status" :class="`trace-status--${toolCall.status}`"></span>
-          <span class="trace-name">{{ getToolDisplayName(toolCall.name) }}</span>
-          <span class="trace-technical">{{ toolCall.name }}</span>
-          <span class="trace-toggle">{{ expandedIds.has(toolCall.id) ? '收起' : '展开' }}</span>
-        </button>
-
-        <div v-if="expandedIds.has(toolCall.id)" class="trace-body">
-          <p class="trace-label">输入</p>
-          <pre class="trace-block">{{ toolCall.input || '{}' }}</pre>
-          <p class="trace-label">输出</p>
-          <pre class="trace-block">{{ toolCall.output || '等待结果...' }}</pre>
+    <div v-if="isExpanded" class="trace-list">
+      <article v-for="toolCall in toolCalls" :key="toolCall.id" class="trace-item">
+        <div class="trace-item-marker" aria-hidden="true">
+          <span class="trace-status" :class="'trace-status--' + toolCall.status"></span>
+        </div>
+        <div class="trace-item-content">
+          <button class="trace-header" type="button" :aria-expanded="expandedIds.has(toolCall.id)" @click="toggle(toolCall.id)">
+            <span class="trace-action-icon" aria-hidden="true">{{ getToolIcon(toolCall.name) }}</span>
+            <span class="trace-name">{{ getToolDisplayName(toolCall.name) }}</span>
+            <span class="trace-technical">{{ toolCall.name }}</span>
+            <span class="trace-duration">{{ formatDuration(getToolDuration(toolCall)) }}</span>
+            <span class="trace-toggle">{{ expandedIds.has(toolCall.id) ? '收起' : '详情' }}</span>
+          </button>
+          <p v-if="toolCall.operationDescription" class="trace-description">{{ toolCall.operationDescription }}</p>
+          <div v-if="expandedIds.has(toolCall.id)" class="trace-body">
+            <p class="trace-label">输入</p>
+            <pre class="trace-block">{{ toolCall.input || '{}' }}</pre>
+            <p class="trace-label">输出</p>
+            <pre class="trace-block">{{ toolCall.output || '等待结果...' }}</pre>
+          </div>
         </div>
       </article>
     </div>
@@ -39,7 +33,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 
 const props = defineProps({
   toolCalls: {
@@ -49,252 +43,90 @@ const props = defineProps({
 });
 
 const isExpanded = ref(false);
+const currentTime = ref(Date.now());
 const expandedIds = ref(new Set());
-const latestToolCall = computed(() => props.toolCalls[props.toolCalls.length - 1] || {});
-const visibleToolCalls = computed(() => (
-  isExpanded.value ? props.toolCalls : props.toolCalls.slice(-1)
-));
+let timerId = null;
+
+const hasRunningCall = computed(() => props.toolCalls.some((toolCall) => toolCall.status === 'running'));
+const totalDuration = computed(() => {
+  const starts = props.toolCalls.map((toolCall) => toolCall.startedAt).filter(Number.isFinite);
+  if (!starts.length) return 0;
+  const latestEnd = hasRunningCall.value
+    ? currentTime.value
+    : Math.max(...props.toolCalls.map((toolCall) => toolCall.endedAt || toolCall.startedAt || 0));
+  return Math.max(latestEnd - Math.min(...starts), 0);
+});
+
+onMounted(() => {
+  timerId = window.setInterval(() => {
+    if (hasRunningCall.value) currentTime.value = Date.now();
+  }, 1000);
+});
+
+onBeforeUnmount(() => {
+  if (timerId) window.clearInterval(timerId);
+});
 
 function togglePanel() {
   isExpanded.value = !isExpanded.value;
-
-  // 收起总览后只保留最近一条的详情状态，避免隐藏条目继续占用交互状态。
-  if (!isExpanded.value) {
-    const latestId = latestToolCall.value.id;
-    expandedIds.value = expandedIds.value.has(latestId) ? new Set([latestId]) : new Set();
-  }
 }
 
 function toggle(toolCallId) {
   const next = new Set(expandedIds.value);
-  if (next.has(toolCallId)) {
-    next.delete(toolCallId);
-  } else {
-    next.add(toolCallId);
-  }
-
+  if (next.has(toolCallId)) next.delete(toolCallId);
+  else next.add(toolCallId);
   expandedIds.value = next;
 }
 
+function getToolDuration(toolCall) {
+  if (!Number.isFinite(toolCall.startedAt)) return 0;
+  const end = Number.isFinite(toolCall.endedAt) ? toolCall.endedAt : currentTime.value;
+  return Math.max(end - toolCall.startedAt, 0);
+}
+
+function formatDuration(durationMs) {
+  const totalSeconds = Math.max(Math.floor(durationMs / 1000), 0);
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60);
+  return minutes > 0 ? minutes + '分 ' + seconds + '秒' : seconds + '秒';
+}
+
+function getToolIcon(toolName) {
+  const icons = { probe_document: '⌕', read_section: '≡', grep_document: '⌕', get_selection_context: '⌖', read_table: '▦', read_annotations: '▤', read_script: '⌘', patch_range: '✎', execute_script: '▶', todo_read: '☷', todo_write: '✓', ask_user_question: '?' };
+  return icons[toolName] || '•';
+}
+
 function getToolDisplayName(toolName) {
-  const names = {
-    probe_document: '读取文档概况',
-    read_section: '读取文档片段',
-    grep_document: '搜索文档内容',
-    get_selection_context: '读取当前选区',
-    read_table: '读取表格',
-    read_annotations: '读取批注',
-    read_script: '诊断文档结构',
-    patch_range: '执行标准补丁',
-    execute_script: '执行脚本操作',
-    todo_read: '读取任务板',
-    todo_write: '更新任务板',
-    ask_user_question: '询问用户'
-  };
+  const names = { probe_document: '读取文档概况', read_section: '读取文档片段', grep_document: '搜索文档内容', get_selection_context: '读取当前选区', read_table: '读取表格', read_annotations: '读取批注', read_script: '诊断文档结构', patch_range: '执行标准补丁', execute_script: '执行脚本操作', todo_read: '读取任务板', todo_write: '更新任务板', ask_user_question: '询问用户' };
   return names[toolName] || toolName || '工具调用';
 }
 </script>
 
 <style scoped>
-.trace-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.trace-summary {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--sw-border);
-  border-radius: var(--sw-radius-sm);
-  background: var(--sw-surface-muted);
-  color: var(--sw-text-soft);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.trace-summary-icon {
-  flex: 0 0 auto;
-  width: 14px;
-  font-size: 15px;
-  line-height: 1;
-  text-align: center;
-}
-
-.trace-summary-title {
-  flex: 0 0 auto;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.trace-summary-count,
-.trace-summary-toggle {
-  flex: 0 0 auto;
-  color: var(--sw-text-muted);
-  font-size: 10px;
-}
-
-.trace-summary-latest {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--sw-text-muted);
-  font-size: 10px;
-}
-
-.trace-summary-toggle {
-  margin-left: auto;
-}
-
-.trace-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.trace-list--expanded {
-  max-height: min(42vh, 360px);
-  overflow-y: auto;
-  padding-right: 3px;
-  scrollbar-width: thin;
-}
-
-.trace-card {
-  flex: 0 0 auto;
-  border: 1px solid rgba(89, 118, 161, 0.16);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.92);
-  overflow: hidden;
-}
-
-.trace-header {
-  width: 100%;
-  border: none;
-  background: transparent;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  font: inherit;
-  color: #244464;
-  cursor: pointer;
-}
-
-.trace-status {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex: 0 0 auto;
-}
-
-.trace-status--running {
-  background: #ee8d32;
-}
-
-.trace-status--success {
-  background: #2d6a4f;
-}
-
-.trace-status--failed,
-.trace-status--denied {
-  background: #b42318;
-}
-
-.trace-status--skipped {
-  background: #60758f;
-}
-
-.trace-name {
-  flex: 1;
-  font-size: 12px;
-  font-weight: 600;
-  text-align: left;
-}
-
-.trace-technical {
-  max-width: 86px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 10px;
-  color: #8a9ab0;
-}
-
-.trace-toggle {
-  font-size: 11px;
-  color: #60758f;
-}
-
-.trace-body {
-  padding: 0 12px 12px;
-}
-
-.trace-label {
-  margin: 8px 0 4px;
-  font-size: 11px;
-  color: #60758f;
-}
-
-.trace-block {
-  margin: 0;
-  max-height: 140px;
-  overflow: auto;
-  padding: 8px;
-  border-radius: 10px;
-  background: #f4f7fb;
-  font-size: 11px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.trace-card {
-  border-color: var(--sw-border);
-  border-radius: var(--sw-radius-sm);
-  background: var(--sw-surface);
-  contain: content;
-}
-
-.trace-header {
-  padding: 9px 10px;
-  color: var(--sw-text-soft);
-}
-
-.trace-status--running {
-  background: var(--sw-accent);
-  box-shadow: 0 0 0 3px var(--sw-accent-soft);
-}
-
-.trace-status--success {
-  background: var(--sw-success);
-  box-shadow: 0 0 0 3px var(--sw-success-soft);
-}
-
-.trace-status--failed,
-.trace-status--denied {
-  background: var(--sw-danger);
-  box-shadow: 0 0 0 3px var(--sw-danger-soft);
-}
-
-.trace-status--skipped {
-  background: var(--sw-text-muted);
-}
-
-.trace-technical,
-.trace-toggle,
-.trace-label {
-  color: var(--sw-text-muted);
-}
-
-.trace-block {
-  border-radius: var(--sw-radius-xs);
-  background: var(--sw-surface-muted);
-  color: var(--sw-text-soft);
-}
+.trace-panel { display: flex; flex-direction: column; gap: 4px; }
+.trace-summary { width: 100%; display: flex; align-items: center; gap: 6px; min-width: 0; padding: 8px 2px; border: 0; border-bottom: 1px solid var(--sw-border); background: transparent; color: var(--sw-text-muted); font: inherit; text-align: left; cursor: pointer; }
+.trace-summary-label { color: var(--sw-text-soft); font-size: 12px; font-weight: 600; }
+.trace-summary-duration { font-size: 12px; }
+.trace-summary-chevron { margin-left: auto; font-size: 16px; line-height: 1; }
+.trace-list { display: flex; flex-direction: column; max-height: min(42vh, 360px); overflow-y: auto; padding: 4px 2px 4px 0; scrollbar-width: thin; }
+.trace-item { display: flex; min-width: 0; }
+.trace-item-marker { position: relative; width: 18px; flex: 0 0 18px; display: flex; justify-content: center; }
+.trace-item-marker::after { content: ''; position: absolute; top: 16px; bottom: 0; width: 1px; background: var(--sw-border); }
+.trace-item:last-child .trace-item-marker::after { display: none; }
+.trace-status { position: relative; z-index: 1; width: 7px; height: 7px; margin-top: 10px; border-radius: 50%; background: var(--sw-text-muted); }
+.trace-status--running { background: var(--sw-accent); box-shadow: 0 0 0 3px var(--sw-accent-soft); }
+.trace-status--success { background: var(--sw-success); }
+.trace-status--failed, .trace-status--denied { background: var(--sw-danger); }
+.trace-item-content { min-width: 0; flex: 1; border-bottom: 1px solid var(--sw-border); }
+.trace-item:last-child .trace-item-content { border-bottom: 0; }
+.trace-header { width: 100%; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 8px 0; border: 0; background: transparent; color: var(--sw-text-soft); font: inherit; text-align: left; cursor: pointer; }
+.trace-action-icon { flex: 0 0 16px; color: var(--sw-text-muted); font-size: 13px; text-align: center; }
+.trace-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
+.trace-technical { max-width: 78px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--sw-text-muted); font-size: 10px; }
+.trace-duration, .trace-toggle { flex: 0 0 auto; color: var(--sw-text-muted); font-size: 10px; }
+.trace-toggle { margin-left: auto; }
+.trace-description { margin: -2px 0 7px 22px; overflow: hidden; color: var(--sw-text-muted); font-size: 10px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.trace-body { padding: 0 0 10px 22px; }
+.trace-label { margin: 7px 0 3px; color: var(--sw-text-muted); font-size: 10px; }
+.trace-block { max-height: 120px; margin: 0; overflow: auto; padding: 7px; border-radius: var(--sw-radius-xs); background: var(--sw-surface-muted); color: var(--sw-text-soft); font-size: 10px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
 </style>
