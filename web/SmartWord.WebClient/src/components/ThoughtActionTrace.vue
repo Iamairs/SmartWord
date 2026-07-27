@@ -1,34 +1,69 @@
 <template>
   <section v-if="toolCalls.length" class="trace-panel">
-    <article v-for="toolCall in toolCalls" :key="toolCall.id" class="trace-card">
-      <button class="trace-header" type="button" @click="toggle(toolCall.id)">
-        <span class="trace-status" :class="`trace-status--${toolCall.status}`"></span>
-        <span class="trace-name">{{ getToolDisplayName(toolCall.name) }}</span>
-        <span class="trace-technical">{{ toolCall.name }}</span>
-        <span class="trace-toggle">{{ expandedIds.has(toolCall.id) ? '收起' : '展开' }}</span>
-      </button>
+    <button
+      class="trace-summary"
+      type="button"
+      :aria-expanded="isExpanded"
+      @click="togglePanel"
+    >
+      <span class="trace-summary-icon" aria-hidden="true">{{ isExpanded ? '−' : '+' }}</span>
+      <span class="trace-summary-title">工具调用轨迹</span>
+      <span class="trace-summary-count">{{ toolCalls.length }} 次</span>
+      <span class="trace-summary-latest">最近：{{ getToolDisplayName(latestToolCall.name) }}</span>
+      <span class="trace-summary-toggle">{{ isExpanded ? '收起全部' : '查看全部' }}</span>
+    </button>
 
-      <div v-if="expandedIds.has(toolCall.id)" class="trace-body">
-        <p class="trace-label">输入</p>
-        <pre class="trace-block">{{ toolCall.input || '{}' }}</pre>
-        <p class="trace-label">输出</p>
-        <pre class="trace-block">{{ toolCall.output || '等待结果...' }}</pre>
-      </div>
-    </article>
+    <div class="trace-list" :class="{ 'trace-list--expanded': isExpanded }">
+      <article v-for="toolCall in visibleToolCalls" :key="toolCall.id" class="trace-card">
+        <button
+          class="trace-header"
+          type="button"
+          :aria-expanded="expandedIds.has(toolCall.id)"
+          @click="toggle(toolCall.id)"
+        >
+          <span class="trace-status" :class="`trace-status--${toolCall.status}`"></span>
+          <span class="trace-name">{{ getToolDisplayName(toolCall.name) }}</span>
+          <span class="trace-technical">{{ toolCall.name }}</span>
+          <span class="trace-toggle">{{ expandedIds.has(toolCall.id) ? '收起' : '展开' }}</span>
+        </button>
+
+        <div v-if="expandedIds.has(toolCall.id)" class="trace-body">
+          <p class="trace-label">输入</p>
+          <pre class="trace-block">{{ toolCall.input || '{}' }}</pre>
+          <p class="trace-label">输出</p>
+          <pre class="trace-block">{{ toolCall.output || '等待结果...' }}</pre>
+        </div>
+      </article>
+    </div>
   </section>
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 
-defineProps({
+const props = defineProps({
   toolCalls: {
     type: Array,
     default: () => []
   }
 });
 
+const isExpanded = ref(false);
 const expandedIds = ref(new Set());
+const latestToolCall = computed(() => props.toolCalls[props.toolCalls.length - 1] || {});
+const visibleToolCalls = computed(() => (
+  isExpanded.value ? props.toolCalls : props.toolCalls.slice(-1)
+));
+
+function togglePanel() {
+  isExpanded.value = !isExpanded.value;
+
+  // 收起总览后只保留最近一条的详情状态，避免隐藏条目继续占用交互状态。
+  if (!isExpanded.value) {
+    const latestId = latestToolCall.value.id;
+    expandedIds.value = expandedIds.value.has(latestId) ? new Set([latestId]) : new Set();
+  }
+}
 
 function toggle(toolCallId) {
   const next = new Set(expandedIds.value);
@@ -67,7 +102,71 @@ function getToolDisplayName(toolName) {
   gap: 8px;
 }
 
+.trace-summary {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--sw-border);
+  border-radius: var(--sw-radius-sm);
+  background: var(--sw-surface-muted);
+  color: var(--sw-text-soft);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.trace-summary-icon {
+  flex: 0 0 auto;
+  width: 14px;
+  font-size: 15px;
+  line-height: 1;
+  text-align: center;
+}
+
+.trace-summary-title {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.trace-summary-count,
+.trace-summary-toggle {
+  flex: 0 0 auto;
+  color: var(--sw-text-muted);
+  font-size: 10px;
+}
+
+.trace-summary-latest {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sw-text-muted);
+  font-size: 10px;
+}
+
+.trace-summary-toggle {
+  margin-left: auto;
+}
+
+.trace-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.trace-list--expanded {
+  max-height: min(42vh, 360px);
+  overflow-y: auto;
+  padding-right: 3px;
+  scrollbar-width: thin;
+}
+
 .trace-card {
+  flex: 0 0 auto;
   border: 1px solid rgba(89, 118, 161, 0.16);
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.92);
