@@ -1,3 +1,4 @@
+using System;
 using SmartWord.Application.Context;
 using SmartWord.Application.Orchestration;
 using SmartWord.Application.PromptBuilder;
@@ -35,9 +36,12 @@ namespace SmartWord.OfficeIntegration.Tests.Infrastructure
         public static AgentOrchestrator CreateOrchestrator(
             WordApplicationWrapper wordWrapper,
             ILlmClient llmClient,
-            IConfirmationChannel confirmationChannel = null)
+            IConfirmationChannel confirmationChannel = null,
+            Action<ToolRegistry> configureRegistry = null,
+            IUndoScopeFactory undoScopeFactory = null)
         {
             var registry = CreateRegistry(wordWrapper);
+            configureRegistry?.Invoke(registry);
             var todoManager = new TodoManager(new InMemoryTodoStore());
             return new AgentOrchestrator(
                 llmClient,
@@ -47,7 +51,7 @@ namespace SmartWord.OfficeIntegration.Tests.Infrastructure
                 registry,
                 new PermissionGuard(registry),
                 confirmationChannel ?? new AlwaysConfirmChannel(),
-                wordWrapper,
+                undoScopeFactory ?? wordWrapper,
                 new ConversationCompressor(),
                 null,
                 null,

@@ -16,6 +16,8 @@ namespace SmartWord.OfficeIntegration.Tests.Infrastructure
             _responses = new Queue<AgentMessage>(responses ?? Array.Empty<AgentMessage>());
         }
 
+        public int CallCount { get; private set; }
+
         public async IAsyncEnumerable<string> ChatCompletionStreamAsync(
             IReadOnlyList<AgentMessage> messages,
             string model,
@@ -34,6 +36,7 @@ namespace SmartWord.OfficeIntegration.Tests.Infrastructure
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            CallCount++;
             return Task.FromResult(_responses.Count == 0
                 ? new AgentMessage { Role = "assistant", Content = "完成。" }
                 : _responses.Dequeue());

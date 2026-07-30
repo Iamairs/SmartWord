@@ -1,9 +1,11 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using SmartWord.Core.Enums;
+using SmartWord.Core.Interfaces;
 using SmartWord.Core.Models;
 using SmartWord.OfficeIntegration.Tests.Infrastructure;
 using Xunit;
@@ -72,23 +74,83 @@ namespace SmartWord.OfficeIntegration.Tests
                 var events = new List<AgentEvent>();
                 using (var cancellation = new CancellationTokenSource(500))
                 {
-                    try
+                    await foreach (var agentEvent in orchestrator.RunAsync(
+                        "取消写入",
+                        CreateOptions(AgentPermissionMode.ConfirmWrites),
+                        cancellation.Token))
                     {
-                        await foreach (var agentEvent in orchestrator.RunAsync(
-                            "取消写入",
-                            CreateOptions(AgentPermissionMode.ConfirmWrites),
-                            cancellation.Token))
-                        {
-                            events.Add(agentEvent);
-                        }
-                    }
-                    catch (System.OperationCanceledException)
-                    {
-                        // 当前编排器在确认等待取消后可能抛出取消异常；测试基线要求文档不被写入。
+                        events.Add(agentEvent);
                     }
                 }
 
                 Assert.Equal(originalText, await session.ReadActiveDocumentTextAsync());
+                Assert.Single(events.Where(item => item.Type == AgentEventType.Cancelled));
+            });
+        }
+
+        [WordIntegrationFact]
+        public async Task Agent只读文档_写入前拦截_不调用模型且文档不变()
+        {
+            await StaWordTestHost.RunAsync(async session =>
+            {
+                var path = await session.CreateBasicFixtureAsync("read-only.docx");
+                await session.OpenDocumentAsync(path, readOnly: true);
+                var originalText = await session.ReadActiveDocumentTextAsync();
+                var llm = new ScriptedLlmClient(ToolResponse(
+                    "patch-read-only",
+                    "patch_range",
+                    "{\"operations\":[{\"type\":\"replace_text\",\"paragraph_index\":1,\"text\":\"不应写入\"}]}"));
+
+                var events = await RunAgentAsync(session, llm);
+
+                Assert.Equal(0, llm.CallCount);
+                Assert.Single(events.Where(item => item.Type == AgentEventType.DocumentNotWritable));
+                Assert.Equal(originalText, await session.ReadActiveDocumentTextAsync());
+            });
+        }
+
+        [WordIntegrationFact]
+        public async Task Agent写入执行中取消_当前Undo步骤回滚_产生取消事件()
+        {
+            await StaWordTestHost.RunAsync(async session =>
+            {
+                var path = await session.CreateBasicFixtureAsync("cancel-after-write.docx");
+                await session.OpenDocumentAsync(path);
+                var originalText = await session.ReadActiveDocumentTextAsync();
+                var llm = new ScriptedLlmClient(ToolResponse(
+                    "patch-cancel-after-write",
+                    "patch_range",
+                    "{\"operations\":[{\"type\":\"replace_text\",\"paragraph_index\":1,\"text\":\"取消后应回滚\"}]}"));
+                var undoScopeFactory = new TrackingUndoScopeFactory(session.WordWrapper);
+                CancellableWriteTool cancellableTool = null;
+                var orchestrator = ToolTestFactory.CreateOrchestrator(
+                    session.WordWrapper,
+                    llm,
+                    configureRegistry: registry =>
+                    {
+                        cancellableTool = new CancellableWriteTool(registry.GetTool("patch_range"));
+                        registry.Register(cancellableTool);
+                    },
+                    undoScopeFactory: undoScopeFactory);
+                using (var cancellation = new CancellationTokenSource())
+                {
+                    var runTask = CollectAsync(orchestrator.RunAsync(
+                        "写入后取消",
+                        CreateOptions(AgentPermissionMode.FullAuto),
+                        cancellation.Token));
+                    var writeSignal = cancellableTool.WriteApplied;
+                    var writeCompleted = await Task.WhenAny(writeSignal, Task.Delay(TimeSpan.FromSeconds(15)));
+                    Assert.Same(writeSignal, writeCompleted);
+
+                    cancellation.Cancel();
+                    var runCompleted = await Task.WhenAny(runTask, Task.Delay(TimeSpan.FromSeconds(15)));
+                    Assert.Same(runTask, runCompleted);
+                    var events = await runTask;
+
+                    Assert.Single(events.Where(item => item.Type == AgentEventType.Cancelled));
+                    Assert.Equal(1, undoScopeFactory.RollbackCount);
+                    Assert.Equal(originalText, await session.ReadActiveDocumentTextAsync());
+                }
             });
         }
 
@@ -152,6 +214,17 @@ namespace SmartWord.OfficeIntegration.Tests
             return events;
         }
 
+        private static async Task<List<AgentEvent>> CollectAsync(IAsyncEnumerable<AgentEvent> stream)
+        {
+            var events = new List<AgentEvent>();
+            await foreach (var agentEvent in stream)
+            {
+                events.Add(agentEvent);
+            }
+
+            return events;
+        }
+
         private static AgentRunOptions CreateOptions(AgentPermissionMode permissionMode)
         {
             return new AgentRunOptions
@@ -192,6 +265,94 @@ namespace SmartWord.OfficeIntegration.Tests
                 write_code = writeCode,
                 verify_code = verifyCode
             });
+        }
+
+        private sealed class CancellableWriteTool : ITool
+        {
+            private readonly ITool _inner;
+            private readonly TaskCompletionSource<bool> _writeApplied =
+                new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public CancellableWriteTool(ITool inner)
+            {
+                _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+            }
+
+            public string Name => _inner.Name;
+
+            public string Description => _inner.Description;
+
+            public ToolPermission RequiredPermission => _inner.RequiredPermission;
+
+            public bool IsVisibleToModel => _inner.IsVisibleToModel;
+
+            public JsonElement InputSchema => _inner.InputSchema;
+
+            public Task WriteApplied => _writeApplied.Task;
+
+            public async Task<ToolCallResult> ExecuteAsync(
+                JsonElement input,
+                IUndoScope undoScope,
+                CancellationToken cancellationToken)
+            {
+                var result = await _inner.ExecuteAsync(input, undoScope, cancellationToken);
+                if (!result.Success)
+                {
+                    return result;
+                }
+
+                _writeApplied.TrySetResult(true);
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+                return result;
+            }
+        }
+
+        private sealed class TrackingUndoScopeFactory : IUndoScopeFactory
+        {
+            private readonly IUndoScopeFactory _inner;
+
+            public TrackingUndoScopeFactory(IUndoScopeFactory inner)
+            {
+                _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+            }
+
+            public int RollbackCount { get; private set; }
+
+            public async Task<IUndoScope> BeginWriteStepUndoAsync(
+                string operationName,
+                CancellationToken cancellationToken)
+            {
+                var innerScope = await _inner.BeginWriteStepUndoAsync(operationName, cancellationToken);
+                return new TrackingUndoScope(innerScope, () => RollbackCount++);
+            }
+        }
+
+        private sealed class TrackingUndoScope : IUndoScope
+        {
+            private readonly IUndoScope _inner;
+            private readonly Action _onRollback;
+
+            public TrackingUndoScope(IUndoScope inner, Action onRollback)
+            {
+                _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+                _onRollback = onRollback ?? throw new ArgumentNullException(nameof(onRollback));
+            }
+
+            public void Commit()
+            {
+                _inner.Commit();
+            }
+
+            public void Rollback()
+            {
+                _onRollback();
+                _inner.Rollback();
+            }
+
+            public void Dispose()
+            {
+                _inner.Dispose();
+            }
         }
     }
 }
