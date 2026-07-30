@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -95,14 +95,14 @@ namespace SmartWord.Application.Orchestration
         documentPath,
         safeOptions.ConversationId);
     var taskStartedAtUtc = DateTimeOffset.UtcNow;
-    _todoManager?.SetCurrentDocumentPath(documentPath);
-    var auditRun = await TryStartTaskRunAsync(
+    _todoRunCoordinator.SetCurrentDocumentPath(documentPath);
+    var auditRun = await _runAuditRecorder.TryStartTaskRunAsync(
             documentPath,
             userInput,
             safeOptions,
             cancellationToken)
         .ConfigureAwait(false);
-    await RecordTaskTelemetryAsync(
+    await _runAuditRecorder.RecordTaskTelemetryAsync(
             "task_started",
             safeOptions,
             new Dictionary<string, object>
@@ -126,7 +126,7 @@ namespace SmartWord.Application.Orchestration
                 : documentContext.DocumentStatus.GetUserFriendlyMessage(),
             0,
             ResolveTotalSteps(safeOptions));
-        await TryCompleteTaskRunAsync(auditRun, auditCompletion, CancellationToken.None)
+        await _runAuditRecorder.TryCompleteTaskRunAsync(auditRun, auditCompletion, CancellationToken.None)
             .ConfigureAwait(false);
         auditRunCompleted = true;
         yield return new AgentEvent
@@ -151,90 +151,28 @@ namespace SmartWord.Application.Orchestration
         .ConfigureAwait(false);
 
     TodoBoard currentTodoBoard = null;
-    var activePlanFingerprint = _todoManager == null
-        ? string.Empty
-        : _todoManager.ComputePlanFingerprint(safeOptions.ActivePlan);
+    var activePlanFingerprint = string.Empty;
     var runStarted = false;
-    if (_todoManager != null && safeOptions.Mode == AgentMode.Agent)
+    await foreach (var startupUpdate in _todoRunCoordinator
+        .StartRunAsync(documentPath, safeOptions, cancellationToken)
+        .ConfigureAwait(false))
     {
-        var prepareResult = await _todoManager
-            .PrepareBoardForRunAsync(
-                documentPath,
-                safeOptions.ActivePlan,
-                forceRebuildFromActivePlan: safeOptions.ActivePlan != null
-                    && !safeOptions.StartupTodoBoardDecision.HasValue,
-                cancellationToken)
-            .ConfigureAwait(false);
-        currentTodoBoard = prepareResult.Board;
-        activePlanFingerprint = string.IsNullOrWhiteSpace(prepareResult.ActivePlanFingerprint)
-            ? activePlanFingerprint
-            : prepareResult.ActivePlanFingerprint;
-
-        if (prepareResult.Status == TodoBoardPreparationStatus.RecoveryRequired
-            || prepareResult.Status == TodoBoardPreparationStatus.Paused)
+        currentTodoBoard = startupUpdate.Board ?? currentTodoBoard;
+        if (!string.IsNullOrWhiteSpace(startupUpdate.ActivePlanFingerprint))
         {
-            if (safeOptions.StartupTodoBoardDecision.HasValue)
-            {
-                currentTodoBoard = await _todoManager
-                    .ResolveRecoveryAsync(
-                        documentPath,
-                        safeOptions.StartupTodoBoardDecision.Value,
-                        safeOptions.ActivePlan,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            else if (_todoRecoveryChannel == null || !_todoRecoveryChannel.IsAvailable)
-            {
-                yield return new AgentEvent
-                {
-                    Type = AgentEventType.Error,
-                    Message = prepareResult.Status == TodoBoardPreparationStatus.Paused
-                        ? "检测到已暂停的 Todo Board，但当前前端未连接继续决策通道，系统已停止执行。"
-                        : "检测到待恢复的 Todo Board，但当前前端未连接恢复决策通道，系统已停止执行。"
-                };
-
-                yield break;
-            }
-            else
-            {
-                var recoveryRequestId = Guid.NewGuid().ToString("N");
-                if (prepareResult.Status == TodoBoardPreparationStatus.Paused)
-                {
-                    yield return CreateTodoBoardPausedEvent(
-                        prepareResult,
-                        _todoManager,
-                        recoveryRequestId);
-                }
-                else
-                {
-                    yield return CreateTodoBoardRecoveryRequiredEvent(
-                        prepareResult,
-                        _todoManager,
-                        recoveryRequestId);
-                }
-
-                var recoveryDecision = await _todoRecoveryChannel
-                    .WaitForDecisionAsync(recoveryRequestId, cancellationToken)
-                    .ConfigureAwait(false);
-                currentTodoBoard = await _todoManager
-                    .ResolveRecoveryAsync(documentPath, recoveryDecision, safeOptions.ActivePlan, cancellationToken)
-                    .ConfigureAwait(false);
-            }
+            activePlanFingerprint = startupUpdate.ActivePlanFingerprint;
         }
 
-        var runId = Guid.NewGuid().ToString("N");
-        currentTodoBoard = await _todoManager
-            .MarkRunStartedAsync(documentPath, runId, activePlanFingerprint, cancellationToken)
-            .ConfigureAwait(false);
-        runStarted = true;
-        yield return CreateTodoBoardReadyEvent(
-            currentTodoBoard,
-            _todoManager,
-            prepareResult.Status == TodoBoardPreparationStatus.RecoveryRequired
-                ? "Todo Board 已按恢复决策准备完毕。"
-                : prepareResult.Status == TodoBoardPreparationStatus.Paused
-                    ? "Todo Board 已按继续决策准备完毕。"
-                : "当前 Todo Board 已就绪。");
+        if (startupUpdate.Event != null)
+        {
+            yield return startupUpdate.Event;
+        }
+
+        runStarted = runStarted || startupUpdate.RunStarted;
+        if (startupUpdate.ShouldStop)
+        {
+            yield break;
+        }
     }
 
     var history = await _conversationStore
@@ -321,7 +259,7 @@ namespace SmartWord.Application.Orchestration
             {
                 var beforeTokens = _conversationStore.EstimateTokenCount(messages);
                 var afterTokens = _conversationStore.EstimateTokenCount(compactionResult.Messages.ToList());
-                await RecordTelemetryAsync(
+                await _runAuditRecorder.RecordTaskTelemetryAsync(
                         "context_compressed",
                         safeOptions,
                         new Dictionary<string, object>
@@ -450,17 +388,17 @@ namespace SmartWord.Application.Orchestration
                 if (pendingWriteStep != null)
                 {
                     var pauseMessage = "模型在当前写步骤仍待修复时提前停止输出，系统已回退当前步骤并暂停。你可以继续尝试、跳过此步骤，或停止本次任务。";
-                    var pendingWriteStateEvent = CreatePendingWriteStateEvent(pendingWriteStep);
-                    await TryRecordTaskChangeAsync(
+                    var pendingWriteStateEvent = WriteStepCoordinator.CreatePendingWriteStateEvent(pendingWriteStep);
+                    await _runAuditRecorder.TryRecordTaskChangeAsync(
                             auditRun?.Id,
                             pendingWriteStateEvent,
                             pendingWriteStateEvent.Type == AgentEventType.ChangeUnverified ? "unverified" : "repair_required",
                             cancellationToken)
                         .ConfigureAwait(false);
                     yield return pendingWriteStateEvent;
-                    if (safeOptions.Mode == AgentMode.Agent && runStarted && _todoManager != null)
+                    if (safeOptions.Mode == AgentMode.Agent && runStarted && _todoRunCoordinator.IsAvailable)
                     {
-                        currentTodoBoard = await _todoManager
+                        currentTodoBoard = await _todoRunCoordinator
                             .MarkRunPausedAsync(
                                 documentPath,
                                 TodoBoardRunOutcome.RolledBack,
@@ -475,7 +413,7 @@ namespace SmartWord.Application.Orchestration
                             totalStepsForAudit);
                         yield return CreateTodoBoardPausedEvent(
                             currentTodoBoard,
-                            _todoManager,
+                            _todoRunCoordinator.Manager,
                             pauseMessage);
                     }
 
@@ -679,7 +617,7 @@ namespace SmartWord.Application.Orchestration
                     RequiresConfirmation = requiresConfirmation,
                     OperationDescription = operationDescription
                 };
-                await RecordTelemetryAsync(
+                await _runAuditRecorder.RecordTaskTelemetryAsync(
                         "tool_call_started",
                         safeOptions,
                         new Dictionary<string, object>
@@ -693,7 +631,7 @@ namespace SmartWord.Application.Orchestration
                         },
                         cancellationToken)
                     .ConfigureAwait(false);
-                await RecordTelemetryAsync(
+                await _runAuditRecorder.RecordTaskTelemetryAsync(
                         "permission_checked",
                         safeOptions,
                         new Dictionary<string, object>
@@ -712,7 +650,7 @@ namespace SmartWord.Application.Orchestration
                 if (!permissionDecision.IsAllowed)
                 {
                     var deniedResult = ToolCallResult.Denied(toolCall.Name, permissionDecision.Reason);
-                    await RecordToolTelemetryAsync(
+                    await _runAuditRecorder.RecordToolTelemetryAsync(
                             "tool_call_denied",
                             safeOptions,
                             toolCall,
@@ -763,7 +701,7 @@ namespace SmartWord.Application.Orchestration
 
                 if (inputParseError != null)
                 {
-                    await RecordToolTelemetryAsync(
+                    await _runAuditRecorder.RecordToolTelemetryAsync(
                             "tool_call_failed",
                             safeOptions,
                             toolCall,
@@ -849,7 +787,7 @@ namespace SmartWord.Application.Orchestration
                     }
 
                     var confirmationStartedAt = DateTimeOffset.UtcNow;
-                    await RecordTelemetryAsync(
+                    await _runAuditRecorder.RecordTaskTelemetryAsync(
                             "confirmation_requested",
                             safeOptions,
                             new Dictionary<string, object>
@@ -868,7 +806,7 @@ namespace SmartWord.Application.Orchestration
                             scriptApprovalKey,
                             cancellationToken)
                         .ConfigureAwait(false);
-                    await RecordTelemetryAsync(
+                    await _runAuditRecorder.RecordTaskTelemetryAsync(
                             "confirmation_decided",
                             safeOptions,
                             new Dictionary<string, object>
@@ -888,7 +826,7 @@ namespace SmartWord.Application.Orchestration
                     if (confirmationDecision == null || !confirmationDecision.Confirmed)
                     {
                         var skippedResult = ToolCallResult.Skipped(toolCall.Name, "用户选择跳过本次写操作。");
-                        await RecordToolTelemetryAsync(
+                        await _runAuditRecorder.RecordToolTelemetryAsync(
                                 "tool_call_skipped",
                                 safeOptions,
                                 toolCall,
@@ -954,9 +892,9 @@ namespace SmartWord.Application.Orchestration
                             writeStepUndoScope = await _undoScopeFactory
                                 .BeginWriteStepUndoAsync("SmartWord Agent 写步骤", cancellationToken)
                                 .ConfigureAwait(false);
-                            if (_todoManager != null)
+                            if (_todoRunCoordinator.IsAvailable)
                             {
-                                currentTodoBoard = await _todoManager
+                                currentTodoBoard = await _todoRunCoordinator
                                     .MarkWriteStepStartedAsync(
                                         documentPath,
                                         toolCall.Id,
@@ -1002,9 +940,9 @@ namespace SmartWord.Application.Orchestration
                         writeStepRolledBack = true;
                     }
 
-                    if (todoWriteStepStarted && _todoManager != null)
+                    if (todoWriteStepStarted && _todoRunCoordinator.IsAvailable)
                     {
-                        currentTodoBoard = await _todoManager
+                        currentTodoBoard = await _todoRunCoordinator
                             .RollbackCurrentWriteStepAsync(
                                 documentPath,
                                 interruptedReason,
@@ -1025,7 +963,7 @@ namespace SmartWord.Application.Orchestration
                         Truncate(ex.ToString(), ToolErrorMessageMaxLength));
                 }
 
-                await RecordToolTelemetryAsync(
+                await _runAuditRecorder.RecordToolTelemetryAsync(
                         executionResult.Success ? "tool_call_completed" : "tool_call_failed",
                         safeOptions,
                         toolCall,
@@ -1080,19 +1018,19 @@ namespace SmartWord.Application.Orchestration
                     if (isDocumentWriteTool)
                     {
                         runState.ConsecutiveFailures = 0;
-                        var autoVerifyPlan = BuildAutoVerifyPlan(toolCall.Name, parsedInput);
+                        var autoVerifyPlan = _writeStepCoordinator.BuildAutoVerifyPlan(toolCall.Name, parsedInput);
                         var executedWriteStep = pendingWriteStep != null
                             ? pendingWriteStep.MarkWriteExecuted(toolCall, executionResult, autoVerifyPlan)
                             : PendingWriteStep.CreateAwaitingVerification(toolCall, executionResult, autoVerifyPlan);
-                        var changeExecutedEvent = CreateChangeEvent(
+                        var changeExecutedEvent = WriteStepCoordinator.CreateChangeEvent(
                             AgentEventType.ChangeExecuted,
                             executedWriteStep,
                             "写入已执行，系统正在执行验证步骤。");
-                        await TryRecordTaskChangeAsync(auditRun?.Id, changeExecutedEvent, "executed", cancellationToken)
+                        await _runAuditRecorder.TryRecordTaskChangeAsync(auditRun?.Id, changeExecutedEvent, "executed", cancellationToken)
                             .ConfigureAwait(false);
                         yield return changeExecutedEvent;
 
-                        var autoVerifyOutcome = await ExecuteAutoVerifyAsync(
+                        var autoVerifyOutcome = await _writeStepCoordinator.ExecuteAutoVerifyAsync(
                                 executedWriteStep,
                                 writeStepUndoScope,
                                 cancellationToken)
@@ -1103,7 +1041,7 @@ namespace SmartWord.Application.Orchestration
                             yield return CreateToolStartedEvent(
                                 autoVerifyOutcome.ToolCall,
                                 autoVerifyOutcome.OperationDescription);
-                            await RecordVerificationTelemetryAsync(
+                            await _runAuditRecorder.RecordVerificationTelemetryAsync(
                                     autoVerifyOutcome.Passed ? "verification_completed" : "verification_failed",
                                     safeOptions,
                                     autoVerifyOutcome.ToolCall,
@@ -1111,7 +1049,7 @@ namespace SmartWord.Application.Orchestration
                                     autoVerifyOutcome.OperationDescription,
                                     cancellationToken)
                                 .ConfigureAwait(false);
-                            await TryRecordTaskToolAsync(
+                            await _runAuditRecorder.TryRecordTaskToolAsync(
                                     auditRun?.Id,
                                     autoVerifyOutcome.ToolCall,
                                     autoVerifyOutcome.Result,
@@ -1121,18 +1059,19 @@ namespace SmartWord.Application.Orchestration
                             yield return CreateToolCompletedEvent(autoVerifyOutcome.ToolCall, autoVerifyOutcome.Result);
                         }
 
-                        if (!autoVerifyOutcome.Passed)
-                        {
-                            pendingWriteStep = executedWriteStep.MarkRepairRequired(autoVerifyOutcome.FailureMessage);
-                            if (writeStepUndoScope != null)
-                            {
-                                writeStepUndoScope.Rollback();
-                                writeStepRolledBack = true;
-                            }
+                        var writeStepTransition = _writeStepCoordinator.ApplyVerificationOutcome(
+                            executedWriteStep,
+                            autoVerifyOutcome,
+                            writeStepUndoScope);
+                        writeStepCommitted = writeStepTransition.UndoCommitted;
+                        writeStepRolledBack = writeStepTransition.UndoRolledBack;
+                        pendingWriteStep = writeStepTransition.PendingWriteStep;
 
-                            if (todoWriteStepStarted && _todoManager != null)
+                        if (!writeStepTransition.Passed)
+                        {
+                            if (todoWriteStepStarted && _todoRunCoordinator.IsAvailable)
                             {
-                                currentTodoBoard = await _todoManager
+                                currentTodoBoard = await _todoRunCoordinator
                                     .RollbackCurrentWriteStepAsync(
                                         documentPath,
                                         pendingWriteStep.LastFailureMessage,
@@ -1141,12 +1080,12 @@ namespace SmartWord.Application.Orchestration
                                 yield return CreateTodoBoardSnapshotEvent(
                                     AgentEventType.TodoBoardUpdated,
                                     currentTodoBoard,
-                                    _todoManager,
+                                    _todoRunCoordinator.Manager,
                                     TodoBoardUpdateKind.RollbackRestored,
                                     "当前写步骤已回退，Todo Board 已恢复到最近可信检查点。");
                             }
 
-                            await AppendAutoVerifyObservationAsync(
+                            await _writeStepCoordinator.AppendAutoVerifyObservationAsync(
                                 conversationStorageKey,
                                 messages,
                                 executedWriteStep,
@@ -1155,21 +1094,21 @@ namespace SmartWord.Application.Orchestration
                                 cancellationToken)
                                 .ConfigureAwait(false);
 
-                            var verificationFailedEvent = CreateChangeEvent(
+                            var verificationFailedEvent = WriteStepCoordinator.CreateChangeEvent(
                                 AgentEventType.ChangeVerificationFailed,
                                 pendingWriteStep,
                                 pendingWriteStep.LastFailureMessage,
                                 autoVerifyOutcome.Result == null ? string.Empty : autoVerifyOutcome.Result.Output);
-                            await TryRecordTaskChangeAsync(auditRun?.Id, verificationFailedEvent, "verification_failed", cancellationToken)
+                            await _runAuditRecorder.TryRecordTaskChangeAsync(auditRun?.Id, verificationFailedEvent, "verification_failed", cancellationToken)
                                 .ConfigureAwait(false);
                             yield return verificationFailedEvent;
 
                             if (pendingWriteStep.RepairAttempts >= WriteRepairAttemptLimit)
                             {
                                 var pauseMessage = "当前写步骤已连续失败 3 次，系统已回退当前步骤并暂停。你可以继续尝试、跳过此步骤，或停止本次任务。";
-                                if (safeOptions.Mode == AgentMode.Agent && runStarted && _todoManager != null)
+                                if (safeOptions.Mode == AgentMode.Agent && runStarted && _todoRunCoordinator.IsAvailable)
                                 {
-                                    currentTodoBoard = await _todoManager
+                                    currentTodoBoard = await _todoRunCoordinator
                                         .MarkRunPausedAsync(
                                             documentPath,
                                             TodoBoardRunOutcome.RolledBack,
@@ -1184,7 +1123,7 @@ namespace SmartWord.Application.Orchestration
                                         totalStepsForAudit);
                                     yield return CreateTodoBoardPausedEvent(
                                         currentTodoBoard,
-                                        _todoManager,
+                                        _todoRunCoordinator.Manager,
                                         pauseMessage);
                                 }
 
@@ -1199,15 +1138,9 @@ namespace SmartWord.Application.Orchestration
                         }
                         else
                         {
-                            if (writeStepUndoScope != null)
+                            if (todoWriteStepStarted && _todoRunCoordinator.IsAvailable)
                             {
-                                writeStepUndoScope.Commit();
-                                writeStepCommitted = true;
-                            }
-
-                            if (todoWriteStepStarted && _todoManager != null)
-                            {
-                                currentTodoBoard = await _todoManager
+                                currentTodoBoard = await _todoRunCoordinator
                                     .MarkWriteStepCommittedAsync(
                                         documentPath,
                                         executedWriteStep.OperationDescription,
@@ -1215,7 +1148,7 @@ namespace SmartWord.Application.Orchestration
                                     .ConfigureAwait(false);
                             }
 
-                            await AppendAutoVerifyObservationAsync(
+                            await _writeStepCoordinator.AppendAutoVerifyObservationAsync(
                                 conversationStorageKey,
                                 messages,
                                 executedWriteStep,
@@ -1231,13 +1164,13 @@ namespace SmartWord.Application.Orchestration
                                 hasSuccessfulDocumentWriteOccurredInRun = true;
                             }
 
-                            var changeAppliedEvent = CreateChangeEvent(
+                            var changeAppliedEvent = WriteStepCoordinator.CreateChangeEvent(
                                 AgentEventType.ChangeApplied,
                                 executedWriteStep,
                                 "已通过验证步骤确认改动生效。",
                                 autoVerifyOutcome.Result == null ? string.Empty : autoVerifyOutcome.Result.Output);
                             completedStepsForAudit++;
-                            await TryRecordTaskChangeAsync(auditRun?.Id, changeAppliedEvent, "verified", cancellationToken)
+                            await _runAuditRecorder.TryRecordTaskChangeAsync(auditRun?.Id, changeAppliedEvent, "verified", cancellationToken)
                                 .ConfigureAwait(false);
                             yield return changeAppliedEvent;
                             runState.ConsecutiveFailures = 0;
@@ -1271,9 +1204,9 @@ namespace SmartWord.Application.Orchestration
                             writeStepRolledBack = true;
                         }
 
-                        if (todoWriteStepStarted && _todoManager != null)
+                        if (todoWriteStepStarted && _todoRunCoordinator.IsAvailable)
                         {
-                            currentTodoBoard = await _todoManager
+                            currentTodoBoard = await _todoRunCoordinator
                                 .RollbackCurrentWriteStepAsync(
                                     documentPath,
                                     pendingWriteStep.LastFailureMessage,
@@ -1282,26 +1215,26 @@ namespace SmartWord.Application.Orchestration
                             yield return CreateTodoBoardSnapshotEvent(
                                 AgentEventType.TodoBoardUpdated,
                                 currentTodoBoard,
-                                _todoManager,
+                                _todoRunCoordinator.Manager,
                                 TodoBoardUpdateKind.RollbackRestored,
                                 "当前写步骤已回退，Todo Board 已恢复到最近可信检查点。");
                         }
 
-                        var repairRequiredEvent = CreateChangeEvent(
+                        var repairRequiredEvent = WriteStepCoordinator.CreateChangeEvent(
                             AgentEventType.ChangeRepairRequired,
                             pendingWriteStep,
                             pendingWriteStep.LastFailureMessage,
                             executionResult.Output);
-                        await TryRecordTaskChangeAsync(auditRun?.Id, repairRequiredEvent, "repair_required", cancellationToken)
+                        await _runAuditRecorder.TryRecordTaskChangeAsync(auditRun?.Id, repairRequiredEvent, "repair_required", cancellationToken)
                             .ConfigureAwait(false);
                         yield return repairRequiredEvent;
 
                         if (pendingWriteStep.RepairAttempts >= WriteRepairAttemptLimit)
                         {
                             var pauseMessage = "当前写步骤已连续失败 3 次，系统已回退当前步骤并暂停。你可以继续尝试、跳过此步骤，或停止本次任务。";
-                            if (safeOptions.Mode == AgentMode.Agent && runStarted && _todoManager != null)
+                            if (safeOptions.Mode == AgentMode.Agent && runStarted && _todoRunCoordinator.IsAvailable)
                             {
-                                currentTodoBoard = await _todoManager
+                                currentTodoBoard = await _todoRunCoordinator
                                     .MarkRunPausedAsync(
                                         documentPath,
                                         TodoBoardRunOutcome.RolledBack,
@@ -1316,7 +1249,7 @@ namespace SmartWord.Application.Orchestration
                                     totalStepsForAudit);
                                 yield return CreateTodoBoardPausedEvent(
                                     currentTodoBoard,
-                                    _todoManager,
+                                    _todoRunCoordinator.Manager,
                                     pauseMessage);
                             }
 
@@ -1363,9 +1296,9 @@ namespace SmartWord.Application.Orchestration
                     {
                         writeStepUndoScope.Rollback();
                         writeStepRolledBack = true;
-                        if (todoWriteStepStarted && _todoManager != null)
+                        if (todoWriteStepStarted && _todoRunCoordinator.IsAvailable)
                         {
-                            currentTodoBoard = await _todoManager
+                            currentTodoBoard = await _todoRunCoordinator
                                 .RollbackCurrentWriteStepAsync(
                                     documentPath,
                                     interruptedReason,
@@ -1378,17 +1311,17 @@ namespace SmartWord.Application.Orchestration
                 }
             }
 
-            if (_todoManager != null && safeOptions.Mode == AgentMode.Agent && currentTodoBoard != null)
+            if (_todoRunCoordinator.IsAvailable && safeOptions.Mode == AgentMode.Agent && currentTodoBoard != null)
             {
                 if (todoWriteThisIteration)
                 {
-                    currentTodoBoard = await _todoManager
+                    currentTodoBoard = await _todoRunCoordinator
                         .GetBoardAsync(documentPath, cancellationToken)
                         .ConfigureAwait(false);
                 }
                 else if (toolCalls.Count > 0)
                 {
-                    currentTodoBoard = await _todoManager
+                    currentTodoBoard = await _todoRunCoordinator
                         .RecordRoundWithoutTodoWriteAsync(
                             documentPath,
                             hasEffectiveExecutionRoundThisIteration,
@@ -1427,19 +1360,19 @@ namespace SmartWord.Application.Orchestration
                         Content = reminderDecision.Message
                     });
 
-                    currentTodoBoard = await _todoManager
+                    currentTodoBoard = await _todoRunCoordinator
                         .MarkReminderInjectedAsync(
                             documentPath,
                             reminderDecision.IsHighPriority,
                             cancellationToken)
                         .ConfigureAwait(false);
 
-                    var reminderStats = _todoManager.BuildStats(currentTodoBoard);
+                    var reminderStats = _todoRunCoordinator.BuildStats(currentTodoBoard);
                     yield return new AgentEvent
                     {
                         Type = AgentEventType.TodoReminderInjected,
                         Message = reminderDecision.Message,
-                        BoardJson = _todoManager.SerializeBoard(currentTodoBoard),
+                        BoardJson = _todoRunCoordinator.SerializeBoard(currentTodoBoard),
                         CurrentTodoId = reminderStats.CurrentTodoId,
                         CompletedSteps = reminderStats.HandledCount,
                         TotalSteps = reminderStats.TotalCount,
@@ -1458,19 +1391,19 @@ namespace SmartWord.Application.Orchestration
                     Content = reminderDecision.Message
                 });
 
-                currentTodoBoard = await _todoManager
+                currentTodoBoard = await _todoRunCoordinator
                     .MarkReminderInjectedAsync(
                         documentPath,
                         reminderDecision.IsHighPriority,
                         cancellationToken)
                     .ConfigureAwait(false);
 
-                var reminderStats = _todoManager.BuildStats(currentTodoBoard);
+                var reminderStats = _todoRunCoordinator.BuildStats(currentTodoBoard);
                 yield return new AgentEvent
                 {
                     Type = AgentEventType.TodoReminderInjected,
                     Message = reminderDecision.Message,
-                    BoardJson = _todoManager.SerializeBoard(currentTodoBoard),
+                    BoardJson = _todoRunCoordinator.SerializeBoard(currentTodoBoard),
                     CurrentTodoId = reminderStats.CurrentTodoId,
                     CompletedSteps = reminderStats.HandledCount,
                     TotalSteps = reminderStats.TotalCount,
@@ -1482,17 +1415,17 @@ namespace SmartWord.Application.Orchestration
         if (pendingWriteStep != null)
         {
             var pauseMessage = "当前写步骤尚未修复，系统已回退当前步骤并暂停。你可以继续尝试、跳过此步骤，或停止本次任务。";
-            var pendingWriteStateEvent = CreatePendingWriteStateEvent(pendingWriteStep);
-            await TryRecordTaskChangeAsync(
+            var pendingWriteStateEvent = WriteStepCoordinator.CreatePendingWriteStateEvent(pendingWriteStep);
+            await _runAuditRecorder.TryRecordTaskChangeAsync(
                     auditRun?.Id,
                     pendingWriteStateEvent,
                     pendingWriteStateEvent.Type == AgentEventType.ChangeUnverified ? "unverified" : "repair_required",
                     cancellationToken)
                 .ConfigureAwait(false);
             yield return pendingWriteStateEvent;
-            if (safeOptions.Mode == AgentMode.Agent && runStarted && _todoManager != null)
+            if (safeOptions.Mode == AgentMode.Agent && runStarted && _todoRunCoordinator.IsAvailable)
             {
-                currentTodoBoard = await _todoManager
+                currentTodoBoard = await _todoRunCoordinator
                     .MarkRunPausedAsync(
                         documentPath,
                         TodoBoardRunOutcome.RolledBack,
@@ -1507,7 +1440,7 @@ namespace SmartWord.Application.Orchestration
                     totalStepsForAudit);
                 yield return CreateTodoBoardPausedEvent(
                     currentTodoBoard,
-                    _todoManager,
+                    _todoRunCoordinator.Manager,
                     pauseMessage);
             }
 
@@ -1519,9 +1452,9 @@ namespace SmartWord.Application.Orchestration
             var maxIterationsMessage = BuildMaxIterationsMessage(safeOptions.Mode, maxIterations);
             yield return CreateMaxIterationsReachedEvent(safeOptions.Mode, maxIterations, maxIterationsMessage);
 
-            if (safeOptions.Mode == AgentMode.Agent && runStarted && _todoManager != null)
+            if (safeOptions.Mode == AgentMode.Agent && runStarted && _todoRunCoordinator.IsAvailable)
             {
-                currentTodoBoard = await _todoManager
+                currentTodoBoard = await _todoRunCoordinator
                     .MarkRunPausedAsync(documentPath, maxIterationsMessage, CancellationToken.None)
                     .ConfigureAwait(false);
                 runPaused = true;
@@ -1532,7 +1465,7 @@ namespace SmartWord.Application.Orchestration
                     totalStepsForAudit);
                 yield return CreateTodoBoardPausedEvent(
                     currentTodoBoard,
-                    _todoManager,
+                    _todoRunCoordinator.Manager,
                     maxIterationsMessage);
             }
 
@@ -1558,11 +1491,17 @@ namespace SmartWord.Application.Orchestration
             && !completedSuccessfully
             && !runPaused
             && interruptedOutcome != TodoBoardRunOutcome.None
-            && _todoManager != null
+            && _todoRunCoordinator.IsAvailable
             && safeOptions.Mode == AgentMode.Agent)
         {
-            await _todoManager
-                .MarkRunInterruptedAsync(documentPath, interruptedOutcome, interruptedReason, CancellationToken.None)
+            await _todoRunCoordinator
+                .CompleteAsync(
+                    documentPath,
+                    runStarted,
+                    false,
+                    runPaused,
+                    interruptedOutcome,
+                    interruptedReason)
                 .ConfigureAwait(false);
         }
 
@@ -1579,12 +1518,12 @@ namespace SmartWord.Application.Orchestration
                     totalStepsForAudit);
             }
 
-            await TryCompleteTaskRunAsync(auditRun, auditCompletion, CancellationToken.None)
+            await _runAuditRecorder.TryCompleteTaskRunAsync(auditRun, auditCompletion, CancellationToken.None)
                 .ConfigureAwait(false);
             auditRunCompleted = true;
         }
 
-        await RecordTaskTelemetryAsync(
+        await _runAuditRecorder.RecordTaskTelemetryAsync(
                 completedSuccessfully
                     ? "task_completed"
                     : interruptedOutcome == TodoBoardRunOutcome.Cancelled
@@ -1604,17 +1543,23 @@ namespace SmartWord.Application.Orchestration
                             : interruptedOutcome == TodoBoardRunOutcome.Cancelled
                                 ? "cancelled"
                                 : "failed",
-                    ["failureType"] = completedSuccessfully ? string.Empty : ResolveFailureType(interruptedOutcome),
+                    ["failureType"] = completedSuccessfully ? string.Empty : RunAuditRecorder.ResolveFailureType(interruptedOutcome),
                     ["failureReason"] = completedSuccessfully ? string.Empty : interruptedReason ?? string.Empty
                 },
                 CancellationToken.None)
             .ConfigureAwait(false);
     }
 
-    if (runStarted && completedSuccessfully && _todoManager != null && safeOptions.Mode == AgentMode.Agent)
+    if (runStarted && completedSuccessfully && _todoRunCoordinator.IsAvailable && safeOptions.Mode == AgentMode.Agent)
     {
-        await _todoManager
-            .MarkRunSucceededAndDeleteAsync(documentPath, CancellationToken.None)
+        await _todoRunCoordinator
+                .CompleteAsync(
+                    documentPath,
+                    runStarted,
+                    true,
+                    false,
+                TodoBoardRunOutcome.None,
+                string.Empty)
             .ConfigureAwait(false);
     }
 

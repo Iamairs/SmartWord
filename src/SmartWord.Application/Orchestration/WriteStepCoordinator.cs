@@ -25,9 +25,27 @@ using static SmartWord.Application.Orchestration.WriteOperationState;
 
 namespace SmartWord.Application.Orchestration
 {
-    public sealed partial class AgentOrchestrator
+    /// <summary>
+    /// 统一负责写步骤验证计划、验证工具执行和写步骤事件构造。
+    /// 主编排器只决定这些结果在总事件流中的发送顺序。
+    /// </summary>
+    internal sealed class WriteStepCoordinator
     {
-        private static AutoVerifyPlan BuildAutoVerifyPlan(string toolName, JObject parsedInput)
+        private static readonly TimeSpan ToolExecutionTimeout = TimeSpan.FromSeconds(30);
+        private const int ToolErrorMessageMaxLength = 500;
+
+        private readonly IToolRegistry _toolRegistry;
+        private readonly IConversationStore _conversationStore;
+
+        internal WriteStepCoordinator(
+            IToolRegistry toolRegistry,
+            IConversationStore conversationStore)
+        {
+            _toolRegistry = toolRegistry ?? throw new ArgumentNullException(nameof(toolRegistry));
+            _conversationStore = conversationStore ?? throw new ArgumentNullException(nameof(conversationStore));
+        }
+
+        internal AutoVerifyPlan BuildAutoVerifyPlan(string toolName, JObject parsedInput)
         {
             switch ((toolName ?? string.Empty).Trim().ToLowerInvariant())
             {
@@ -149,7 +167,7 @@ namespace SmartWord.Application.Orchestration
                 "系统正在执行当前脚本写步骤的验证。");
         }
 
-        private async Task<AutoVerifyOutcome> ExecuteAutoVerifyAsync(
+        internal async Task<AutoVerifyOutcome> ExecuteAutoVerifyAsync(
             PendingWriteStep pendingWriteStep,
             IUndoScope undoScope,
             CancellationToken cancellationToken)
@@ -241,7 +259,34 @@ namespace SmartWord.Application.Orchestration
                 pendingWriteStep.VerificationOperationDescription);
         }
 
-        private async Task AppendAutoVerifyObservationAsync(
+        /// <summary>
+        /// 根据自动验证结果原子地提交或回滚当前 UndoScope，并返回主循环需要继续协调的写步骤状态。
+        /// </summary>
+        internal WriteStepTransition ApplyVerificationOutcome(
+            PendingWriteStep executedWriteStep,
+            AutoVerifyOutcome outcome,
+            IUndoScope undoScope)
+        {
+            if (executedWriteStep == null)
+            {
+                throw new ArgumentNullException(nameof(executedWriteStep));
+            }
+
+            if (outcome == null || !outcome.Passed)
+            {
+                undoScope?.Rollback();
+                var failureMessage = outcome == null
+                    ? "写步骤已执行，但验证步骤未返回结果，当前步骤待修复。"
+                    : outcome.FailureMessage;
+                return WriteStepTransition.RolledBack(
+                    executedWriteStep.MarkRepairRequired(failureMessage));
+            }
+
+            undoScope?.Commit();
+            return WriteStepTransition.Committed();
+        }
+
+        internal async Task AppendAutoVerifyObservationAsync(
             string documentPath,
             IList<AgentMessage> messages,
             PendingWriteStep pendingWriteStep,
@@ -254,8 +299,24 @@ namespace SmartWord.Application.Orchestration
                 outcome,
                 disposition);
 
-            await AppendInternalObservationAsync(documentPath, messages, observation, cancellationToken)
+            if (string.IsNullOrWhiteSpace(observation))
+            {
+                return;
+            }
+
+            // 自动验证属于系统内部观察，必须以普通用户消息进入上下文，避免产生孤立 tool 消息。
+            var message = new AgentMessage
+            {
+                Role = "user",
+                Content = observation.Trim(),
+                IsInternalObservation = true,
+                InternalObservationKind = "auto_verify_result"
+            };
+
+            await _conversationStore
+                .AppendUserMessageAsync(documentPath, message, cancellationToken)
                 .ConfigureAwait(false);
+            messages.Add(CloneMessage(message));
         }
 
         private static string BuildAutoVerifyObservationMessage(
@@ -434,7 +495,7 @@ namespace SmartWord.Application.Orchestration
                 .Trim();
         }
 
-        private static AgentEvent CreateChangeEvent(
+        internal static AgentEvent CreateChangeEvent(
             AgentEventType eventType,
             PendingWriteStep pendingWriteStep,
             string message,
@@ -457,7 +518,7 @@ namespace SmartWord.Application.Orchestration
             };
         }
 
-        private static AgentEvent CreatePendingWriteTerminationEvent(PendingWriteStep pendingWriteStep)
+        internal static AgentEvent CreatePendingWriteTerminationEvent(PendingWriteStep pendingWriteStep)
         {
             if (pendingWriteStep == null)
             {
@@ -476,7 +537,7 @@ namespace SmartWord.Application.Orchestration
                 "写步骤失败后未完成修复，系统已停止任务并回滚本次任务中的写入。");
         }
 
-        private static AgentEvent CreatePendingWriteStateEvent(PendingWriteStep pendingWriteStep)
+        internal static AgentEvent CreatePendingWriteStateEvent(PendingWriteStep pendingWriteStep)
         {
             if (pendingWriteStep == null)
             {
@@ -565,5 +626,38 @@ namespace SmartWord.Application.Orchestration
                 : "写步骤已执行，但验证步骤未全部通过，当前步骤待修复。";
         }
 
+    }
+
+    /// <summary>
+    /// 描述一次自动验证后写步骤和 UndoScope 的确定性状态转换。
+    /// </summary>
+    internal sealed class WriteStepTransition
+    {
+        internal bool Passed { get; private set; }
+
+        internal bool UndoCommitted { get; private set; }
+
+        internal bool UndoRolledBack { get; private set; }
+
+        internal PendingWriteStep PendingWriteStep { get; private set; }
+
+        internal static WriteStepTransition Committed()
+        {
+            return new WriteStepTransition
+            {
+                Passed = true,
+                UndoCommitted = true
+            };
+        }
+
+        internal static WriteStepTransition RolledBack(PendingWriteStep pendingWriteStep)
+        {
+            return new WriteStepTransition
+            {
+                Passed = false,
+                UndoRolledBack = true,
+                PendingWriteStep = pendingWriteStep
+            };
+        }
     }
 }
