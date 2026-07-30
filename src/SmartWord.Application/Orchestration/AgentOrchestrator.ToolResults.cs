@@ -57,103 +57,6 @@ namespace SmartWord.Application.Orchestration
             return ToolConfirmationDecision.FromBoolean(confirmed);
         }
 
-        private async Task TryRecordTaskToolAsync(
-            string taskRunId,
-            ToolCall toolCall,
-            ToolCallResult result,
-            string operationDescription,
-            CancellationToken cancellationToken)
-        {
-            if (_taskHistoryStore == null || string.IsNullOrWhiteSpace(taskRunId) || toolCall == null)
-            {
-                return;
-            }
-
-            try
-            {
-                await _taskHistoryStore
-                    .RecordToolAsync(
-                        taskRunId,
-                        new TaskToolRecord
-                        {
-                            ToolCallId = toolCall.Id ?? string.Empty,
-                            ToolName = toolCall.Name ?? string.Empty,
-                            OperationDescription = string.IsNullOrWhiteSpace(operationDescription)
-                                ? toolCall.Description ?? string.Empty
-                                : operationDescription,
-                            RawInput = toolCall.Input ?? string.Empty,
-                            Output = result == null ? string.Empty : result.Output ?? string.Empty,
-                            Success = result != null && result.Success,
-                            CreatedAtUtc = DateTimeOffset.UtcNow
-                        },
-                        cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                Log.Warning(ex, "记录任务工具审计失败。TaskRunId={TaskRunId}, ToolName={ToolName}", taskRunId, toolCall.Name);
-            }
-        }
-
-        private async Task TryRecordTaskChangeAsync(
-            string taskRunId,
-            AgentEvent changeEvent,
-            string status,
-            CancellationToken cancellationToken)
-        {
-            if (_taskHistoryStore == null || string.IsNullOrWhiteSpace(taskRunId) || changeEvent == null)
-            {
-                return;
-            }
-
-            try
-            {
-                await _taskHistoryStore
-                    .RecordChangeAsync(
-                        taskRunId,
-                        new TaskChangeRecord
-                        {
-                            ToolCallId = changeEvent.ToolCallId ?? string.Empty,
-                            ToolName = changeEvent.ToolName ?? string.Empty,
-                            OperationDescription = changeEvent.OperationDescription ?? string.Empty,
-                            AffectedParagraphs = changeEvent.AffectedParagraphs ?? new int[0],
-                            Status = status ?? string.Empty,
-                            Message = string.IsNullOrWhiteSpace(changeEvent.Message)
-                                ? changeEvent.ToolOutput ?? string.Empty
-                                : changeEvent.Message,
-                            CreatedAtUtc = DateTimeOffset.UtcNow
-                        },
-                        cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                Log.Warning(ex, "记录任务改动审计失败。TaskRunId={TaskRunId}, Status={Status}", taskRunId, status);
-            }
-        }
-
-        private async Task TryCompleteTaskRunAsync(
-            TaskRunRecord auditRun,
-            TaskRunCompletion completion,
-            CancellationToken cancellationToken)
-        {
-            if (_taskHistoryStore == null || auditRun == null || string.IsNullOrWhiteSpace(auditRun.Id))
-            {
-                return;
-            }
-
-            try
-            {
-                await _taskHistoryStore
-                    .CompleteRunAsync(auditRun.Id, completion, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                Log.Warning(ex, "完成任务历史运行记录失败。TaskRunId={TaskRunId}", auditRun.Id);
-            }
-        }
-
         private async Task AppendToolResultAsync(
             string documentPath,
             IList<AgentMessage> messages,
@@ -173,7 +76,7 @@ namespace SmartWord.Application.Orchestration
                     cancellationToken)
                 .ConfigureAwait(false);
 
-            await TryRecordTaskToolAsync(
+            await _runAuditRecorder.TryRecordTaskToolAsync(
                     taskRunId,
                     toolCall,
                     result,
@@ -380,10 +283,10 @@ namespace SmartWord.Application.Orchestration
                 }
             }
 
-            if (todoBoard != null && _todoManager != null)
+            if (todoBoard != null && _todoRunCoordinator.IsAvailable)
             {
                 contextBuilder.AppendLine();
-                contextBuilder.AppendLine(_todoManager.BuildPromptBlock(todoBoard));
+                contextBuilder.AppendLine(_todoRunCoordinator.BuildPromptBlock(todoBoard));
                 contextBuilder.AppendLine("Notice: 复杂任务应持续维护 todo board。计划变化时，先更新任务板再继续执行。");
             }
 

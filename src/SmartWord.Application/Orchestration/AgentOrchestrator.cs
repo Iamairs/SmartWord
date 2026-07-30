@@ -42,17 +42,16 @@ namespace SmartWord.Application.Orchestration
         private readonly SystemPromptBuilder _systemPromptBuilder;
         private readonly IToolRegistry _toolRegistry;
         private readonly ToolCallCoordinator _toolCallCoordinator;
+        private readonly WriteStepCoordinator _writeStepCoordinator;
         private readonly IConfirmationChannel _confirmationChannel;
         private readonly PlanInterviewCoordinator _planInterviewCoordinator;
         private readonly IUndoScopeFactory _undoScopeFactory;
         private readonly ConversationCompressor _conversationCompressor;
         private readonly ContextCompactionService _contextCompactionService;
-        private readonly ITodoRecoveryChannel _todoRecoveryChannel;
-        private readonly TodoManager _todoManager;
+        private readonly TodoRunCoordinator _todoRunCoordinator;
         private readonly TodoReminderService _todoReminderService;
-        private readonly ITaskHistoryStore _taskHistoryStore;
         private readonly ISkillPromptResolver _skillPromptResolver;
-        private readonly IAgentTelemetrySink _telemetrySink;
+        private readonly RunAuditRecorder _runAuditRecorder;
 
         public AgentOrchestrator(
             ILlmClient llmClient,
@@ -84,6 +83,7 @@ namespace SmartWord.Application.Orchestration
                 toolRegistry,
                 permissionGuard,
                 skillScriptApprovalStore);
+            _writeStepCoordinator = new WriteStepCoordinator(toolRegistry, conversationStore);
             _confirmationChannel = confirmationChannel;
             _planInterviewCoordinator = new PlanInterviewCoordinator(questionChannel);
             _undoScopeFactory = undoScopeFactory;
@@ -91,12 +91,10 @@ namespace SmartWord.Application.Orchestration
             _contextCompactionService = contextCompactionService ?? new ContextCompactionService(
                 llmClient,
                 _conversationCompressor);
-            _todoRecoveryChannel = todoRecoveryChannel;
-            _todoManager = todoManager;
+            _todoRunCoordinator = new TodoRunCoordinator(todoManager, todoRecoveryChannel);
             _todoReminderService = todoReminderService;
-            _taskHistoryStore = taskHistoryStore;
             _skillPromptResolver = skillPromptResolver;
-            _telemetrySink = telemetrySink ?? NullAgentTelemetrySink.Instance;
+            _runAuditRecorder = new RunAuditRecorder(taskHistoryStore, telemetrySink);
         }
 
     }
