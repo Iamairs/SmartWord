@@ -1,5 +1,13 @@
 import { defineStore } from 'pinia';
 
+function createConversationId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+
+  return `conversation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function createMessage(role, content) {
   return {
     id: `${role}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -102,6 +110,7 @@ function compactCompletedChanges(changes) {
 
 export const useChatStore = defineStore('chat', {
   state: () => ({
+    conversationId: createConversationId(),
     messages: [],
     isLoading: false,
     currentMode: 'ask',
@@ -121,6 +130,16 @@ export const useChatStore = defineStore('chat', {
     completedTaskChanges: []
   }),
   actions: {
+    startNewConversation() {
+      this.conversationId = createConversationId();
+      this.messages = [];
+      this.activeToolCalls = [];
+      this.citations = [];
+      this.pendingConfirmation = null;
+      this.pendingQuestion = null;
+      this.currentTaskChanges = [];
+      this.completedTaskChanges = [];
+    },
     appendUserMessage(content) {
       this.messages.push(createMessage('user', content));
     },

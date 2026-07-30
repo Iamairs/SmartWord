@@ -12,6 +12,11 @@ namespace SmartWord.Core.Models
 
         public string Model { get; set; } = string.Empty;
 
+        /// <summary>
+        /// 前端聊天会话标识。仅用于隔离对话消息，不影响任务历史和文档级状态。
+        /// </summary>
+        public string ConversationId { get; set; } = string.Empty;
+
         public int MaxIterations { get; set; } = 100;
 
         public int CompactionThreshold { get; set; } = 24000;

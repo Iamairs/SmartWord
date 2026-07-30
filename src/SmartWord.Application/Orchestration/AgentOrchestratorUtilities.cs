@@ -217,6 +217,25 @@ namespace SmartWord.Application.Orchestration
             return bounded;
         }
 
+        /// <summary>
+        /// 生成对话存储的隔离键。未携带会话 ID 时保留旧的按文档路径行为。
+        /// </summary>
+        internal static string ResolveConversationStorageKey(string documentPath, string conversationId)
+        {
+            var normalizedDocumentPath = string.IsNullOrWhiteSpace(documentPath)
+                ? "__active_document__"
+                : documentPath.Trim();
+            var normalizedConversationId = conversationId == null
+                ? string.Empty
+                : conversationId.Trim();
+            if (string.IsNullOrWhiteSpace(normalizedConversationId))
+            {
+                return normalizedDocumentPath;
+            }
+
+            return normalizedDocumentPath + "\n::conversation::" + normalizedConversationId;
+        }
+
         internal static AgentPermissionMode ResolvePermissionMode(AgentRunOptions options)
         {
             if (options != null && options.PermissionMode.HasValue)

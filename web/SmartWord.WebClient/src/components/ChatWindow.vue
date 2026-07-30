@@ -412,6 +412,7 @@ async function sendMessage(content, manualMode, permissionModeOverride = '') {
   const request = {
     content,
     manualMode,
+    conversationId: chatStore.conversationId,
     permissionMode: permissionModeOverride || settingsStore.form.permissionMode,
     requireConfirmationForScripts: requireConfirmationForPermission(
       permissionModeOverride || settingsStore.form.permissionMode
@@ -520,12 +521,13 @@ async function executePlan() {
     plan.riskNotes?.length ? `## 风险提示\n${plan.riskNotes.join('\n')}` : ''
   ].filter(Boolean).join('\n\n');
   chatStore.activePlan = null;
-  chatStore.messages = [];
+  chatStore.startNewConversation();
   chatStore.appendUserMessage('请按照以下计划执行任务：\n\n' + context);
   chatStore.startLoading();
   await hostBridge.sendMessage({
     content: '请按照以下计划执行任务：\n\n' + context,
     manualMode: 'agent',
+    conversationId: chatStore.conversationId,
     maxIterations: 100,
     permissionMode: settingsStore.form.permissionMode,
     requireConfirmationForScripts: requireConfirmationForPermission(settingsStore.form.permissionMode),
@@ -709,6 +711,7 @@ async function resumePausedTodoRun(decision) {
     await hostBridge.sendMessage({
       content: resumePrompt,
       manualMode: 'agent',
+      conversationId: chatStore.conversationId,
       maxIterations: 100,
       permissionMode: settingsStore.form.permissionMode,
       requireConfirmationForScripts: requireConfirmationForPermission(settingsStore.form.permissionMode),

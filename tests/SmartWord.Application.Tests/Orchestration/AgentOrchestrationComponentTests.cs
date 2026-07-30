@@ -57,6 +57,23 @@ namespace SmartWord.Application.Tests.Orchestration
         }
 
         [Fact]
+        public void ResolveConversationStorageKey_不同会话隔离且兼容空会话()
+        {
+            var first = AgentOrchestratorUtilities.ResolveConversationStorageKey(
+                @"C:\docs\sample.docx",
+                "conversation-a");
+            var second = AgentOrchestratorUtilities.ResolveConversationStorageKey(
+                @"C:\docs\sample.docx",
+                "conversation-b");
+            var legacy = AgentOrchestratorUtilities.ResolveConversationStorageKey(
+                @"C:\docs\sample.docx",
+                string.Empty);
+
+            Assert.NotEqual(first, second);
+            Assert.Equal(@"C:\docs\sample.docx", legacy);
+        }
+
+        [Fact]
         public async Task LlmTurnExecutor_要求首轮工具调用_使用严格工具选择扩展()
         {
             var client = new RecordingToolChoiceLlmClient();
