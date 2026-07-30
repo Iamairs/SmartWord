@@ -6,6 +6,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
+using System.Security.Authentication;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -494,9 +495,18 @@ namespace SmartWord.Infrastructure.LlmClients
 
         private static HttpClient CreateSharedHttpClient()
         {
-            return new HttpClient
+            return new HttpClient(CreateHttpClientHandler())
             {
                 Timeout = Timeout.InfiniteTimeSpan
+            };
+        }
+
+        private static HttpClientHandler CreateHttpClientHandler()
+        {
+            // Word 宿主进程可能被其他 AddIn 或旧默认值影响，局部指定 TLS 1.2，避免修改进程级全局协议。
+            return new HttpClientHandler
+            {
+                SslProtocols = SslProtocols.Tls12
             };
         }
 

@@ -21,7 +21,6 @@
     <main class="app-content">
       <section v-if="activeView === 'chat'" class="chat-view">
         <section class="message-list" ref="messageListRef" @click="handleMessageListClick">
-          <ThoughtActionTrace :tool-calls="chatStore.activeToolCalls" />
           <ContentPreviewPanel
             v-if="chatStore.pendingConfirmation"
             :confirmation="chatStore.pendingConfirmation"
@@ -62,7 +61,11 @@
               <span>{{ message.role === 'user' ? '你' : 'SmartWord' }}</span>
               <span>{{ message.timestamp }}</span>
             </div>
-            <div class="message-body" v-html="renderMessage(message)"></div>
+            <ThoughtActionTrace
+              v-if="message.role === 'assistant' && message.toolCalls && message.toolCalls.length"
+              :tool-calls="message.toolCalls"
+            />
+            <div v-if="message.content" class="message-body" v-html="renderMessage(message)"></div>
           </article>
 
           <div v-if="chatStore.pendingQuestion" class="question-panel">
