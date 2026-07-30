@@ -236,6 +236,32 @@ namespace SmartWord.Application.Tests.Infrastructure
         }
 
         [Fact]
+        public void BuildRequestJson_StrictToolChoice_SerializesRequired()
+        {
+            var requestJson = InvokeBuildRequestJson(
+                new[] { new AgentMessage { Role = "user", Content = "总结这篇文档" } },
+                new[] { new ToolDefinition { Name = "probe_document" } },
+                true);
+
+            var payload = JObject.Parse(requestJson);
+
+            Assert.Equal("required", payload["tool_choice"]?.Value<string>());
+        }
+
+        [Fact]
+        public void BuildRequestJson_DefaultToolChoice_SerializesAuto()
+        {
+            var requestJson = InvokeBuildRequestJson(
+                new[] { new AgentMessage { Role = "user", Content = "总结这篇文档" } },
+                new[] { new ToolDefinition { Name = "probe_document" } },
+                false);
+
+            var payload = JObject.Parse(requestJson);
+
+            Assert.Equal("auto", payload["tool_choice"]?.Value<string>());
+        }
+
+        [Fact]
         public void SummarizeBody_LongBody_IsTruncated()
         {
             var method = typeof(OpenAiCompatibleClient).GetMethod(
@@ -271,7 +297,10 @@ namespace SmartWord.Application.Tests.Infrastructure
             return Assert.IsType<JArray>(result);
         }
 
-        private static string InvokeBuildRequestJson(IReadOnlyList<AgentMessage> messages)
+        private static string InvokeBuildRequestJson(
+            IReadOnlyList<AgentMessage> messages,
+            IReadOnlyList<ToolDefinition> tools = null,
+            bool requireToolCall = false)
         {
             var method = typeof(OpenAiCompatibleClient).GetMethod(
                 "BuildRequestJson",
@@ -285,7 +314,16 @@ namespace SmartWord.Application.Tests.Infrastructure
                 SupportsToolCalling = true
             };
 
-            var result = method.Invoke(null, new object[] { "Qwen/Qwen3.5-397B-A17B", messages, null, capability });
+            var result = method.Invoke(
+                null,
+                new object[]
+                {
+                    "Qwen/Qwen3.5-397B-A17B",
+                    messages,
+                    tools,
+                    capability,
+                    requireToolCall
+                });
             return Assert.IsType<string>(result);
         }
 

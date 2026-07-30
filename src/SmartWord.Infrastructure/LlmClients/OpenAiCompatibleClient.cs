@@ -21,7 +21,7 @@ namespace SmartWord.Infrastructure.LlmClients
     /// <summary>
     /// 使用原生 HTTP + SSE 兼容 OpenAI Chat Completions 协议。
     /// </summary>
-    public sealed class OpenAiCompatibleClient : ILlmClient, IDisposable
+    public sealed class OpenAiCompatibleClient : ILlmClient, IToolChoiceLlmClient, IDisposable
     {
         private const int SendRetryCount = 2;
         private static readonly TimeSpan SendRetryDelay = TimeSpan.FromMilliseconds(300);
@@ -50,7 +50,7 @@ namespace SmartWord.Infrastructure.LlmClients
         {
             ValidateRequest(messages, model, out var endpoint, out var apiKey);
             var capability = _options.GetModelCapability(model);
-            var requestJson = BuildRequestJson(model, messages, null, capability);
+            var requestJson = BuildRequestJson(model, messages, null, capability, false);
             var responseHeadersTimeout = ResolveStreamPhaseTimeout(_options.TimeoutSeconds);
             var firstLineTimeout = ResolveStreamPhaseTimeout(_options.TimeoutSeconds);
             var nextLineTimeout = ResolveStreamPhaseTimeout(_options.TimeoutSeconds);
@@ -193,10 +193,27 @@ namespace SmartWord.Infrastructure.LlmClients
             }
         }
 
+        public Task<AgentMessage> ChatCompletionWithToolsAsync(
+            IReadOnlyList<AgentMessage> messages,
+            string model,
+            IReadOnlyList<ToolDefinition> tools,
+            Action<string> onStreamChunk,
+            CancellationToken cancellationToken)
+        {
+            return ChatCompletionWithToolsAsync(
+                messages,
+                model,
+                tools,
+                false,
+                onStreamChunk,
+                cancellationToken);
+        }
+
         public async Task<AgentMessage> ChatCompletionWithToolsAsync(
             IReadOnlyList<AgentMessage> messages,
             string model,
             IReadOnlyList<ToolDefinition> tools,
+            bool requireToolCall,
             Action<string> onStreamChunk,
             CancellationToken cancellationToken)
         {
@@ -207,7 +224,7 @@ namespace SmartWord.Infrastructure.LlmClients
 
             ValidateRequest(messages, model, out var endpoint, out var apiKey);
             var capability = _options.GetModelCapability(model);
-            var requestJson = BuildRequestJson(model, messages, tools, capability);
+            var requestJson = BuildRequestJson(model, messages, tools, capability, requireToolCall);
             var responseHeadersTimeout = ResolveStreamPhaseTimeout(_options.TimeoutSeconds);
             var firstLineTimeout = ResolveStreamPhaseTimeout(_options.TimeoutSeconds);
             var nextLineTimeout = ResolveStreamPhaseTimeout(_options.TimeoutSeconds);
@@ -227,11 +244,12 @@ namespace SmartWord.Infrastructure.LlmClients
                 request.Content = BuildRequestContent(requestJson);
 
                 Log.Information(
-                    "开始调用 LLM 工具接口。Endpoint={Endpoint}, Model={Model}, SupportsToolCalling={SupportsToolCalling}, RequiresReasoningContentReplay={RequiresReasoningContentReplay}, ToolCount={ToolCount}, MessageCount={MessageCount}, MessageSummary={MessageSummary}, ToolSummary={ToolSummary}, ResponseHeadersTimeoutSeconds={ResponseHeadersTimeoutSeconds}, FirstLineTimeoutSeconds={FirstLineTimeoutSeconds}, NextLineTimeoutSeconds={NextLineTimeoutSeconds}, RequestBodyLength={RequestBodyLength}",
+                    "开始调用 LLM 工具接口。Endpoint={Endpoint}, Model={Model}, SupportsToolCalling={SupportsToolCalling}, RequiresReasoningContentReplay={RequiresReasoningContentReplay}, ToolChoice={ToolChoice}, ToolCount={ToolCount}, MessageCount={MessageCount}, MessageSummary={MessageSummary}, ToolSummary={ToolSummary}, ResponseHeadersTimeoutSeconds={ResponseHeadersTimeoutSeconds}, FirstLineTimeoutSeconds={FirstLineTimeoutSeconds}, NextLineTimeoutSeconds={NextLineTimeoutSeconds}, RequestBodyLength={RequestBodyLength}",
                     request.RequestUri,
                     model,
                     capability == null ? false : capability.SupportsToolCalling,
                     capability == null ? false : capability.RequiresReasoningContentReplay,
+                    requireToolCall ? "required" : "auto",
                     tools.Count,
                     messages == null ? 0 : messages.Count,
                     BuildMessageSummary(messages),
@@ -644,7 +662,8 @@ namespace SmartWord.Infrastructure.LlmClients
             string model,
             IReadOnlyList<AgentMessage> messages,
             IReadOnlyList<ToolDefinition> tools,
-            ModelCapability capability)
+            ModelCapability capability,
+            bool requireToolCall)
         {
             var normalizedMessages = NormalizeMessagesForProvider(messages);
             ValidateMessagesForProvider(normalizedMessages);
@@ -659,7 +678,7 @@ namespace SmartWord.Infrastructure.LlmClients
             if (tools != null && tools.Count > 0)
             {
                 payload["tools"] = BuildToolsPayload(tools);
-                payload["tool_choice"] = "auto";
+                payload["tool_choice"] = requireToolCall ? "required" : "auto";
             }
 
             return payload.ToString(Formatting.None);

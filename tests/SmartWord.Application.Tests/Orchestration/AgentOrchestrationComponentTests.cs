@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading;
@@ -32,6 +33,48 @@ namespace SmartWord.Application.Tests.Orchestration
             Assert.StartsWith("autogen_plan_2_1_", calls[0].Id);
             Assert.Equal(string.Empty, calls[0].Name);
             Assert.Equal(string.Empty, calls[0].Input);
+        }
+
+        [Theory]
+        [InlineData("总结这篇文档的内容", AgentMode.Ask, 0, true)]
+        [InlineData("第15段的内容是什么", AgentMode.Ask, 0, true)]
+        [InlineData("请规划这篇文档的章节重构", AgentMode.Plan, 0, true)]
+        [InlineData("总结这篇文档的内容", AgentMode.Ask, 1, false)]
+        [InlineData("你好", AgentMode.Ask, 0, false)]
+        [InlineData("总结这篇文档的内容", AgentMode.Agent, 0, false)]
+        public void RequiresFreshDocumentToolCall_不同输入与模式_返回预期结果(
+            string userInput,
+            AgentMode mode,
+            int iteration,
+            bool expected)
+        {
+            var actual = AgentOrchestratorUtilities.RequiresFreshDocumentToolCall(
+                userInput,
+                mode,
+                iteration);
+
+            Assert.Equal(expected, actual);
+        }
+
+        [Fact]
+        public async Task LlmTurnExecutor_要求首轮工具调用_使用严格工具选择扩展()
+        {
+            var client = new RecordingToolChoiceLlmClient();
+            var executor = new LlmTurnExecutor(client);
+            var updates = new List<LlmTurnUpdate>();
+
+            await foreach (var update in executor.ExecuteAsync(
+                new[] { new AgentMessage { Role = "user", Content = "总结这篇文档" } },
+                new AgentRunOptions { Model = "test-model" },
+                new[] { new ToolDefinition { Name = "probe_document" } },
+                true,
+                CancellationToken.None))
+            {
+                updates.Add(update);
+            }
+
+            Assert.True(client.LastRequireToolCall);
+            Assert.Contains(updates, update => update.IsCompleted);
         }
 
         [Fact]
@@ -182,6 +225,42 @@ namespace SmartWord.Application.Tests.Orchestration
             Assert.NotNull(preparation.InputParseError);
             Assert.False(preparation.InputParseError.Success);
             Assert.Contains("ERROR in read_sample", preparation.InputParseError.Output);
+        }
+
+        private sealed class RecordingToolChoiceLlmClient : ILlmClient, IToolChoiceLlmClient
+        {
+            public bool LastRequireToolCall { get; private set; }
+
+            public async IAsyncEnumerable<string> ChatCompletionStreamAsync(
+                IReadOnlyList<AgentMessage> messages,
+                string model,
+                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+            {
+                await Task.CompletedTask;
+                yield break;
+            }
+
+            public Task<AgentMessage> ChatCompletionWithToolsAsync(
+                IReadOnlyList<AgentMessage> messages,
+                string model,
+                IReadOnlyList<ToolDefinition> tools,
+                Action<string> onStreamChunk,
+                CancellationToken cancellationToken)
+            {
+                return Task.FromResult(new AgentMessage { Role = "assistant" });
+            }
+
+            public Task<AgentMessage> ChatCompletionWithToolsAsync(
+                IReadOnlyList<AgentMessage> messages,
+                string model,
+                IReadOnlyList<ToolDefinition> tools,
+                bool requireToolCall,
+                Action<string> onStreamChunk,
+                CancellationToken cancellationToken)
+            {
+                LastRequireToolCall = requireToolCall;
+                return Task.FromResult(new AgentMessage { Role = "assistant" });
+            }
         }
 
         private sealed class StubQuestionChannel : IQuestionChannel

@@ -13,7 +13,7 @@ namespace SmartWord.Infrastructure.Telemetry
     /// <summary>
     /// 包装真实 LLM Client，记录调用耗时、token usage 和工具调用数量。
     /// </summary>
-    public sealed class TelemetryLlmClient : ILlmClient
+    public sealed class TelemetryLlmClient : ILlmClient, IToolChoiceLlmClient
     {
         private readonly ILlmClient _inner;
         private readonly IAgentTelemetrySink _telemetrySink;
@@ -71,10 +71,27 @@ namespace SmartWord.Infrastructure.Telemetry
             }
         }
 
+        public Task<AgentMessage> ChatCompletionWithToolsAsync(
+            IReadOnlyList<AgentMessage> messages,
+            string model,
+            IReadOnlyList<ToolDefinition> tools,
+            Action<string> onStreamChunk,
+            CancellationToken cancellationToken)
+        {
+            return ChatCompletionWithToolsAsync(
+                messages,
+                model,
+                tools,
+                false,
+                onStreamChunk,
+                cancellationToken);
+        }
+
         public async Task<AgentMessage> ChatCompletionWithToolsAsync(
             IReadOnlyList<AgentMessage> messages,
             string model,
             IReadOnlyList<ToolDefinition> tools,
+            bool requireToolCall,
             Action<string> onStreamChunk,
             CancellationToken cancellationToken)
         {
@@ -83,9 +100,26 @@ namespace SmartWord.Infrastructure.Telemetry
             var stopwatch = Stopwatch.StartNew();
             try
             {
-                var response = await _inner
-                    .ChatCompletionWithToolsAsync(messages, model, tools, onStreamChunk, cancellationToken)
-                    .ConfigureAwait(false);
+                AgentMessage response;
+                if (_inner is IToolChoiceLlmClient toolChoiceClient)
+                {
+                    response = await toolChoiceClient
+                        .ChatCompletionWithToolsAsync(
+                            messages,
+                            model,
+                            tools,
+                            requireToolCall,
+                            onStreamChunk,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+                    // 兼容未实现严格工具选择扩展的旧客户端和测试替身。
+                    response = await _inner
+                        .ChatCompletionWithToolsAsync(messages, model, tools, onStreamChunk, cancellationToken)
+                        .ConfigureAwait(false);
+                }
                 stopwatch.Stop();
 
                 var metadata = response?.LlmMetadata ?? new LlmResponseMetadata
