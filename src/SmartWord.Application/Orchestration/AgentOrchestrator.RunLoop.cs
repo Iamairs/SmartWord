@@ -35,9 +35,56 @@ namespace SmartWord.Application.Orchestration
         /// 4) 输出流式事件与最终完成事件
         /// </summary>
         public async IAsyncEnumerable<AgentEvent> RunAsync(
-    string userInput,
-    AgentRunOptions options,
-    [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+            string userInput,
+            AgentRunOptions options,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            // 内部编排流负责 Undo、Todo 和审计清理；公开边界统一把用户取消转换为领域事件。
+            var enumerator = RunCoreAsync(userInput, options, cancellationToken).GetAsyncEnumerator();
+            try
+            {
+                while (true)
+                {
+                    bool moved;
+                    var cancelled = false;
+                    try
+                    {
+                        moved = await enumerator.MoveNextAsync().ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        moved = false;
+                        cancelled = true;
+                    }
+
+                    if (cancelled)
+                    {
+                        yield return new AgentEvent
+                        {
+                            Type = AgentEventType.Cancelled,
+                            Message = "任务已取消，当前未完成的写步骤已回滚。"
+                        };
+                        yield break;
+                    }
+
+                    if (!moved)
+                    {
+                        yield break;
+                    }
+
+                    yield return enumerator.Current;
+                }
+            }
+            finally
+            {
+                await enumerator.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        private async IAsyncEnumerable<AgentEvent> RunCoreAsync(
+            string userInput,
+            AgentRunOptions options,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
 {
     var safeOptions = options ?? new AgentRunOptions();
     var documentContext = await _contextHydrator.HydrateAsync(cancellationToken).ConfigureAwait(false);
@@ -933,6 +980,11 @@ namespace SmartWord.Application.Orchestration
                                         toolTask,
                                         Task.Delay(ToolExecutionTimeout, cancellationToken))
                                     .ConfigureAwait(false);
+                                if (cancellationToken.IsCancellationRequested)
+                                {
+                                    throw new OperationCanceledException(cancellationToken);
+                                }
+
                                 executionResult = completedTask == toolTask
                                     ? await toolTask.ConfigureAwait(false)
                                     : ToolCallResult.Error(toolCall.Name, "工具执行超时。");
@@ -1491,6 +1543,17 @@ namespace SmartWord.Application.Orchestration
     }
     finally
     {
+        if (!completedSuccessfully
+            && !runPaused
+            && cancellationToken.IsCancellationRequested)
+        {
+            interruptedOutcome = TodoBoardRunOutcome.Cancelled;
+            if (string.IsNullOrWhiteSpace(interruptedReason))
+            {
+                interruptedReason = "用户已取消当前任务。";
+            }
+        }
+
         if (runStarted
             && !completedSuccessfully
             && !runPaused
@@ -1522,7 +1585,11 @@ namespace SmartWord.Application.Orchestration
         }
 
         await RecordTaskTelemetryAsync(
-                completedSuccessfully ? "task_completed" : "task_failed",
+                completedSuccessfully
+                    ? "task_completed"
+                    : interruptedOutcome == TodoBoardRunOutcome.Cancelled
+                        ? "task_cancelled"
+                        : "task_failed",
                 safeOptions,
                 new Dictionary<string, object>
                 {
@@ -1530,7 +1597,13 @@ namespace SmartWord.Application.Orchestration
                     ["outputDocx"] = documentPath,
                     ["startedAtUtc"] = taskStartedAtUtc.ToString("O"),
                     ["durationMs"] = (long)(DateTimeOffset.UtcNow - taskStartedAtUtc).TotalMilliseconds,
-                    ["status"] = completedSuccessfully ? "completed" : (runPaused ? "paused" : "failed"),
+                    ["status"] = completedSuccessfully
+                        ? "completed"
+                        : runPaused
+                            ? "paused"
+                            : interruptedOutcome == TodoBoardRunOutcome.Cancelled
+                                ? "cancelled"
+                                : "failed",
                     ["failureType"] = completedSuccessfully ? string.Empty : ResolveFailureType(interruptedOutcome),
                     ["failureReason"] = completedSuccessfully ? string.Empty : interruptedReason ?? string.Empty
                 },

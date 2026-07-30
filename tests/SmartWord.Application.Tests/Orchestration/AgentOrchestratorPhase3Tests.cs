@@ -48,6 +48,65 @@ namespace SmartWord.Application.Tests.Orchestration
         }
 
         [Fact]
+        public async Task RunAsync_调用方在启动前取消_返回单一取消事件()
+        {
+            var orchestrator = CreateOrchestrator(
+                new FakeLlmClient(),
+                CreateWritableHydrator());
+            using (var cancellation = new CancellationTokenSource())
+            {
+                cancellation.Cancel();
+
+                var events = await CollectAsync(orchestrator.RunAsync(
+                    "取消当前任务",
+                    new AgentRunOptions
+                    {
+                        Mode = AgentMode.Agent,
+                        EnableToolCalling = true
+                    },
+                    cancellation.Token));
+
+                var cancelled = Assert.Single(events);
+                Assert.Equal(AgentEventType.Cancelled, cancelled.Type);
+                Assert.Contains("已取消", cancelled.Message);
+            }
+        }
+
+        [Fact]
+        public async Task RunAsync_写工具执行中取消_回滚当前步骤并返回取消事件()
+        {
+            var tool = new CancellableFakeTool("patch_range", ToolPermission.DocumentPatchWrite);
+            var undoScopeFactory = new FakeUndoScopeFactory();
+            var orchestrator = CreateOrchestrator(
+                new FakeLlmClient(CreateToolCallMessage(
+                    CreateToolCall("cancel-write", "patch_range", "{\"operations\":[]}"))),
+                CreateWritableHydrator(),
+                new[] { tool },
+                undoScopeFactory: undoScopeFactory);
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var runTask = CollectAsync(orchestrator.RunAsync(
+                    "执行后取消",
+                    new AgentRunOptions
+                    {
+                        Mode = AgentMode.Agent,
+                        PermissionMode = AgentPermissionMode.FullAuto,
+                        EnableToolCalling = true
+                    },
+                    cancellation.Token));
+                await tool.ExecutionStarted;
+
+                cancellation.Cancel();
+                var events = await runTask;
+
+                Assert.Single(events.Where(item => item.Type == AgentEventType.Cancelled));
+                Assert.NotNull(undoScopeFactory.LastScope);
+                Assert.Equal(1, undoScopeFactory.LastScope.RollbackCount);
+                Assert.Equal(0, undoScopeFactory.LastScope.CommitCount);
+            }
+        }
+
+        [Fact]
         public async Task RunAsync_ModelCallFailsBeforeAnyWrite_DoesNotCreateUndoScope()
         {
             var undoScopeFactory = new FakeUndoScopeFactory();
@@ -2086,6 +2145,44 @@ namespace SmartWord.Application.Tests.Orchestration
                 }
 
                 return Task.FromResult(_lastResult ?? ToolCallResult.Ok("{}"));
+            }
+        }
+
+        private sealed class CancellableFakeTool : ITool
+        {
+            private readonly JsonElement _schema =
+                JsonDocument.Parse("{\"type\":\"object\"}").RootElement.Clone();
+            private readonly TaskCompletionSource<bool> _executionStarted =
+                new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public CancellableFakeTool(string name, ToolPermission permission)
+            {
+                Name = name;
+                RequiredPermission = permission;
+            }
+
+            public string Name { get; }
+
+            public string Description => Name;
+
+            public ToolPermission RequiredPermission { get; }
+
+            public bool IsVisibleToModel => true;
+
+            public JsonElement InputSchema => _schema;
+
+            public Task ExecutionStarted => _executionStarted.Task;
+
+            public async Task<ToolCallResult> ExecuteAsync(
+                JsonElement input,
+                IUndoScope undoScope,
+                CancellationToken cancellationToken)
+            {
+                _ = input;
+                _ = undoScope;
+                _executionStarted.TrySetResult(true);
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+                return ToolCallResult.Ok("{}");
             }
         }
 
