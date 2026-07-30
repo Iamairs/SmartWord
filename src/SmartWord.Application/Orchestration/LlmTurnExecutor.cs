@@ -26,6 +26,7 @@ namespace SmartWord.Application.Orchestration
             IReadOnlyList<AgentMessage> messages,
             AgentRunOptions options,
             IReadOnlyList<ToolDefinition> toolDefinitions,
+            bool requireToolCall,
             [EnumeratorCancellation] CancellationToken cancellationToken)
         {
             if (toolDefinitions != null && toolDefinitions.Count > 0)
@@ -33,16 +34,25 @@ namespace SmartWord.Application.Orchestration
                 var chunks = new ConcurrentQueue<string>();
                 using (var signal = new SemaphoreSlim(0))
                 {
-                    var assistantTask = _llmClient.ChatCompletionWithToolsAsync(
-                        messages,
-                        options.Model,
-                        toolDefinitions,
-                        chunk =>
-                        {
-                            chunks.Enqueue(chunk);
-                            signal.Release();
-                        },
-                        cancellationToken);
+                    var streamChunkHandler = new Action<string>(chunk =>
+                    {
+                        chunks.Enqueue(chunk);
+                        signal.Release();
+                    });
+                    var assistantTask = requireToolCall && _llmClient is IToolChoiceLlmClient toolChoiceClient
+                        ? toolChoiceClient.ChatCompletionWithToolsAsync(
+                            messages,
+                            options.Model,
+                            toolDefinitions,
+                            true,
+                            streamChunkHandler,
+                            cancellationToken)
+                        : _llmClient.ChatCompletionWithToolsAsync(
+                            messages,
+                            options.Model,
+                            toolDefinitions,
+                            streamChunkHandler,
+                            cancellationToken);
 
                     while (!assistantTask.IsCompleted || !chunks.IsEmpty)
                     {

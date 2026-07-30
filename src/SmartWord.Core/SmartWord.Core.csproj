@@ -65,6 +65,7 @@
     <Compile Include="Interfaces\ISkillStore.cs" />
     <Compile Include="Interfaces\ITaskHistoryStore.cs" />
     <Compile Include="Interfaces\ILlmClient.cs" />
+    <Compile Include="Interfaces\IToolChoiceLlmClient.cs" />
     <Compile Include="Interfaces\ITodoRecoveryChannel.cs" />
     <Compile Include="Interfaces\ITodoStore.cs" />
     <Compile Include="Interfaces\ITool.cs" />

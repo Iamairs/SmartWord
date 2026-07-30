@@ -63,6 +63,23 @@ namespace SmartWord.Application.Tests.Telemetry
             Assert.True((int)e.Data["estimatedCompletionTokens"] > 0);
         }
 
+        [Fact]
+        public async Task ChatCompletionWithToolsAsync_StrictToolChoice_ForwardsRequirement()
+        {
+            var inner = new FakeLlmClient(new AgentMessage { Role = "assistant", Content = "ok" });
+            var client = new TelemetryLlmClient(inner, new CapturingSink());
+
+            await ((IToolChoiceLlmClient)client).ChatCompletionWithToolsAsync(
+                new[] { new AgentMessage { Role = "user", Content = "总结这篇文档" } },
+                "test-model",
+                new[] { new ToolDefinition { Name = "probe_document" } },
+                true,
+                null,
+                CancellationToken.None);
+
+            Assert.True(inner.LastRequireToolCall);
+        }
+
         private sealed class CapturingSink : IAgentTelemetrySink
         {
             public List<AgentTelemetryEvent> Events { get; } = new List<AgentTelemetryEvent>();
@@ -74,9 +91,11 @@ namespace SmartWord.Application.Tests.Telemetry
             }
         }
 
-        private sealed class FakeLlmClient : ILlmClient
+        private sealed class FakeLlmClient : ILlmClient, IToolChoiceLlmClient
         {
             private readonly AgentMessage _response;
+
+            public bool LastRequireToolCall { get; private set; }
 
             public FakeLlmClient(AgentMessage response)
             {
@@ -99,6 +118,18 @@ namespace SmartWord.Application.Tests.Telemetry
                 Action<string> onStreamChunk,
                 CancellationToken cancellationToken)
             {
+                return Task.FromResult(_response);
+            }
+
+            public Task<AgentMessage> ChatCompletionWithToolsAsync(
+                IReadOnlyList<AgentMessage> messages,
+                string model,
+                IReadOnlyList<ToolDefinition> tools,
+                bool requireToolCall,
+                Action<string> onStreamChunk,
+                CancellationToken cancellationToken)
+            {
+                LastRequireToolCall = requireToolCall;
                 return Task.FromResult(_response);
             }
         }

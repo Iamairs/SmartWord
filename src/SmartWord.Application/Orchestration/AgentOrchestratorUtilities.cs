@@ -27,6 +27,115 @@ namespace SmartWord.Application.Orchestration
         // 所有运行模式共用固定预算，避免用户配置突破编排器安全上限。
         private const int FixedIterationBudget = 100;
         private const int AskModeMaxIterations = FixedIterationBudget;
+        private static readonly string[] DirectDocumentReferences =
+        {
+            "这篇文档",
+            "当前文档",
+            "该文档",
+            "本篇文档",
+            "本文",
+            "这篇文章",
+            "该文章",
+            "此文",
+            "文中",
+            "当前文件",
+            "本文件",
+            "当前选区",
+            "选中内容",
+            "所选内容"
+        };
+        private static readonly string[] DocumentNouns =
+        {
+            "文档",
+            "文章",
+            "文件",
+            "正文",
+            "段落",
+            "章节",
+            "标题",
+            "表格",
+            "批注",
+            "页眉",
+            "页脚",
+            "脚注",
+            "尾注",
+            "目录",
+            "选区",
+            "document",
+            "paragraph",
+            "section",
+            "heading",
+            "selection"
+        };
+        private static readonly string[] DocumentEvidenceIntents =
+        {
+            "总结",
+            "概括",
+            "内容",
+            "主题",
+            "要点",
+            "大意",
+            "结构",
+            "提纲",
+            "分析",
+            "查找",
+            "搜索",
+            "引用",
+            "是什么",
+            "有哪些",
+            "多少",
+            "哪里",
+            "规划",
+            "计划",
+            "修改",
+            "改写",
+            "润色",
+            "翻译",
+            "审阅",
+            "优化",
+            "调整",
+            "重构",
+            "summarize",
+            "summary",
+            "analyze",
+            "review",
+            "rewrite"
+        };
+
+        /// <summary>
+        /// 判断 Ask/Plan 首轮是否必须刷新当前文档证据，避免模型凭历史或常识直接作答。
+        /// </summary>
+        internal static bool RequiresFreshDocumentToolCall(
+            string userInput,
+            AgentMode mode,
+            int iteration)
+        {
+            if (iteration != 0
+                || (mode != AgentMode.Ask && mode != AgentMode.Plan)
+                || string.IsNullOrWhiteSpace(userInput))
+            {
+                return false;
+            }
+
+            var normalizedInput = userInput.Trim().ToLowerInvariant();
+            if (DirectDocumentReferences.Any(reference =>
+                normalizedInput.IndexOf(reference, StringComparison.Ordinal) >= 0))
+            {
+                return true;
+            }
+
+            if (Regex.IsMatch(
+                normalizedInput,
+                @"第\s*[0-9零一二三四五六七八九十百千万两]+\s*(段|页|章|节|行|个?标题|个?表格)"))
+            {
+                return true;
+            }
+
+            return DocumentNouns.Any(noun =>
+                       normalizedInput.IndexOf(noun, StringComparison.Ordinal) >= 0)
+                   && DocumentEvidenceIntents.Any(intent =>
+                       normalizedInput.IndexOf(intent, StringComparison.Ordinal) >= 0);
+        }
 
         internal static void NormalizeToolCalls(
             IReadOnlyList<ToolCall> toolCalls,

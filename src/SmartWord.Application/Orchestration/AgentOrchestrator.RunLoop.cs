@@ -315,10 +315,14 @@ namespace SmartWord.Application.Orchestration
             }
 
             AgentMessage assistantMessage = null;
+            var requireToolCall = toolDefinitions != null
+                && toolDefinitions.Count > 0
+                && RequiresFreshDocumentToolCall(userInput, safeOptions.Mode, iteration);
             await foreach (var update in _llmTurnExecutor.ExecuteAsync(
                 messages,
                 safeOptions,
                 toolDefinitions,
+                requireToolCall,
                 cancellationToken))
             {
                 if (update.IsFailed)
