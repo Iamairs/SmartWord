@@ -9,7 +9,7 @@ using SmartWord.Core.Models;
 namespace SmartWord.Infrastructure.Persistence
 {
     /// <summary>
-    /// Phase 1 使用内存会话存储，按文档路径隔离对话。
+    /// Phase 1 使用内存会话存储，按编排器提供的文档/会话存储键隔离对话。
     /// </summary>
     public class InMemoryConversationStore : IConversationStore
     {

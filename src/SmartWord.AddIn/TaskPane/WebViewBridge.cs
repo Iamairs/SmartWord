@@ -193,6 +193,7 @@ namespace SmartWord.AddIn.TaskPane
                     {
                         Mode = selectedMode,
                         Model = modelRoute.SelectedModel,
+                        ConversationId = request.Value<string>("conversationId") ?? string.Empty,
                         MaxIterations = request.Value<int?>("maxIterations") ?? 100,
                         PermissionMode = ResolvePermissionMode(
                             request.Value<string>("permissionMode"),
@@ -224,9 +225,10 @@ namespace SmartWord.AddIn.TaskPane
                     };
 
                     Log.Information(
-                        "开始执行主编排流程：Mode={Mode}, Model={Model}",
+                        "开始执行主编排流程：Mode={Mode}, Model={Model}, ConversationId={ConversationId}",
                         options.Mode,
-                        options.Model);
+                        options.Model,
+                        options.ConversationId);
 
                     await foreach (var agentEvent in orchestrator.RunAsync(content, options, requestCts.Token))
                     {

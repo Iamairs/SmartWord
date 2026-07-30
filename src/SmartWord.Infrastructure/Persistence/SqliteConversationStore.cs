@@ -12,7 +12,7 @@ using SmartWord.Core.Models;
 namespace SmartWord.Infrastructure.Persistence
 {
     /// <summary>
-    /// 使用本地 SQLite 按文档隔离持久化对话历史。
+    /// 使用本地 SQLite 按编排器提供的文档/会话存储键隔离持久化对话历史。
     /// </summary>
     public class SqliteConversationStore : IConversationStore
     {

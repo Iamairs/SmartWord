@@ -44,6 +44,9 @@ namespace SmartWord.Application.Orchestration
     var documentPath = string.IsNullOrWhiteSpace(documentContext.DocumentPath)
         ? "__active_document__"
         : documentContext.DocumentPath;
+    var conversationStorageKey = ResolveConversationStorageKey(
+        documentPath,
+        safeOptions.ConversationId);
     var taskStartedAtUtc = DateTimeOffset.UtcNow;
     _todoManager?.SetCurrentDocumentPath(documentPath);
     var auditRun = await TryStartTaskRunAsync(
@@ -97,7 +100,7 @@ namespace SmartWord.Application.Orchestration
     };
 
     await _conversationStore
-        .AppendUserMessageAsync(documentPath, userMessage, cancellationToken)
+        .AppendUserMessageAsync(conversationStorageKey, userMessage, cancellationToken)
         .ConfigureAwait(false);
 
     TodoBoard currentTodoBoard = null;
@@ -188,7 +191,7 @@ namespace SmartWord.Application.Orchestration
     }
 
     var history = await _conversationStore
-        .GetHistoryAsync(documentPath, cancellationToken)
+        .GetHistoryAsync(conversationStorageKey, cancellationToken)
         .ConfigureAwait(false);
 
     var messages = new List<AgentMessage>();
@@ -368,7 +371,7 @@ namespace SmartWord.Application.Orchestration
 
             runState.FinalAssistantMessage = assistantMessage;
             await _conversationStore
-                .AppendAssistantMessageAsync(documentPath, assistantMessage, cancellationToken)
+                .AppendAssistantMessageAsync(conversationStorageKey, assistantMessage, cancellationToken)
                 .ConfigureAwait(false);
             messages.Add(CloneMessage(assistantMessage));
 
@@ -464,7 +467,7 @@ namespace SmartWord.Application.Orchestration
                         var invalidQuestionResult = ToolCallResult.Error(
                             toolCall.Name,
                             "ask_user_question 缺少有效的 question 文本，系统已拒绝本次采访问题。");
-                        await AppendToolResultAsync(documentPath, messages, toolCall, invalidQuestionResult, cancellationToken)
+                        await AppendToolResultAsync(conversationStorageKey, messages, toolCall, invalidQuestionResult, cancellationToken)
                             .ConfigureAwait(false);
 
                         yield return CreateToolCompletedEvent(toolCall, invalidQuestionResult);
@@ -513,7 +516,7 @@ namespace SmartWord.Application.Orchestration
                     }
                     else
                     {
-                        await AppendToolResultAsync(documentPath, messages, toolCall,
+                        await AppendToolResultAsync(conversationStorageKey, messages, toolCall,
                             ToolCallResult.Ok($"用户回答：{answer}"), cancellationToken)
                             .ConfigureAwait(false);
                     }
@@ -529,7 +532,7 @@ namespace SmartWord.Application.Orchestration
                     var internalOnlyResult = ToolCallResult.Denied(
                         toolCall.Name,
                         "verify_script 为系统内部验证工具，不对模型暴露。请改用写工具或 read_script。");
-                    await AppendToolResultAsync(documentPath, messages, toolCall, internalOnlyResult, cancellationToken)
+                    await AppendToolResultAsync(conversationStorageKey, messages, toolCall, internalOnlyResult, cancellationToken)
                         .ConfigureAwait(false);
 
                     yield return new AgentEvent
@@ -575,7 +578,7 @@ namespace SmartWord.Application.Orchestration
                     var repairOnlyResult = ToolCallResult.Denied(
                         toolCall.Name,
                         "当前仍有待修复的写步骤。此时仅允许使用 read_script 做只读探针，或直接使用 patch_range / execute_script 修复当前失败步骤。");
-                    await AppendToolResultAsync(documentPath, messages, toolCall, repairOnlyResult, cancellationToken)
+                    await AppendToolResultAsync(conversationStorageKey, messages, toolCall, repairOnlyResult, cancellationToken)
                         .ConfigureAwait(false);
 
                     yield return new AgentEvent
@@ -673,7 +676,7 @@ namespace SmartWord.Application.Orchestration
                             0,
                             cancellationToken)
                         .ConfigureAwait(false);
-                    await AppendToolResultAsync(documentPath, messages, toolCall, deniedResult, cancellationToken, auditRun?.Id, operationDescription)
+                    await AppendToolResultAsync(conversationStorageKey, messages, toolCall, deniedResult, cancellationToken, auditRun?.Id, operationDescription)
                         .ConfigureAwait(false);
 
                     yield return new AgentEvent
@@ -724,7 +727,7 @@ namespace SmartWord.Application.Orchestration
                             0,
                             cancellationToken)
                         .ConfigureAwait(false);
-                    await AppendToolResultAsync(documentPath, messages, toolCall, inputParseError, cancellationToken, auditRun?.Id, operationDescription)
+                    await AppendToolResultAsync(conversationStorageKey, messages, toolCall, inputParseError, cancellationToken, auditRun?.Id, operationDescription)
                         .ConfigureAwait(false);
 
                     yield return CreateToolCompletedEvent(toolCall, inputParseError);
@@ -760,7 +763,7 @@ namespace SmartWord.Application.Orchestration
                         var unavailableResult = ToolCallResult.Denied(
                             toolCall.Name,
                             "当前未连接确认通道，系统已拒绝执行写操作。");
-                        await AppendToolResultAsync(documentPath, messages, toolCall, unavailableResult, cancellationToken, auditRun?.Id, operationDescription)
+                        await AppendToolResultAsync(conversationStorageKey, messages, toolCall, unavailableResult, cancellationToken, auditRun?.Id, operationDescription)
                             .ConfigureAwait(false);
 
                         yield return new AgentEvent
@@ -849,7 +852,7 @@ namespace SmartWord.Application.Orchestration
                                 0,
                                 cancellationToken)
                             .ConfigureAwait(false);
-                        await AppendToolResultAsync(documentPath, messages, toolCall, skippedResult, cancellationToken, auditRun?.Id, operationDescription)
+                        await AppendToolResultAsync(conversationStorageKey, messages, toolCall, skippedResult, cancellationToken, auditRun?.Id, operationDescription)
                             .ConfigureAwait(false);
 
                         yield return new AgentEvent
@@ -998,7 +1001,7 @@ namespace SmartWord.Application.Orchestration
                     executionResult.OperationDescription = operationDescription;
                 }
 
-                await AppendToolResultAsync(documentPath, messages, toolCall, executionResult, cancellationToken, auditRun?.Id, operationDescription)
+                await AppendToolResultAsync(conversationStorageKey, messages, toolCall, executionResult, cancellationToken, auditRun?.Id, operationDescription)
                     .ConfigureAwait(false);
 
                 yield return CreateToolCompletedEvent(toolCall, executionResult);
@@ -1092,12 +1095,12 @@ namespace SmartWord.Application.Orchestration
                             }
 
                             await AppendAutoVerifyObservationAsync(
-                                    documentPath,
-                                    messages,
-                                    executedWriteStep,
-                                    autoVerifyOutcome,
-                                    AutoVerifyObservationDisposition.RolledBack,
-                                    cancellationToken)
+                                conversationStorageKey,
+                                messages,
+                                executedWriteStep,
+                                autoVerifyOutcome,
+                                AutoVerifyObservationDisposition.RolledBack,
+                                cancellationToken)
                                 .ConfigureAwait(false);
 
                             var verificationFailedEvent = CreateChangeEvent(
@@ -1161,12 +1164,12 @@ namespace SmartWord.Application.Orchestration
                             }
 
                             await AppendAutoVerifyObservationAsync(
-                                    documentPath,
-                                    messages,
-                                    executedWriteStep,
-                                    autoVerifyOutcome,
-                                    AutoVerifyObservationDisposition.Committed,
-                                    cancellationToken)
+                                conversationStorageKey,
+                                messages,
+                                executedWriteStep,
+                                autoVerifyOutcome,
+                                AutoVerifyObservationDisposition.Committed,
+                                cancellationToken)
                                 .ConfigureAwait(false);
 
                             pendingWriteStep = null;
@@ -1355,12 +1358,12 @@ namespace SmartWord.Application.Orchestration
                 if (remainingToolCallsStartIndex >= 0 && remainingToolCallsStartIndex < toolCalls.Count)
                 {
                     await AppendSkippedRemainingToolCallsAsync(
-                            documentPath,
-                            messages,
-                            toolCalls,
-                            remainingToolCallsStartIndex,
-                            remainingToolCallsReason,
-                            cancellationToken)
+                        conversationStorageKey,
+                        messages,
+                        toolCalls,
+                        remainingToolCallsStartIndex,
+                        remainingToolCallsReason,
+                        cancellationToken)
                         .ConfigureAwait(false);
                 }
 
