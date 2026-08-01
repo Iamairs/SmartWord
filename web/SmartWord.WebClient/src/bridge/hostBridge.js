@@ -1,3 +1,5 @@
+import { normalizeSkillDetail } from './skillDetailNormalizer.js';
+
 const SETTINGS_STORAGE_KEY = 'smartword-settings';
 const SKILLS_STORAGE_KEY = 'smartword-skills';
 const VALID_MODES = new Set(['ask', 'plan', 'agent']);
@@ -139,39 +141,6 @@ function normalizePositiveNumber(value, fallback) {
 function normalizeRatio(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 && parsed < 1 ? parsed : fallback;
-}
-
-function normalizeSkillResource(resource) {
-  const source = resource || {};
-  return {
-    relativePath: String(source.relativePath ?? source.RelativePath ?? ''),
-    kind: String(source.kind ?? source.Kind ?? ''),
-    sizeBytes: Number(source.sizeBytes ?? source.SizeBytes ?? 0),
-    isText: Boolean(source.isText ?? source.IsText)
-  };
-}
-
-function normalizeSkillScript(script) {
-  const source = script || {};
-  return {
-    skillName: String(source.skillName ?? source.SkillName ?? ''),
-    relativePath: String(source.relativePath ?? source.RelativePath ?? ''),
-    runtime: String(source.runtime ?? source.Runtime ?? ''),
-    sizeBytes: Number(source.sizeBytes ?? source.SizeBytes ?? 0),
-    sha256: String(source.sha256 ?? source.Sha256 ?? ''),
-    isApproved: Boolean(source.isApproved ?? source.IsApproved)
-  };
-}
-
-function normalizeSkillDetail(detail) {
-  const source = detail || {};
-  return {
-    ...source,
-    skill: source.skill ?? source.Skill ?? null,
-    content: String(source.content ?? source.Content ?? ''),
-    resources: (source.resources ?? source.Resources ?? []).map(normalizeSkillResource),
-    scripts: (source.scripts ?? source.Scripts ?? []).map(normalizeSkillScript)
-  };
 }
 
 function createMockResponse(request, notify) {
