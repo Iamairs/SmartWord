@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,6 +10,8 @@ using SmartWord.Application.Tools;
 using SmartWord.Core.Enums;
 using SmartWord.Core.Interfaces;
 using SmartWord.Core.Models;
+using SmartWord.Infrastructure.Skills;
+using SmartWord.OfficeIntegration.SkillScripts;
 using Xunit;
 
 namespace SmartWord.Application.Tests.Orchestration
@@ -242,6 +245,68 @@ namespace SmartWord.Application.Tests.Orchestration
             Assert.NotNull(preparation.InputParseError);
             Assert.False(preparation.InputParseError.Success);
             Assert.Contains("ERROR in read_sample", preparation.InputParseError.Output);
+        }
+
+        [Fact]
+        public async Task ToolCallCoordinator_未激活Skill读取资源_拒绝访问()
+        {
+            var registry = new ToolRegistry();
+            registry.Register(new StubTool("read_skill_resource", ToolPermission.ReadOnly));
+            var coordinator = new ToolCallCoordinator(registry, new PermissionGuard(registry), null);
+
+            var preparation = await coordinator.PrepareAsync(
+                new ToolCall
+                {
+                    Id = "resource_1",
+                    Name = "read_skill_resource",
+                    Input = "{\"skill_name\":\"doc-review\",\"resource_path\":\"references/checklist.md\"}"
+                },
+                new AgentRunOptions { Mode = AgentMode.Ask },
+                CancellationToken.None);
+
+            Assert.False(preparation.PermissionDecision.IsAllowed);
+            Assert.Contains("未在当前任务中激活", preparation.PermissionDecision.Reason);
+        }
+
+        [Fact]
+        public async Task ToolCallCoordinator_未激活Skill执行脚本_拒绝访问()
+        {
+            var builtInRoot = Path.Combine(Path.GetTempPath(), "smartword-empty-built-in-" + Guid.NewGuid().ToString("N"));
+            var userRoot = Path.Combine(Path.GetTempPath(), "smartword-empty-user-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                var registry = new ToolRegistry();
+                registry.Register(new SkillRunScriptTool(
+                    new FileSystemSkillStore(builtInRoot, userRoot),
+                    new SkillScriptRunner()));
+                var coordinator = new ToolCallCoordinator(registry, new PermissionGuard(registry), null);
+
+                var preparation = await coordinator.PrepareAsync(
+                    new ToolCall
+                    {
+                        Id = "script_1",
+                        Name = "skill_run_script",
+                        Input = "{\"skill_name\":\"doc-review\",\"script_path\":\"scripts/check.py\",\"runtime\":\"python\",\"purpose\":\"测试\"}"
+                    },
+                    new AgentRunOptions { Mode = AgentMode.Agent },
+                    CancellationToken.None);
+
+                Assert.False(preparation.PermissionDecision.IsAllowed);
+                Assert.Contains("未在当前任务中激活", preparation.PermissionDecision.Reason);
+            }
+            finally
+            {
+                DeleteDirectoryIfExists(builtInRoot);
+                DeleteDirectoryIfExists(userRoot);
+            }
+        }
+
+        private static void DeleteDirectoryIfExists(string path)
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, true);
+            }
         }
 
         private sealed class RecordingToolChoiceLlmClient : ILlmClient, IToolChoiceLlmClient

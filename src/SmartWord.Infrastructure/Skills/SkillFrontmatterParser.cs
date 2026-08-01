@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using SmartWord.Core.Enums;
 using SmartWord.Core.Models;
 
 namespace SmartWord.Infrastructure.Skills
@@ -36,7 +38,18 @@ namespace SmartWord.Infrastructure.Skills
                     ? version
                     : string.Empty,
                 Enabled = !values.TryGetValue("enabled", out var enabled)
-                    || !string.Equals(enabled, "false", StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(enabled, "false", StringComparison.OrdinalIgnoreCase),
+                TrustLevel = ParseTrustLevel(values.TryGetValue("trust_level", out var trustLevel)
+                    ? trustLevel
+                    : string.Empty),
+                Source = values.TryGetValue("source", out var source) ? source : string.Empty,
+                ActivationTriggers = ReadList(values, "activation.triggers", "activation_triggers"),
+                ActivationExcludedTriggers = ReadList(
+                    values,
+                    "activation.excluded_triggers",
+                    "activation_excluded_triggers"),
+                SupportedModes = ReadList(values, "supported_modes"),
+                RequiredTools = ReadList(values, "required_tools")
             };
         }
 
@@ -60,12 +73,21 @@ namespace SmartWord.Infrastructure.Skills
                 }
 
                 string line;
+                var currentSection = string.Empty;
+                var currentListKey = string.Empty;
                 while ((line = reader.ReadLine()) != null)
                 {
                     var trimmed = line.Trim();
                     if (string.Equals(trimmed, "---", StringComparison.Ordinal))
                     {
                         break;
+                    }
+
+                    if (trimmed.StartsWith("- ", StringComparison.Ordinal)
+                        && !string.IsNullOrWhiteSpace(currentListKey))
+                    {
+                        AppendListValue(values, currentListKey, trimmed.Substring(2).Trim().Trim('"'));
+                        continue;
                     }
 
                     var separatorIndex = trimmed.IndexOf(':');
@@ -76,14 +98,83 @@ namespace SmartWord.Infrastructure.Skills
 
                     var key = trimmed.Substring(0, separatorIndex).Trim();
                     var value = trimmed.Substring(separatorIndex + 1).Trim().Trim('"');
+                    var indent = line.Length - line.TrimStart().Length;
+                    if (indent == 0 && string.IsNullOrWhiteSpace(value))
+                    {
+                        currentSection = key;
+                        currentListKey = string.Empty;
+                        continue;
+                    }
+
+                    var fullKey = indent > 0 && !string.IsNullOrWhiteSpace(currentSection)
+                        ? currentSection + "." + key
+                        : key;
                     if (!string.IsNullOrWhiteSpace(key))
                     {
-                        values[key] = value;
+                        if (string.IsNullOrWhiteSpace(value))
+                        {
+                            currentListKey = fullKey;
+                        }
+                        else
+                        {
+                            values[fullKey] = value;
+                            currentListKey = string.Empty;
+                        }
                     }
                 }
             }
 
             return values;
+        }
+
+        private static SkillTrustLevel ParseTrustLevel(string value)
+        {
+            switch ((value ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "built_in":
+                case "builtin":
+                    return SkillTrustLevel.BuiltIn;
+                case "external":
+                    return SkillTrustLevel.External;
+                case "user":
+                default:
+                    return SkillTrustLevel.User;
+            }
+        }
+
+        private static IReadOnlyList<string> ReadList(
+            IReadOnlyDictionary<string, string> values,
+            params string[] keys)
+        {
+            foreach (var key in keys ?? new string[0])
+            {
+                if (!values.TryGetValue(key, out var raw) || string.IsNullOrWhiteSpace(raw))
+                {
+                    continue;
+                }
+
+                return raw
+                    .Split(new[] { '\u001f', ',' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(item => item.Trim())
+                    .Where(item => !string.IsNullOrWhiteSpace(item))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+
+            return new List<string>();
+        }
+
+        private static void AppendListValue(IDictionary<string, string> values, string key, string value)
+        {
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
+            {
+                return;
+            }
+
+            values.TryGetValue(key, out var existing);
+            values[key] = string.IsNullOrWhiteSpace(existing)
+                ? value
+                : existing + '\u001f' + value;
         }
     }
 }

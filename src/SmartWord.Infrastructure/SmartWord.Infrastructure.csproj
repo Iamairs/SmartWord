@@ -96,6 +96,8 @@
     <Compile Include="Skills\SkillPathGuard.cs" />
     <Compile Include="Telemetry\CompositeTelemetrySink.cs" />
     <Compile Include="Telemetry\JsonlAgentTelemetrySink.cs" />
+    <Compile Include="Telemetry\LocalAgentTelemetrySink.cs" />
+    <Compile Include="Telemetry\LocalSkillTelemetryReader.cs" />
     <Compile Include="Telemetry\SqliteEvalTelemetrySink.cs" />
     <Compile Include="Telemetry\TelemetryLlmClient.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

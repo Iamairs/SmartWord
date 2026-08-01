@@ -26,7 +26,11 @@ namespace SmartWord.OfficeIntegration.SkillScripts
         private const int MaxScriptBytes = 256 * 1024;
         private const int MaxStreamCharacters = 64 * 1024;
         private const int MaxOutputPreviewCharacters = 4096;
+        private const long MaxInputBytes = 200L * 1024 * 1024;
+        private const long MaxOutputBytes = 100L * 1024 * 1024;
+        private const int MaxWorkspaceFiles = 1000;
         private static readonly TimeSpan ScriptTimeout = TimeSpan.FromSeconds(30);
+        private static readonly TimeSpan WorkspaceTimeToLive = TimeSpan.FromHours(24);
 
         public async Task<SkillScriptRunResult> RunAsync(
             SkillScriptRunRequest request,
@@ -38,40 +42,59 @@ namespace SmartWord.OfficeIntegration.SkillScripts
             }
 
             ValidateResolvedRequest(request);
+            CleanupExpiredWorkspaces();
             var warnings = new List<string>
             {
                 "默认禁止联网；首版采用静态扫描和环境收敛，不是内核级网络沙箱。"
             };
 
             var workspacePath = CreateWorkspacePath();
-            Directory.CreateDirectory(workspacePath);
-            Directory.CreateDirectory(Path.Combine(workspacePath, "inputs"));
-            Directory.CreateDirectory(Path.Combine(workspacePath, "outputs"));
+            try
+            {
+                Directory.CreateDirectory(workspacePath);
+                Directory.CreateDirectory(Path.Combine(workspacePath, "inputs"));
+                Directory.CreateDirectory(Path.Combine(workspacePath, "outputs"));
 
-            CopyConfirmedInputs(request.ConfirmedInputPaths, workspacePath, warnings, cancellationToken);
-            var stopwatch = Stopwatch.StartNew();
-            SkillScriptRunResult result;
-            if (string.Equals(request.Runtime, "csharp", StringComparison.OrdinalIgnoreCase))
-            {
-                result = await RunCSharpAsync(request, workspacePath, warnings, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            else if (string.Equals(request.Runtime, "python", StringComparison.OrdinalIgnoreCase))
-            {
-                result = await RunPythonAsync(request, workspacePath, warnings, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            else
-            {
-                throw new InvalidOperationException("runtime 仅支持 csharp 或 python。");
-            }
+                CopyConfirmedInputs(request.ConfirmedInputPaths, workspacePath, warnings, cancellationToken);
+                var stopwatch = Stopwatch.StartNew();
+                SkillScriptRunResult result;
+                if (string.Equals(request.Runtime, "csharp", StringComparison.OrdinalIgnoreCase))
+                {
+                    result = await RunCSharpAsync(request, workspacePath, warnings, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                else if (string.Equals(request.Runtime, "python", StringComparison.OrdinalIgnoreCase))
+                {
+                    result = await RunPythonAsync(request, workspacePath, warnings, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+                    throw new InvalidOperationException("runtime 仅支持 csharp 或 python。");
+                }
 
-            stopwatch.Stop();
-            result.DurationMs = stopwatch.ElapsedMilliseconds;
-            result.WorkspacePath = workspacePath;
-            result.Warnings = warnings;
-            result.Outputs = CollectOutputs(workspacePath, cancellationToken);
-            return result;
+                stopwatch.Stop();
+                result.DurationMs = stopwatch.ElapsedMilliseconds;
+                result.WorkspacePath = string.Empty;
+                result.Warnings = warnings;
+                try
+                {
+                    result.Outputs = CollectOutputs(workspacePath, cancellationToken);
+                    ValidateExpectedOutputs(request.ExpectedOutputs, result.Outputs);
+                }
+                catch (Exception ex)
+                {
+                    result.Success = false;
+                    result.ExitCode = -3;
+                    result.Stderr = AppendMessage(result.Stderr, ex.Message);
+                }
+
+                return result;
+            }
+            finally
+            {
+                TryDeleteWorkspace(workspacePath);
+            }
         }
 
         private static async Task<SkillScriptRunResult> RunCSharpAsync(
@@ -199,22 +222,30 @@ namespace SmartWord.OfficeIntegration.SkillScripts
             };
             ConfigureMinimalEnvironment(psi, workspacePath);
 
-            using (var process = new Process { StartInfo = psi })
+            using (var process = new Process { StartInfo = psi, EnableRaisingEvents = true })
             using (var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
                 timeoutCts.CancelAfter(ScriptTimeout);
+                var exitSource = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+                process.Exited += (_, __) => TrySetExitCode(process, exitSource);
                 process.Start();
                 var stdoutTask = process.StandardOutput.ReadToEndAsync();
                 var stderrTask = process.StandardError.ReadToEndAsync();
-                var exitTask = Task.Run(() =>
+                if (process.HasExited)
                 {
-                    process.WaitForExit();
-                    return process.ExitCode;
-                }, timeoutCts.Token);
+                    TrySetExitCode(process, exitSource);
+                }
 
                 try
                 {
-                    var exitCode = await exitTask.ConfigureAwait(false);
+                    var cancellationTask = Task.Delay(Timeout.Infinite, timeoutCts.Token);
+                    var completed = await Task.WhenAny(exitSource.Task, cancellationTask).ConfigureAwait(false);
+                    if (completed != exitSource.Task)
+                    {
+                        timeoutCts.Token.ThrowIfCancellationRequested();
+                    }
+
+                    var exitCode = await exitSource.Task.ConfigureAwait(false);
                     var stdout = await stdoutTask.ConfigureAwait(false);
                     var stderr = await stderrTask.ConfigureAwait(false);
                     var resultJson = ReadPythonResultJson(workspacePath);
@@ -227,9 +258,14 @@ namespace SmartWord.OfficeIntegration.SkillScripts
                         ResultJson = resultJson
                     };
                 }
-                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                catch (OperationCanceledException)
                 {
                     TryKill(process);
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+
                     return new SkillScriptRunResult
                     {
                         Success = false,
@@ -341,6 +377,8 @@ namespace SmartWord.OfficeIntegration.SkillScripts
         {
             var inputsRoot = Path.Combine(workspacePath, "inputs");
             var index = 0;
+            long totalBytes = 0;
+            var totalFiles = 0;
             foreach (var inputPath in inputPaths ?? new List<string>())
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -350,15 +388,22 @@ namespace SmartWord.OfficeIntegration.SkillScripts
                 }
 
                 var fullPath = Path.GetFullPath(inputPath);
+                EnsureNotReparsePoint(fullPath);
                 if (File.Exists(fullPath))
                 {
+                    AddToQuota(new FileInfo(fullPath).Length, ref totalBytes, ref totalFiles, MaxInputBytes);
                     File.Copy(fullPath, Path.Combine(inputsRoot, index + "_" + Path.GetFileName(fullPath)), true);
                     index++;
                 }
                 else if (Directory.Exists(fullPath))
                 {
                     var targetRoot = Path.Combine(inputsRoot, index + "_" + Path.GetFileName(fullPath));
-                    CopyDirectory(fullPath, targetRoot, cancellationToken);
+                    CopyDirectory(
+                        fullPath,
+                        targetRoot,
+                        ref totalBytes,
+                        ref totalFiles,
+                        cancellationToken);
                     index++;
                 }
                 else
@@ -371,18 +416,23 @@ namespace SmartWord.OfficeIntegration.SkillScripts
         private static void CopyDirectory(
             string sourceRoot,
             string targetRoot,
+            ref long totalBytes,
+            ref int totalFiles,
             CancellationToken cancellationToken)
         {
             Directory.CreateDirectory(targetRoot);
             foreach (var directory in Directory.GetDirectories(sourceRoot, "*", SearchOption.AllDirectories))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                EnsureNotReparsePoint(directory);
                 Directory.CreateDirectory(directory.Replace(sourceRoot, targetRoot));
             }
 
             foreach (var file in Directory.GetFiles(sourceRoot, "*", SearchOption.AllDirectories))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                EnsureNotReparsePoint(file);
+                AddToQuota(new FileInfo(file).Length, ref totalBytes, ref totalFiles, MaxInputBytes);
                 var target = file.Replace(sourceRoot, targetRoot);
                 Directory.CreateDirectory(Path.GetDirectoryName(target));
                 File.Copy(file, target, true);
@@ -400,9 +450,23 @@ namespace SmartWord.OfficeIntegration.SkillScripts
             }
 
             var outputs = new List<SkillScriptOutputFile>();
+            long totalBytes = 0;
             foreach (var filePath in Directory.GetFiles(outputsRoot, "*", SearchOption.AllDirectories))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                EnsureNotReparsePoint(filePath);
+                var fileInfo = new FileInfo(filePath);
+                totalBytes += fileInfo.Length;
+                if (outputs.Count >= MaxWorkspaceFiles)
+                {
+                    throw new InvalidOperationException("脚本输出文件数量超过 1000，已停止收集。");
+                }
+
+                if (totalBytes > MaxOutputBytes)
+                {
+                    throw new InvalidOperationException("脚本输出总量超过 100MB，已停止收集。");
+                }
+
                 var relativePath = filePath
                     .Substring(outputsRoot.Length)
                     .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
@@ -410,7 +474,7 @@ namespace SmartWord.OfficeIntegration.SkillScripts
                 outputs.Add(new SkillScriptOutputFile
                 {
                     RelativePath = relativePath,
-                    SizeBytes = new FileInfo(filePath).Length,
+                    SizeBytes = fileInfo.Length,
                     Sha256 = ComputeSha256(filePath),
                     Preview = ReadPreview(filePath)
                 });
@@ -495,6 +559,124 @@ namespace SmartWord.OfficeIntegration.SkillScripts
                 "SmartWord",
                 "skill-script-workspaces",
                 DateTime.UtcNow.ToString("yyyyMMddHHmmssfff") + "-" + Guid.NewGuid().ToString("N"));
+        }
+
+        private static string GetWorkspaceRoot()
+        {
+            return Path.Combine(Path.GetTempPath(), "SmartWord", "skill-script-workspaces");
+        }
+
+        private static void CleanupExpiredWorkspaces()
+        {
+            var root = GetWorkspaceRoot();
+            if (!Directory.Exists(root))
+            {
+                return;
+            }
+
+            foreach (var directory in Directory.GetDirectories(root))
+            {
+                try
+                {
+                    if (DateTime.UtcNow - Directory.GetLastWriteTimeUtc(directory) > WorkspaceTimeToLive)
+                    {
+                        Directory.Delete(directory, true);
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        private static void TryDeleteWorkspace(string workspacePath)
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(workspacePath) && Directory.Exists(workspacePath))
+                {
+                    Directory.Delete(workspacePath, true);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private static void EnsureNotReparsePoint(string path)
+        {
+            if (!File.Exists(path) && !Directory.Exists(path))
+            {
+                return;
+            }
+
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new InvalidOperationException("输入或输出路径包含符号链接/Junction，已拒绝处理。");
+            }
+        }
+
+        private static void AddToQuota(
+            long fileBytes,
+            ref long totalBytes,
+            ref int totalFiles,
+            long maxBytes)
+        {
+            totalBytes += Math.Max(0, fileBytes);
+            totalFiles++;
+            if (totalFiles > MaxWorkspaceFiles)
+            {
+                throw new InvalidOperationException("输入文件数量超过 1000，已拒绝执行。");
+            }
+
+            if (totalBytes > maxBytes)
+            {
+                throw new InvalidOperationException("输入总量超过 200MB，已拒绝执行。");
+            }
+        }
+
+        private static void TrySetExitCode(Process process, TaskCompletionSource<int> source)
+        {
+            try
+            {
+                source.TrySetResult(process.ExitCode);
+            }
+            catch (Exception ex)
+            {
+                source.TrySetException(ex);
+            }
+        }
+
+        private static string AppendMessage(string current, string next)
+        {
+            return string.IsNullOrWhiteSpace(current)
+                ? next ?? string.Empty
+                : current + Environment.NewLine + (next ?? string.Empty);
+        }
+
+        private static void ValidateExpectedOutputs(
+            IReadOnlyList<string> expectedOutputs,
+            IReadOnlyList<SkillScriptOutputFile> actualOutputs)
+        {
+            var expectedPaths = (expectedOutputs ?? new List<string>())
+                .Select(item => (item ?? string.Empty).Trim().Replace('\\', '/'))
+                .Where(item => !string.IsNullOrWhiteSpace(item)
+                    && (item.Contains("/") || !string.IsNullOrWhiteSpace(Path.GetExtension(item))))
+                .ToList();
+            if (expectedPaths.Count == 0)
+            {
+                return;
+            }
+
+            var actualPaths = new HashSet<string>(
+                (actualOutputs ?? new List<SkillScriptOutputFile>()).Select(item => item.RelativePath),
+                StringComparer.OrdinalIgnoreCase);
+            var missing = expectedPaths.Where(item => !actualPaths.Contains(item)).ToList();
+            if (missing.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    "脚本未生成声明的输出文件：" + string.Join(", ", missing));
+            }
         }
 
         private static string Quote(string value)

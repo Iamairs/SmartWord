@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -66,6 +68,7 @@ namespace SmartWord.Application.Orchestration
             {
                 try
                 {
+                    EnsureActiveSkillAccess(parsedInput, options, "script_path");
                     scriptApprovalKey = await skillRunScriptTool
                         .BuildApprovalKeyAsync(parsedInput, cancellationToken)
                         .ConfigureAwait(false);
@@ -83,6 +86,18 @@ namespace SmartWord.Application.Orchestration
                 {
                     requiresConfirmation = false;
                     permissionDecision = PermissionDecision.Deny("Skill 脚本解析失败：" + ex.Message);
+                }
+            }
+            else if (permissionDecision.IsAllowed
+                && string.Equals(toolCall?.Name, "read_skill_resource", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    EnsureActiveSkillAccess(parsedInput, options, "resource_path");
+                }
+                catch (Exception ex)
+                {
+                    permissionDecision = PermissionDecision.Deny("Skill 资源访问被拒绝：" + ex.Message);
                 }
             }
 
@@ -168,8 +183,43 @@ namespace SmartWord.Application.Orchestration
                     return "准备执行脚本写入。";
                 case "skill_run_script":
                     return "准备执行 Skill 脚本。";
+                case "read_skill_resource":
+                    return "准备读取当前任务的 Skill 资源。";
                 default:
                     return "准备执行工具：" + (toolName ?? string.Empty);
+            }
+        }
+
+        private static void EnsureActiveSkillAccess(
+            JObject input,
+            AgentRunOptions options,
+            string pathField)
+        {
+            if (input == null)
+            {
+                throw new InvalidOperationException("工具输入不能为空。");
+            }
+
+            var skillName = (input.Value<string>("skill_name") ?? string.Empty).Trim();
+            var requestedPath = (input.Value<string>(pathField) ?? string.Empty)
+                .Trim()
+                .Replace('\\', '/');
+            var snapshot = (options?.ActiveSkillSnapshots ?? new List<ActiveSkillSnapshot>())
+                .FirstOrDefault(item => string.Equals(item.Name, skillName, StringComparison.OrdinalIgnoreCase));
+            if (snapshot == null)
+            {
+                throw new InvalidOperationException("Skill 未在当前任务中激活。");
+            }
+
+            var allowedPaths = string.Equals(pathField, "script_path", StringComparison.OrdinalIgnoreCase)
+                ? snapshot.AllowedScriptPaths
+                : snapshot.AllowedResourcePaths;
+            if (!(allowedPaths ?? new List<string>()).Any(item => string.Equals(
+                item?.Replace('\\', '/'),
+                requestedPath,
+                StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException("请求路径不在当前任务的 Skill 快照白名单中。");
             }
         }
     }

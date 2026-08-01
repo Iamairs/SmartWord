@@ -236,7 +236,7 @@ namespace SmartWord.Application.Orchestration
             try
             {
                 return await _skillPromptResolver
-                    .ResolveAsync(userInput, options.SelectedSkillNames, options.Mode, cancellationToken)
+                    .ResolveAsync(userInput, options.SelectedSkillNames, options, cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (Exception ex)

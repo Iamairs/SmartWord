@@ -185,6 +185,52 @@ namespace SmartWord.Application.Orchestration
             safeOptions,
             cancellationToken)
         .ConfigureAwait(false);
+    safeOptions.ActiveSkillSnapshots = skillPromptContext.ActiveSnapshots ?? new List<ActiveSkillSnapshot>();
+    safeOptions.ActiveSkillNames = safeOptions.ActiveSkillSnapshots
+        .Select(item => item.Name)
+        .Where(item => !string.IsNullOrWhiteSpace(item))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
+    if ((skillPromptContext.Recommendations != null && skillPromptContext.Recommendations.Count > 0)
+        || safeOptions.ActiveSkillNames.Count > 0)
+    {
+        yield return new AgentEvent
+        {
+            Type = AgentEventType.SkillRecommendation,
+            SkillRecommendations = (skillPromptContext.Recommendations ?? new List<SkillRecommendation>()).ToList(),
+            ActiveSkillNames = safeOptions.ActiveSkillNames.ToArray(),
+            SkillPromptTokens = skillPromptContext.LoadMetrics == null
+                ? 0
+                : skillPromptContext.LoadMetrics.EstimatedTokens,
+            Message = "本次任务已解析 Skill 推荐和激活状态。"
+        };
+    }
+
+    await _runAuditRecorder.RecordTaskTelemetryAsync(
+            "skill_context_resolved",
+            safeOptions,
+            new Dictionary<string, object>
+            {
+                ["activeSkillNames"] = safeOptions.ActiveSkillNames.ToArray(),
+                ["activeSkills"] = safeOptions.ActiveSkillSnapshots.Select(item => new
+                {
+                    name = item.Name,
+                    version = item.Version,
+                    contentSha256 = item.ContentSha256
+                }).ToArray(),
+                ["recommendations"] = skillPromptContext.Recommendations,
+                ["promptBudgetTokens"] = skillPromptContext.LoadMetrics == null
+                    ? 0
+                    : skillPromptContext.LoadMetrics.BudgetTokens,
+                ["promptEstimatedTokens"] = skillPromptContext.LoadMetrics == null
+                    ? 0
+                    : skillPromptContext.LoadMetrics.EstimatedTokens,
+                ["loadedSections"] = skillPromptContext.LoadMetrics == null
+                    ? new string[0]
+                    : skillPromptContext.LoadMetrics.LoadedSections
+            },
+            cancellationToken)
+        .ConfigureAwait(false);
     var systemPrompt = BuildSystemPrompt(safeOptions, documentContext, currentTodoBoard, skillPromptContext);
     if (!string.IsNullOrWhiteSpace(systemPrompt))
     {

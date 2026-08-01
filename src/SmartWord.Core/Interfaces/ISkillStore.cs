@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using SmartWord.Core.Enums;
 using SmartWord.Core.Models;
 
 namespace SmartWord.Core.Interfaces
@@ -22,12 +23,19 @@ namespace SmartWord.Core.Interfaces
 
         Task SetSkillEnabledAsync(string name, bool enabled, CancellationToken cancellationToken);
 
+        Task SetSkillScriptPolicyAsync(string name, SkillScriptPolicy policy, CancellationToken cancellationToken);
+
         Task<IReadOnlyList<SkillScriptInfo>> GetSkillScriptsAsync(string name, CancellationToken cancellationToken);
 
         Task<SkillScriptResolution> ResolveScriptAsync(
             string skillName,
             string scriptPath,
             string runtime,
+            CancellationToken cancellationToken);
+
+        Task<SkillResourceResolution> ResolveResourceAsync(
+            string skillName,
+            string relativePath,
             CancellationToken cancellationToken);
     }
 }

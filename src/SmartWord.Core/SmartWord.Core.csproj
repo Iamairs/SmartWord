@@ -53,6 +53,8 @@
   <ItemGroup>
     <Compile Include="Enums\AgentMode.cs" />
     <Compile Include="Enums\AgentPermissionMode.cs" />
+    <Compile Include="Enums\SkillScriptPolicy.cs" />
+    <Compile Include="Enums\SkillTrustLevel.cs" />
     <Compile Include="Enums\ToolPermission.cs" />
     <Compile Include="Interfaces\IAgentOrchestrator.cs" />
     <Compile Include="Interfaces\IConfirmationChannel.cs" />
@@ -84,6 +86,7 @@
     <Compile Include="Models\LlmResponseMetadata.cs" />
     <Compile Include="Models\PermissionDecision.cs" />
     <Compile Include="Models\SkillModels.cs" />
+    <Compile Include="Models\SkillRuntimeModels.cs" />
     <Compile Include="Models\TodoBoard.cs" />
     <Compile Include="Models\TaskHistoryModels.cs" />
     <Compile Include="Models\ToolCall.cs" />

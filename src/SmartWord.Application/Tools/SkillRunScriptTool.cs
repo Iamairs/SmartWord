@@ -158,6 +158,8 @@ namespace SmartWord.Application.Tools
             return new SkillScriptApprovalKey
             {
                 SkillName = request.Resolution.Script.SkillName,
+                SkillSource = request.Resolution.Skill.Source,
+                SkillContentSha256 = request.Resolution.Skill.ContentSha256,
                 RelativeScriptPath = request.Resolution.Script.RelativePath,
                 ScriptHash = request.Resolution.Script.Sha256,
                 Runtime = request.Resolution.Script.Runtime,
@@ -178,7 +180,12 @@ namespace SmartWord.Application.Tools
                     .Select(item => (item ?? string.Empty).Trim())
                     .Where(item => !string.IsNullOrWhiteSpace(item))
                     .OrderBy(item => item, StringComparer.OrdinalIgnoreCase)
-                    .ToArray()
+                    .ToArray(),
+                network = "disabled",
+                max_runtime_seconds = 30,
+                max_input_bytes = 200L * 1024 * 1024,
+                max_output_bytes = 100L * 1024 * 1024,
+                max_files = 1000
             };
             var json = JsonConvert.SerializeObject(payload, Formatting.None);
             using (var sha256 = SHA256.Create())

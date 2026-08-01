@@ -39,7 +39,9 @@ namespace SmartWord.Core.Models
         /// <summary>Todo Board 进入恢复态，前端必须先提交恢复决策</summary>
         TodoBoardRecoveryRequired = 24,
         /// <summary>Todo Board 因预算耗尽进入暂停态，前端可选择继续、重建或丢弃</summary>
-        TodoBoardPaused = 25
+        TodoBoardPaused = 25,
+        /// <summary>当前任务的 Skill 推荐和激活结果</summary>
+        SkillRecommendation = 26
     }
 
     /// <summary>
@@ -113,5 +115,11 @@ namespace SmartWord.Core.Models
 
         /// <summary>Todo 事件的更新语义，用于区分普通同步、回滚恢复、暂停快照等场景。</summary>
         public string TodoBoardUpdateKind { get; set; } = string.Empty;
+
+        public List<SkillRecommendation> SkillRecommendations { get; set; } = new List<SkillRecommendation>();
+
+        public string[] ActiveSkillNames { get; set; } = new string[0];
+
+        public int SkillPromptTokens { get; set; }
     }
 }

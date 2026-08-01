@@ -46,6 +46,22 @@ namespace SmartWord.Core.Models
         /// </summary>
         public IReadOnlyList<string> SelectedSkillNames { get; set; } = new List<string>();
 
+        /// <summary>
+        /// 当前任务解析后的 Skill 快照名称。与 SelectedSkillNames 分离，允许自动推荐且不修改用户全局选择。
+        /// </summary>
+        public IReadOnlyList<string> ActiveSkillNames { get; set; } = new List<string>();
+
+        /// <summary>用户在当前请求中关闭的自动推荐 Skill，不改变全局启停状态。</summary>
+        public IReadOnlyList<string> SuppressedSkillNames { get; set; } = new List<string>();
+
+        public IReadOnlyList<ActiveSkillSnapshot> ActiveSkillSnapshots { get; set; } = new List<ActiveSkillSnapshot>();
+
+        public int SkillPromptBudgetTokens { get; set; } = 8192;
+
+        public int SkillIndexBudgetTokens { get; set; } = 800;
+
+        public int SkillResourceReadBudgetTokens { get; set; } = 2000;
+
         /// <summary>Plan→Agent 切换时传入的执行计划，用于进度追踪</summary>
         public ExecutionPlan ActivePlan { get; set; }
 

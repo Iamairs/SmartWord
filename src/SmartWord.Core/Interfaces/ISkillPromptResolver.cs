@@ -16,5 +16,11 @@ namespace SmartWord.Core.Interfaces
             IEnumerable<string> selectedSkillNames,
             AgentMode mode,
             CancellationToken cancellationToken);
+
+        Task<SkillPromptContext> ResolveAsync(
+            string userMessage,
+            IEnumerable<string> selectedSkillNames,
+            AgentRunOptions options,
+            CancellationToken cancellationToken);
     }
 }
