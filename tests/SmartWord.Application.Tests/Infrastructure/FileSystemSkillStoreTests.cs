@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using SmartWord.Core.Models;
+using SmartWord.Core.Enums;
 using SmartWord.Infrastructure.Skills;
 using Xunit;
 
@@ -176,6 +177,53 @@ namespace SmartWord.Application.Tests.Infrastructure
             Assert.Throws<ArgumentException>(() => SkillPathGuard.CombineSkillRoot(root, "../outside"));
         }
 
+        [Fact]
+        public async Task GetSkillsAsync_ExternalSkill_DefaultsToDisabledScriptPolicy()
+        {
+            var roots = CreateTempRoots();
+            try
+            {
+                WriteSkill(roots.UserRoot, "external-review", "外部审阅", "external");
+                var store = new FileSystemSkillStore(roots.BuiltInRoot, roots.UserRoot);
+
+                var skill = (await store.GetSkillsAsync(CancellationToken.None))
+                    .Single(item => item.Name == "external-review");
+
+                Assert.Equal(SkillTrustLevel.External, skill.TrustLevel);
+                Assert.Equal(SkillScriptPolicy.Disabled, skill.ScriptPolicy);
+            }
+            finally
+            {
+                DeleteTempRoots(roots);
+            }
+        }
+
+        [Fact]
+        public async Task ResolveResourceAsync_ReferencesText_ReturnsSafeResolution()
+        {
+            var roots = CreateTempRoots();
+            try
+            {
+                WriteSkill(roots.UserRoot, "term-check", "术语检查");
+                var referencePath = Path.Combine(roots.UserRoot, "term-check", "references", "terms.md");
+                Directory.CreateDirectory(Path.GetDirectoryName(referencePath));
+                File.WriteAllText(referencePath, "# 术语表");
+                var store = new FileSystemSkillStore(roots.BuiltInRoot, roots.UserRoot);
+
+                var resolved = await store.ResolveResourceAsync(
+                    "term-check",
+                    "references/terms.md",
+                    CancellationToken.None);
+
+                Assert.True(resolved.IsText);
+                Assert.Equal("references/terms.md", resolved.Resource.RelativePath);
+            }
+            finally
+            {
+                DeleteTempRoots(roots);
+            }
+        }
+
         private static TempRoots CreateTempRoots()
         {
             var root = Path.Combine(Path.GetTempPath(), "smartword-skills-" + Guid.NewGuid().ToString("N"));
@@ -187,7 +235,11 @@ namespace SmartWord.Application.Tests.Infrastructure
             };
         }
 
-        private static void WriteSkill(string root, string name, string displayName)
+        private static void WriteSkill(
+            string root,
+            string name,
+            string displayName,
+            string trustLevel = "user")
         {
             var skillRoot = Path.Combine(root, name);
             Directory.CreateDirectory(skillRoot);
@@ -199,6 +251,7 @@ display_name: {displayName}
 description: 用于测试的 Skill。
 version: 1.0.0
 enabled: true
+trust_level: {trustLevel}
 ---
 
 # {displayName}

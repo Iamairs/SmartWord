@@ -80,6 +80,43 @@ namespace SmartWord.Application.Tests.OfficeIntegration
             }
         }
 
+        [Fact]
+        public async Task RunAsync_OutOfProcessHostMissing_ReturnsStructuredFailure()
+        {
+            var hostPath = Path.Combine(Path.GetTempPath(), "smartword-missing-host-" + Guid.NewGuid().ToString("N") + ".exe");
+            var runner = new OutOfProcessSkillScriptRunner(hostPath);
+
+            var result = await runner.RunAsync(new SkillScriptRunRequest(), CancellationToken.None);
+
+            Assert.False(result.Success);
+            Assert.Equal(-10, result.ExitCode);
+            Assert.Contains("SmartWord.SkillHost.exe", result.Stderr);
+        }
+
+        [Fact]
+        public async Task RunAsync_OutOfProcessCSharpScript_ReturnsHostResult()
+        {
+            var root = CreateTempRoot();
+            try
+            {
+                var scriptPath = Path.Combine(root, "scripts", "host-roundtrip.csx");
+                Directory.CreateDirectory(Path.GetDirectoryName(scriptPath));
+                File.WriteAllText(scriptPath, "WriteJsonResult(new { status = \"host-ok\" });");
+                var hostPath = Path.Combine(AppContext.BaseDirectory, "SmartWord.SkillHost.exe");
+                var runner = new OutOfProcessSkillScriptRunner(hostPath);
+
+                var result = await runner.RunAsync(CreateRequest(root, scriptPath, "csharp"), CancellationToken.None);
+
+                Assert.True(result.Success, result.Stderr);
+                Assert.Contains("host-ok", result.ResultJson);
+                Assert.Equal(string.Empty, result.WorkspacePath);
+            }
+            finally
+            {
+                DeleteTempRoot(root);
+            }
+        }
+
         private static SkillScriptRunRequest CreateRequest(string root, string scriptPath, string runtime)
         {
             return new SkillScriptRunRequest

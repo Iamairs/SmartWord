@@ -53,8 +53,8 @@ namespace SmartWord.Application.Tests.Skills
                 AgentMode.Ask,
                 CancellationToken.None);
 
-            Assert.Contains("Available skill index", context.PromptBlock);
-            Assert.Contains("只能通过 `skill_run_script` 工具执行", context.PromptBlock);
+            Assert.Contains("Relevant skill index", context.PromptBlock);
+            Assert.Contains("只能通过 `skill_run_script` 执行", context.PromptBlock);
             Assert.Contains("No active skill selected", context.PromptBlock);
             Assert.DoesNotContain("检查占位符和编号", context.PromptBlock);
         }
@@ -73,6 +73,30 @@ namespace SmartWord.Application.Tests.Skills
             Assert.DoesNotContain("disabled body", context.PromptBlock);
         }
 
+        [Fact]
+        public async Task ResolveAsync_HighConfidenceTrigger_AutoActivatesAndReturnsSnapshot()
+        {
+            var resolver = new SkillPromptResolver(new FakeSkillStore());
+
+            var context = await resolver.ResolveAsync(
+                "请做一次交付前检查",
+                Enumerable.Empty<string>(),
+                new AgentRunOptions
+                {
+                    Mode = AgentMode.Agent,
+                    ContextWindowTokens = 16000,
+                    SkillPromptBudgetTokens = 2000,
+                    SkillIndexBudgetTokens = 300
+                },
+                CancellationToken.None);
+
+            Assert.Contains(context.Recommendations, item =>
+                item.SkillName == "document-finalizer" && item.AutoActivated);
+            Assert.Contains(context.ActiveSnapshots, item => item.Name == "document-finalizer");
+            Assert.Contains("检查占位符和编号", context.PromptBlock);
+            Assert.True(context.LoadMetrics.EstimatedTokens <= context.LoadMetrics.BudgetTokens);
+        }
+
         private sealed class FakeSkillStore : ISkillStore
         {
             private readonly List<SkillDetail> _details = new List<SkillDetail>
@@ -85,6 +109,9 @@ namespace SmartWord.Application.Tests.Skills
                         Description = "交付前检查 Word 文档。",
                         DisplayName = "文档终检",
                         Enabled = true
+                        ,
+                        ActivationTriggers = new[] { "交付前检查", "文档终检" },
+                        ContentSha256 = "content-hash"
                     },
                     Content = "检查占位符和编号。",
                     Resources = new List<SkillResource>
@@ -146,6 +173,14 @@ namespace SmartWord.Application.Tests.Skills
                 throw new System.NotImplementedException();
             }
 
+            public Task SetSkillScriptPolicyAsync(
+                string name,
+                SkillScriptPolicy policy,
+                CancellationToken cancellationToken)
+            {
+                throw new System.NotImplementedException();
+            }
+
             public Task<IReadOnlyList<SkillScriptInfo>> GetSkillScriptsAsync(string name, CancellationToken cancellationToken)
             {
                 var detail = _details.FirstOrDefault(item => item.Definition.Name == name);
@@ -159,6 +194,14 @@ namespace SmartWord.Application.Tests.Skills
                 string skillName,
                 string scriptPath,
                 string runtime,
+                CancellationToken cancellationToken)
+            {
+                throw new System.NotImplementedException();
+            }
+
+            public Task<SkillResourceResolution> ResolveResourceAsync(
+                string skillName,
+                string relativePath,
                 CancellationToken cancellationToken)
             {
                 throw new System.NotImplementedException();

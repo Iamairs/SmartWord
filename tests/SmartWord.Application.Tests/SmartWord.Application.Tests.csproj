@@ -21,6 +21,7 @@
     <ProjectReference Include="..\..\src\SmartWord.Core\SmartWord.Core.csproj" />
     <ProjectReference Include="..\..\src\SmartWord.Infrastructure\SmartWord.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\SmartWord.OfficeIntegration\SmartWord.OfficeIntegration.csproj" />
+    <ProjectReference Include="..\..\src\SmartWord.SkillHost\SmartWord.SkillHost.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
@@ -29,4 +30,11 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
+
+  <Target Name="CopySkillHostForTests" AfterTargets="Build">
+    <ItemGroup>
+      <SkillHostTestOutput Include="$(MSBuildThisFileDirectory)..\..\src\SmartWord.SkillHost\bin\$(Configuration)\SmartWord.SkillHost.exe*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(SkillHostTestOutput)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
+  </Target>
 </Project>
