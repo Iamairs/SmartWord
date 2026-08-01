@@ -141,6 +141,39 @@ function normalizeRatio(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 && parsed < 1 ? parsed : fallback;
 }
 
+function normalizeSkillResource(resource) {
+  const source = resource || {};
+  return {
+    relativePath: String(source.relativePath ?? source.RelativePath ?? ''),
+    kind: String(source.kind ?? source.Kind ?? ''),
+    sizeBytes: Number(source.sizeBytes ?? source.SizeBytes ?? 0),
+    isText: Boolean(source.isText ?? source.IsText)
+  };
+}
+
+function normalizeSkillScript(script) {
+  const source = script || {};
+  return {
+    skillName: String(source.skillName ?? source.SkillName ?? ''),
+    relativePath: String(source.relativePath ?? source.RelativePath ?? ''),
+    runtime: String(source.runtime ?? source.Runtime ?? ''),
+    sizeBytes: Number(source.sizeBytes ?? source.SizeBytes ?? 0),
+    sha256: String(source.sha256 ?? source.Sha256 ?? ''),
+    isApproved: Boolean(source.isApproved ?? source.IsApproved)
+  };
+}
+
+function normalizeSkillDetail(detail) {
+  const source = detail || {};
+  return {
+    ...source,
+    skill: source.skill ?? source.Skill ?? null,
+    content: String(source.content ?? source.Content ?? ''),
+    resources: (source.resources ?? source.Resources ?? []).map(normalizeSkillResource),
+    scripts: (source.scripts ?? source.Scripts ?? []).map(normalizeSkillScript)
+  };
+}
+
 function createMockResponse(request, notify) {
   if (!VALID_MODES.has(request.manualMode)) {
     window.setTimeout(
@@ -742,7 +775,7 @@ export const hostBridge = {
         throw new Error(result.message || 'Skill 详情读取失败');
       }
 
-      return result;
+      return normalizeSkillDetail(result);
     }
 
     const skill = loadMockSkills().find((item) => item.name === name);
@@ -751,13 +784,13 @@ export const hostBridge = {
     }
 
     const { content, resources, scripts, ...summary } = skill;
-    return {
+    return normalizeSkillDetail({
       success: true,
       skill: summary,
       content,
       resources: resources || [],
       scripts: scripts || []
-    };
+    });
   },
 
   async selectSkillFolder() {
@@ -838,7 +871,7 @@ export const hostBridge = {
         throw new Error(result.message || 'Skill 创建失败');
       }
 
-      return result;
+      return normalizeSkillDetail(result);
     }
 
     const skills = loadMockSkills();
@@ -871,7 +904,13 @@ export const hostBridge = {
     skills.push(skill);
     saveMockSkills(skills);
     const { content, resources, ...summary } = skill;
-    return { success: true, skill: summary, content, resources, scripts: skill.scripts || [] };
+    return normalizeSkillDetail({
+      success: true,
+      skill: summary,
+      content,
+      resources,
+      scripts: skill.scripts || []
+    });
   },
 
   async saveSkill(name, content) {
@@ -891,7 +930,7 @@ export const hostBridge = {
         throw new Error(result.message || 'Skill 保存失败');
       }
 
-      return result;
+      return normalizeSkillDetail(result);
     }
 
     const skills = loadMockSkills();
@@ -906,7 +945,13 @@ export const hostBridge = {
     saveMockSkills(skills);
     const { resources, scripts, ...summaryWithContent } = skill;
     const { content: savedContent, ...summary } = summaryWithContent;
-    return { success: true, skill: summary, content: savedContent, resources: resources || [], scripts: scripts || [] };
+    return normalizeSkillDetail({
+      success: true,
+      skill: summary,
+      content: savedContent,
+      resources: resources || [],
+      scripts: scripts || []
+    });
   },
 
   async setSkillScriptPolicy(name, policy) {
