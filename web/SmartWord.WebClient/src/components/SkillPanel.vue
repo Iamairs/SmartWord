@@ -30,6 +30,125 @@
       <span>{{ skillsStore.items.length }} 个 Skill</span>
     </div>
 
+    <div class="skill-import">
+      <div class="skill-import__header">
+        <h3>导入 Skill</h3>
+        <span>外部脚本默认禁用</span>
+      </div>
+
+      <div class="skill-import__modes" role="tablist" aria-label="Skill 导入来源">
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="skillsStore.importMode === 'network'"
+          :class="{ 'is-active': skillsStore.importMode === 'network' }"
+          @click="skillsStore.importMode = 'network'"
+        >
+          网络
+        </button>
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="skillsStore.importMode === 'folder'"
+          :class="{ 'is-active': skillsStore.importMode === 'folder' }"
+          @click="skillsStore.importMode = 'folder'"
+        >
+          文件夹
+        </button>
+      </div>
+
+      <div v-if="skillsStore.importMode === 'network'" class="skill-import__source">
+        <input
+          v-model.trim="skillsStore.importUrl"
+          type="url"
+          autocomplete="off"
+          placeholder="https://github.com/owner/repo"
+        />
+        <button
+          class="ghost-button ghost-button--small"
+          type="button"
+          :disabled="skillsStore.isImporting || !skillsStore.importUrl"
+          @click="skillsStore.previewNetworkImport()"
+        >
+          预览
+        </button>
+      </div>
+
+      <div v-else class="skill-import__source skill-import__source--folders">
+        <div class="skill-import__folder-actions">
+          <button
+            class="ghost-button ghost-button--small"
+            type="button"
+            :disabled="skillsStore.isImporting"
+            @click="skillsStore.addImportFolder()"
+          >
+            添加文件夹
+          </button>
+          <button
+            class="ghost-button ghost-button--small"
+            type="button"
+            :disabled="skillsStore.isImporting || !skillsStore.importFolders.length"
+            @click="skillsStore.previewFolderImport()"
+          >
+            批量预览
+          </button>
+        </div>
+        <div v-if="skillsStore.importFolders.length" class="skill-import__folders">
+          <div v-for="folder in skillsStore.importFolders" :key="folder">
+            <span :title="folder">{{ folder }}</span>
+            <button type="button" title="移除此文件夹" @click="skillsStore.removeImportFolder(folder)">×</button>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="skillsStore.importPreview" class="skill-import__preview">
+        <div
+          v-for="item in skillsStore.importPreview.items"
+          :key="item.itemId"
+          class="skill-import__item"
+          :class="{ 'skill-import__item--invalid': !item.canInstall }"
+        >
+          <div class="skill-import__item-title">
+            <strong>{{ item.displayName || item.name || '无法识别' }}</strong>
+            <span>{{ item.canInstall ? '可安装' : '不可安装' }}</span>
+          </div>
+          <p class="skill-import__source-label" :title="item.source">{{ item.source }}</p>
+          <p v-if="item.name" class="skill-import__meta">
+            {{ item.name }}<template v-if="item.version"> · v{{ item.version }}</template>
+            · {{ item.fileCount }} 文件 · {{ formatBytes(item.totalBytes) }}
+          </p>
+          <p v-if="item.name" class="skill-import__meta">
+            资源 {{ item.resourceCount }} · 脚本 {{ item.scriptCount }} · {{ formatHash(item.contentSha256) }}
+          </p>
+          <p v-for="warning in item.warnings" :key="warning" class="skill-import__warning">{{ warning }}</p>
+          <p v-for="error in item.errors" :key="error" class="skill-import__error">{{ error }}</p>
+        </div>
+
+        <label v-if="installablePreviewItems.length" class="skill-import__confirm">
+          <input v-model="skillsStore.importRiskConfirmed" type="checkbox" />
+          <span>我已核对来源，并了解安装不代表脚本可信。</span>
+        </label>
+        <div class="skill-import__preview-actions">
+          <button
+            class="send-button"
+            type="button"
+            :disabled="skillsStore.isImporting || !installablePreviewItems.length || !skillsStore.importRiskConfirmed"
+            @click="skillsStore.installImportPreview()"
+          >
+            {{ skillsStore.isImporting ? '处理中...' : `安装 ${installablePreviewItems.length} 个` }}
+          </button>
+          <button
+            class="ghost-button"
+            type="button"
+            :disabled="skillsStore.isImporting"
+            @click="skillsStore.cancelImportPreview()"
+          >
+            取消
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div class="skill-list">
       <article
         v-for="skill in skillsStore.items"
@@ -191,6 +310,11 @@ defineEmits(['close']);
 
 const skillsStore = useSkillsStore();
 
+const installablePreviewItems = computed(() => {
+  const items = Array.isArray(skillsStore.importPreview?.items) ? skillsStore.importPreview.items : [];
+  return items.filter((item) => item.canInstall);
+});
+
 const matchingApprovals = computed(() => {
   const skillName = skillsStore.selectedSkill?.name || '';
   return skillsStore.approvals.filter((record) => {
@@ -202,6 +326,13 @@ const matchingApprovals = computed(() => {
 function formatHash(hash) {
   const value = String(hash || '');
   return value.length > 14 ? `${value.slice(0, 10)}...` : value;
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function trustLabel(skill) {
@@ -304,11 +435,164 @@ onMounted(() => {
 .skill-list,
 .skill-create,
 .skill-detail,
-.skill-telemetry {
+.skill-telemetry,
+.skill-import {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-top: 10px;
+}
+
+.skill-import {
+  padding: 10px 0;
+  border-top: 1px solid rgba(89, 118, 161, 0.16);
+  border-bottom: 1px solid rgba(89, 118, 161, 0.16);
+}
+
+.skill-import__header,
+.skill-import__item-title,
+.skill-import__folder-actions,
+.skill-import__preview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.skill-import__header h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.skill-import__header span,
+.skill-import__meta,
+.skill-import__source-label,
+.skill-import__warning,
+.skill-import__error {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.skill-import__header span,
+.skill-import__meta,
+.skill-import__source-label {
+  color: #60758f;
+}
+
+.skill-import__modes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 2px;
+  border-radius: 6px;
+  background: #edf2f7;
+}
+
+.skill-import__modes button {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  color: #60758f;
+  background: transparent;
+  cursor: pointer;
+}
+
+.skill-import__modes button.is-active {
+  color: #244464;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(24, 49, 79, 0.12);
+}
+
+.skill-import__source {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.skill-import__source input {
+  min-width: 0;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid rgba(89, 118, 161, 0.26);
+  border-radius: 6px;
+  font: inherit;
+}
+
+.skill-import__source--folders,
+.skill-import__preview,
+.skill-import__folders {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.skill-import__folders > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: #60758f;
+}
+
+.skill-import__folders span,
+.skill-import__source-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-import__folders button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  color: #60758f;
+  background: transparent;
+  cursor: pointer;
+}
+
+.skill-import__item {
+  padding-top: 7px;
+  border-top: 1px solid rgba(89, 118, 161, 0.16);
+}
+
+.skill-import__item-title strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
+.skill-import__item-title span {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: #2d6a4f;
+}
+
+.skill-import__item--invalid .skill-import__item-title span,
+.skill-import__error {
+  color: #b42318;
+}
+
+.skill-import__warning {
+  color: #92400e;
+}
+
+.skill-import__confirm {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 6px;
+  font-size: 10px;
+  line-height: 1.45;
+  color: #445b73;
+}
+
+.skill-import__confirm input {
+  width: 14px;
+  height: 14px;
+  margin: 1px 0 0;
 }
 
 .skill-telemetry {

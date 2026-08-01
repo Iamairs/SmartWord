@@ -6,6 +6,7 @@ export const useSkillsStore = defineStore('skills', {
     isPanelOpen: false,
     isLoading: false,
     isSaving: false,
+    isImporting: false,
     items: [],
     selectedSkillNames: [],
     autoActiveSkillNames: [],
@@ -18,6 +19,11 @@ export const useSkillsStore = defineStore('skills', {
     scripts: [],
     approvals: [],
     telemetrySummary: null,
+    importUrl: '',
+    importFolders: [],
+    importPreview: null,
+    importMode: 'network',
+    importRiskConfirmed: false,
     errorMessage: '',
     successMessage: '',
     createForm: {
@@ -236,6 +242,104 @@ export const useSkillsStore = defineStore('skills', {
         this.errorMessage = error.message || 'Skill 创建失败';
       } finally {
         this.isSaving = false;
+      }
+    },
+
+    async addImportFolder() {
+      this.errorMessage = '';
+      try {
+        const result = await hostBridge.selectSkillFolder();
+        if (!result.canceled && result.path && !this.importFolders.includes(result.path)) {
+          this.importFolders = [...this.importFolders, result.path];
+        }
+      } catch (error) {
+        this.errorMessage = error.message || '选择 Skill 文件夹失败';
+      }
+    },
+
+    removeImportFolder(folderPath) {
+      this.importFolders = this.importFolders.filter((item) => item !== folderPath);
+    },
+
+    async previewNetworkImport() {
+      this.isImporting = true;
+      this.errorMessage = '';
+      this.successMessage = '';
+      try {
+        this.importPreview = await hostBridge.previewNetworkSkill(this.importUrl.trim());
+        this.importRiskConfirmed = false;
+      } catch (error) {
+        this.importPreview = null;
+        this.errorMessage = error.message || '网络 Skill 预览失败';
+      } finally {
+        this.isImporting = false;
+      }
+    },
+
+    async previewFolderImport() {
+      if (!this.importFolders.length) {
+        this.errorMessage = '请先添加至少一个 Skill 文件夹。';
+        return;
+      }
+
+      this.isImporting = true;
+      this.errorMessage = '';
+      this.successMessage = '';
+      try {
+        this.importPreview = await hostBridge.previewSkillFolders(this.importFolders);
+        this.importRiskConfirmed = false;
+      } catch (error) {
+        this.importPreview = null;
+        this.errorMessage = error.message || '本地 Skill 文件夹预览失败';
+      } finally {
+        this.isImporting = false;
+      }
+    },
+
+    async installImportPreview() {
+      const preview = this.importPreview;
+      const items = Array.isArray(preview?.items) ? preview.items.filter((item) => item.canInstall) : [];
+      if (!preview?.sessionId || !items.length) {
+        this.errorMessage = '没有可安装的 Skill 预览项。';
+        return;
+      }
+      if (!this.importRiskConfirmed) {
+        this.errorMessage = '请先确认已核对外部来源和风险提示。';
+        return;
+      }
+
+      this.isImporting = true;
+      this.errorMessage = '';
+      this.successMessage = '';
+      try {
+        const result = await hostBridge.installSkillPackages({
+          sessionId: preview.sessionId,
+          itemIds: items.map((item) => item.itemId)
+        });
+        const installed = (result.items || []).filter((item) => item.success).length;
+        const failed = (result.items || []).length - installed;
+        await this.loadSkills();
+        this.importPreview = null;
+        this.importFolders = [];
+        this.importUrl = '';
+        this.importRiskConfirmed = false;
+        this.successMessage = failed ? `已安装 ${installed} 个，${failed} 个失败。` : `已安装 ${installed} 个 Skill。`;
+      } catch (error) {
+        this.errorMessage = error.message || 'Skill 安装失败';
+      } finally {
+        this.isImporting = false;
+      }
+    },
+
+    async cancelImportPreview() {
+      const sessionId = this.importPreview?.sessionId;
+      try {
+        await hostBridge.cancelSkillImportPreview(sessionId);
+      } catch (error) {
+        this.errorMessage = error.message || '取消 Skill 导入预览失败';
+      } finally {
+        this.importPreview = null;
+        this.importRiskConfirmed = false;
       }
     },
 

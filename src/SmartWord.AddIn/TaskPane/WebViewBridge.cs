@@ -467,6 +467,113 @@ namespace SmartWord.AddIn.TaskPane
             }
         }
 
+        public string SelectSkillFolderJson()
+        {
+            try
+            {
+                var selectedPath = SelectSkillFolderOnOwnerThread();
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    canceled = string.IsNullOrWhiteSpace(selectedPath),
+                    path = selectedPath ?? string.Empty
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "选择 Skill 文件夹失败。");
+                return JsonConvert.SerializeObject(new { success = false, message = ex.Message });
+            }
+        }
+
+        public string PreviewNetworkSkillJson(string sourceUrl)
+        {
+            try
+            {
+                var installer = ServiceLocator.GetRequiredService<ISkillPackageInstaller>();
+                var preview = installer.PreviewNetworkAsync(sourceUrl ?? string.Empty, CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    preview = ToSkillImportPreviewPayload(preview)
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "网络 Skill 预览失败。SourceUrl={SourceUrl}", sourceUrl);
+                return JsonConvert.SerializeObject(new { success = false, message = ex.Message });
+            }
+        }
+
+        public string PreviewSkillFoldersJson(string folderPathsJson)
+        {
+            try
+            {
+                var folderPaths = JsonConvert.DeserializeObject<List<string>>(folderPathsJson ?? "[]")
+                    ?? new List<string>();
+                var installer = ServiceLocator.GetRequiredService<ISkillPackageInstaller>();
+                var preview = installer.PreviewFoldersAsync(folderPaths, CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    preview = ToSkillImportPreviewPayload(preview)
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "本地 Skill 文件夹预览失败。");
+                return JsonConvert.SerializeObject(new { success = false, message = ex.Message });
+            }
+        }
+
+        public string InstallSkillPackagesJson(string requestJson)
+        {
+            try
+            {
+                var request = JsonConvert.DeserializeObject<SkillImportInstallRequest>(requestJson ?? "{}")
+                    ?? new SkillImportInstallRequest();
+                var installer = ServiceLocator.GetRequiredService<ISkillPackageInstaller>();
+                var result = installer.InstallAsync(request, CancellationToken.None).GetAwaiter().GetResult();
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    items = result.Items.Select(item => new
+                    {
+                        itemId = item.ItemId,
+                        name = item.Name,
+                        success = item.Success,
+                        message = item.Message
+                    }).ToArray()
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "安装 Skill 包失败。");
+                return JsonConvert.SerializeObject(new { success = false, message = ex.Message });
+            }
+        }
+
+        public string CancelSkillImportPreviewJson(string sessionId)
+        {
+            try
+            {
+                var installer = ServiceLocator.GetRequiredService<ISkillPackageInstaller>();
+                installer.CancelPreviewAsync(sessionId ?? string.Empty, CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+                return JsonConvert.SerializeObject(new { success = true });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "取消 Skill 导入预览失败。SessionId={SessionId}", sessionId);
+                return JsonConvert.SerializeObject(new { success = false, message = ex.Message });
+            }
+        }
+
         public string SaveSkillJson(string name, string content)
         {
             return SaveSkillWithVersionJson(name, content, string.Empty);
@@ -1195,6 +1302,55 @@ namespace SmartWord.AddIn.TaskPane
                 activationExcludedTriggers = skill.ActivationExcludedTriggers,
                 supportedModes = skill.SupportedModes,
                 updatedAtUtc = skill.UpdatedAtUtc
+            };
+        }
+
+        private string SelectSkillFolderOnOwnerThread()
+        {
+            if (_ownerControl != null && _ownerControl.InvokeRequired)
+            {
+                return (string)_ownerControl.Invoke(new Func<string>(SelectSkillFolderOnOwnerThread));
+            }
+
+            using (var dialog = new FolderBrowserDialog
+            {
+                Description = "选择直接包含 SKILL.md 的 Skill 文件夹",
+                ShowNewFolderButton = false,
+                RootFolder = Environment.SpecialFolder.MyComputer
+            })
+            {
+                var owner = _ownerControl == null ? null : _ownerControl.FindForm();
+                return dialog.ShowDialog(owner) == DialogResult.OK
+                    ? dialog.SelectedPath
+                    : string.Empty;
+            }
+        }
+
+        private static object ToSkillImportPreviewPayload(SkillImportPreview preview)
+        {
+            return new
+            {
+                sessionId = preview.SessionId,
+                expiresAtUtc = preview.ExpiresAtUtc,
+                items = preview.Items.Select(item => new
+                {
+                    itemId = item.ItemId,
+                    sourceKind = item.SourceKind,
+                    source = item.Source,
+                    name = item.Name,
+                    displayName = item.DisplayName,
+                    description = item.Description,
+                    version = item.Version,
+                    contentSha256 = item.ContentSha256,
+                    totalBytes = item.TotalBytes,
+                    fileCount = item.FileCount,
+                    resourceCount = item.ResourceCount,
+                    scriptCount = item.ScriptCount,
+                    requiredTools = item.RequiredTools,
+                    warnings = item.Warnings,
+                    errors = item.Errors,
+                    canInstall = item.CanInstall
+                }).ToArray()
             };
         }
 
