@@ -22,6 +22,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartWord.Infrastructure", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartWord.OfficeIntegration", "src\SmartWord.OfficeIntegration\SmartWord.OfficeIntegration.csproj", "{A7E85FAF-4F79-4660-A5A2-BE8C3B2659E7}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartWord.SkillHost", "src\SmartWord.SkillHost\SmartWord.SkillHost.csproj", "{2D036F2D-EF4D-4F06-AF62-16B1D5F9D54D}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartWord.Application.Tests", "tests\SmartWord.Application.Tests\SmartWord.Application.Tests.csproj", "{6EE80CE9-B8BF-4E09-9DB7-D2FB5C6D9155}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "web", "web", "{92C42E29-8937-4E4C-98F8-DB98E913809E}"
@@ -108,6 +110,18 @@ Global
 		{A7E85FAF-4F79-4660-A5A2-BE8C3B2659E7}.Release|x64.Build.0 = Release|Any CPU
 		{A7E85FAF-4F79-4660-A5A2-BE8C3B2659E7}.Release|x86.ActiveCfg = Release|Any CPU
 		{A7E85FAF-4F79-4660-A5A2-BE8C3B2659E7}.Release|x86.Build.0 = Release|Any CPU
+		{2D036F2D-EF4D-4F06-AF62-16B1D5F9D54D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2D036F2D-EF4D-4F06-AF62-16B1D5F9D54D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2D036F2D-EF4D-4F06-AF62-16B1D5F9D54D}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{2D036F2D-EF4D-4F06-AF62-16B1D5F9D54D}.Debug|x64.Build.0 = Debug|Any CPU
+		{2D036F2D-EF4D-4F06-AF62-16B1D5F9D54D}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{2D036F2D-EF4D-4F06-AF62-16B1D5F9D54D}.Debug|x86.Build.0 = Debug|Any CPU
+		{2D036F2D-EF4D-4F06-AF62-16B1D5F9D54D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2D036F2D-EF4D-4F06-AF62-16B1D5F9D54D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2D036F2D-EF4D-4F06-AF62-16B1D5F9D54D}.Release|x64.ActiveCfg = Release|Any CPU
+		{2D036F2D-EF4D-4F06-AF62-16B1D5F9D54D}.Release|x64.Build.0 = Release|Any CPU
+		{2D036F2D-EF4D-4F06-AF62-16B1D5F9D54D}.Release|x86.ActiveCfg = Release|Any CPU
+		{2D036F2D-EF4D-4F06-AF62-16B1D5F9D54D}.Release|x86.Build.0 = Release|Any CPU
 		{6EE80CE9-B8BF-4E09-9DB7-D2FB5C6D9155}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{6EE80CE9-B8BF-4E09-9DB7-D2FB5C6D9155}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{6EE80CE9-B8BF-4E09-9DB7-D2FB5C6D9155}.Debug|x64.ActiveCfg = Debug|Any CPU

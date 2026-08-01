@@ -40,7 +40,8 @@
         <button class="skill-card__main" type="button" @click="skillsStore.loadSkillDetail(skill.name)">
           <span class="skill-card__name">{{ skill.displayName || skill.name }}</span>
           <span class="skill-card__meta">
-            {{ skill.isBuiltIn ? '内置' : '用户' }} · {{ skill.enabled ? '已启用' : '已禁用' }}
+            {{ trustLabel(skill) }} · {{ skill.enabled ? '已启用' : '已禁用' }}
+            <template v-if="skill.scriptPolicy === 'disabled'"> · 脚本禁用</template>
           </span>
           <span class="skill-card__desc">{{ skill.description }}</span>
         </button>
@@ -74,11 +75,32 @@
       </button>
     </form>
 
+    <div class="skill-telemetry">
+      <div class="skill-telemetry__header">
+        <h3>本地观测</h3>
+        <button class="ghost-button ghost-button--tiny" type="button" @click="skillsStore.loadTelemetrySummary()">刷新</button>
+      </div>
+      <template v-if="skillsStore.telemetrySummary">
+        <p>仅保存在本机，不上传文档正文。</p>
+        <div class="skill-telemetry__stats">
+          <span>Skill 解析 {{ skillsStore.telemetrySummary.skillContextResolvedCount || 0 }}</span>
+          <span>完成 {{ skillsStore.telemetrySummary.completedTaskCount || 0 }}</span>
+          <span>失败 {{ skillsStore.telemetrySummary.failedTaskCount || 0 }}</span>
+          <span>工具失败 {{ skillsStore.telemetrySummary.toolFailureCount || 0 }}</span>
+        </div>
+      </template>
+      <p v-else>本地观测已启用，尚无可汇总记录。</p>
+    </div>
+
     <div v-if="skillsStore.selectedSkill" class="skill-detail">
       <div class="skill-detail__header">
         <h3>{{ skillsStore.selectedSkill.displayName || skillsStore.selectedSkill.name }}</h3>
-        <span>{{ skillsStore.selectedSkill.isBuiltIn ? '只读内置 Skill' : '可编辑用户 Skill' }}</span>
+        <span>{{ trustLabel(skillsStore.selectedSkill) }} · {{ skillsStore.selectedSkill.isBuiltIn ? '只读' : '可编辑' }}</span>
       </div>
+
+      <p v-if="skillsStore.selectedSkill.trustLevel === 'external'" class="skill-security-note">
+        外部 Skill 的脚本默认禁用。Markdown 工作流仍可查看和使用。
+      </p>
 
       <textarea
         v-model="skillsStore.selectedContent"
@@ -100,6 +122,24 @@
           {{ script.runtime }} / {{ script.relativePath }} / {{ formatHash(script.sha256) }}
           · {{ skillsStore.isScriptApproved(script) ? '已授权' : '未授权' }}
         </span>
+      </div>
+
+      <div v-if="skillsStore.scripts.length" class="skill-script-policy">
+        <div>
+          <strong>脚本执行</strong>
+          <p>使用独立进程隔离，但不等同于完整的操作系统沙箱；首次执行仍需授权。</p>
+        </div>
+        <button
+          class="ghost-button ghost-button--small"
+          type="button"
+          :disabled="skillsStore.isSaving"
+          @click="skillsStore.setScriptPolicy(
+            skillsStore.selectedSkill.name,
+            skillsStore.selectedSkill.scriptPolicy === 'disabled' ? 'prompt' : 'disabled'
+          )"
+        >
+          {{ skillsStore.selectedSkill.scriptPolicy === 'disabled' ? '启用脚本' : '禁用脚本' }}
+        </button>
       </div>
 
       <div v-if="matchingApprovals.length" class="skill-resources">
@@ -164,6 +204,13 @@ function formatHash(hash) {
   return value.length > 14 ? `${value.slice(0, 10)}...` : value;
 }
 
+function trustLabel(skill) {
+  const trustLevel = String(skill?.trustLevel || '').toLowerCase();
+  if (trustLevel === 'external') return '外部';
+  if (trustLevel === 'built_in' || skill?.isBuiltIn) return '内置';
+  return '本地';
+}
+
 function approvalKey(record) {
   const key = record.key || record.Key || {};
   return [
@@ -186,6 +233,7 @@ onMounted(() => {
   if (!skillsStore.items.length) {
     skillsStore.loadSkills();
   }
+  skillsStore.loadTelemetrySummary();
 });
 </script>
 
@@ -255,11 +303,64 @@ onMounted(() => {
 
 .skill-list,
 .skill-create,
-.skill-detail {
+.skill-detail,
+.skill-telemetry {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-top: 10px;
+}
+
+.skill-telemetry {
+  padding-top: 10px;
+  border-top: 1px solid rgba(89, 118, 161, 0.16);
+}
+
+.skill-telemetry__header,
+.skill-script-policy {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.skill-telemetry h3,
+.skill-telemetry p,
+.skill-script-policy p,
+.skill-security-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.skill-telemetry__stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 8px;
+  margin-top: 6px;
+  color: #60758f;
+  font-size: 10px;
+}
+
+.skill-security-note {
+  padding: 7px 8px;
+  border-left: 3px solid #b45309;
+  background: #fff7ed;
+  color: #92400e;
+}
+
+.skill-script-policy {
+  padding: 8px 0;
+  border-top: 1px solid rgba(89, 118, 161, 0.16);
+  border-bottom: 1px solid rgba(89, 118, 161, 0.16);
+}
+
+.skill-script-policy strong {
+  font-size: 11px;
+}
+
+.skill-script-policy p {
+  color: #60758f;
 }
 
 .skill-card {

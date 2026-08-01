@@ -17,6 +17,7 @@ using SmartWord.Core.Interfaces;
 using SmartWord.Core.Models;
 using SmartWord.Infrastructure.Configuration;
 using SmartWord.Infrastructure.LlmClients;
+using SmartWord.Infrastructure.Telemetry;
 using SmartWord.OfficeIntegration.WordWrappers;
 
 namespace SmartWord.AddIn.TaskPane
@@ -216,6 +217,7 @@ namespace SmartWord.AddIn.TaskPane
                         ModelRoutingMessage = modelRoute.RoutingMessage ?? string.Empty,
                         CustomSystemInstructions = customInstructions ?? string.Empty,
                         SelectedSkillNames = ParseSelectedSkillNames(request["selectedSkillNames"]),
+                        SuppressedSkillNames = ParseSelectedSkillNames(request["suppressedSkillNames"]),
                         StartupTodoBoardDecision = hasStartupTodoBoardDecision
                             ? startupTodoBoardDecision
                             : (TodoBoardRecoveryDecision?)null,
@@ -467,6 +469,11 @@ namespace SmartWord.AddIn.TaskPane
 
         public string SaveSkillJson(string name, string content)
         {
+            return SaveSkillWithVersionJson(name, content, string.Empty);
+        }
+
+        public string SaveSkillWithVersionJson(string name, string content, string expectedContentSha256)
+        {
             try
             {
                 var store = ServiceLocator.GetRequiredService<ISkillStore>();
@@ -474,7 +481,8 @@ namespace SmartWord.AddIn.TaskPane
                     new SaveSkillRequest
                     {
                         Name = name ?? string.Empty,
-                        Content = content ?? string.Empty
+                        Content = content ?? string.Empty,
+                        ExpectedContentSha256 = expectedContentSha256 ?? string.Empty
                     },
                     CancellationToken.None).GetAwaiter().GetResult();
                 return JsonConvert.SerializeObject(new
@@ -536,6 +544,55 @@ namespace SmartWord.AddIn.TaskPane
             catch (Exception ex)
             {
                 Log.Warning(ex, "设置 Skill 启停失败。Name={Name}", name);
+                return JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+        }
+
+        public string SetSkillScriptPolicyJson(string name, string policy)
+        {
+            try
+            {
+                if (!Enum.TryParse(policy ?? string.Empty, true, out SkillScriptPolicy parsedPolicy))
+                {
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = false,
+                        message = "无效的 Skill 脚本策略。"
+                    });
+                }
+
+                var store = ServiceLocator.GetRequiredService<ISkillStore>();
+                store.SetSkillScriptPolicyAsync(name ?? string.Empty, parsedPolicy, CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+                return JsonConvert.SerializeObject(new { success = true });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "设置 Skill 脚本策略失败。Name={Name}", name);
+                return JsonConvert.SerializeObject(new { success = false, message = ex.Message });
+            }
+        }
+
+        public string GetSkillTelemetrySummaryJson()
+        {
+            try
+            {
+                var reader = ServiceLocator.GetRequiredService<LocalSkillTelemetryReader>();
+                var summary = reader.ReadSummary();
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    summary
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "读取本地 Skill 观测摘要失败。");
                 return JsonConvert.SerializeObject(new
                 {
                     success = false,
@@ -1113,7 +1170,10 @@ namespace SmartWord.AddIn.TaskPane
                 lastErrorSummary = agentEvent.LastErrorSummary,
                 hasActivePlan = agentEvent.HasActivePlan,
                 canRecoverExisting = agentEvent.CanRecoverExisting,
-                todoBoardUpdateKind = agentEvent.TodoBoardUpdateKind
+                todoBoardUpdateKind = agentEvent.TodoBoardUpdateKind,
+                skillRecommendations = agentEvent.SkillRecommendations,
+                activeSkillNames = agentEvent.ActiveSkillNames,
+                skillPromptTokens = agentEvent.SkillPromptTokens
             };
         }
 
@@ -1127,6 +1187,13 @@ namespace SmartWord.AddIn.TaskPane
                 version = skill.Version,
                 enabled = skill.Enabled,
                 isBuiltIn = skill.IsBuiltIn,
+                trustLevel = skill.TrustLevel.ToString().ToLowerInvariant(),
+                scriptPolicy = skill.ScriptPolicy.ToString().ToLowerInvariant(),
+                source = skill.Source,
+                contentSha256 = skill.ContentSha256,
+                activationTriggers = skill.ActivationTriggers,
+                activationExcludedTriggers = skill.ActivationExcludedTriggers,
+                supportedModes = skill.SupportedModes,
                 updatedAtUtc = skill.UpdatedAtUtc
             };
         }
@@ -1349,6 +1416,8 @@ namespace SmartWord.AddIn.TaskPane
                     return "todo_board_recovery_required";
                 case AgentEventType.TodoBoardPaused:
                     return "todo_board_paused";
+                case AgentEventType.SkillRecommendation:
+                    return "skill_recommendation";
                 case AgentEventType.Error:
                 default:
                     return "error";

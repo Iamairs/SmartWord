@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
+using SmartWord.Core.Enums;
 using SmartWord.Core.Interfaces;
 using SmartWord.Core.Models;
 using SmartWord.Infrastructure.Persistence;
@@ -21,9 +22,11 @@ namespace SmartWord.Infrastructure.Skills
         private const int MaxSkillMarkdownBytes = 64 * 1024;
         private const string SkillFileName = "SKILL.md";
         private const string StateFileName = "skills-state.json";
+        private const int MaxHistoryVersions = 5;
 
         private readonly string _builtInRoot;
         private readonly string _userRoot;
+        private readonly object _writeSync = new object();
 
         public FileSystemSkillStore()
             : this(
@@ -107,7 +110,7 @@ namespace SmartWord.Infrastructure.Skills
                     ? BuildSkillTemplate(name, request.DisplayName, request.Description)
                     : NormalizeSkillContent(name, request.Content);
 
-                File.WriteAllText(Path.Combine(skillRoot, SkillFileName), content);
+                WriteTextAtomically(Path.Combine(skillRoot, SkillFileName), content);
                 return ReadDetail(ReadDefinition(skillRoot, false, LoadState()), cancellationToken);
             }, cancellationToken);
         }
@@ -131,7 +134,24 @@ namespace SmartWord.Infrastructure.Skills
                 }
 
                 var content = NormalizeSkillContent(name, request.Content);
-                File.WriteAllText(Path.Combine(skillRoot, SkillFileName), content);
+                var skillFilePath = Path.Combine(skillRoot, SkillFileName);
+                lock (_writeSync)
+                {
+                    if (!string.IsNullOrWhiteSpace(request.ExpectedContentSha256)
+                        && File.Exists(skillFilePath)
+                        && !string.Equals(
+                            ComputeSha256(skillFilePath),
+                            request.ExpectedContentSha256,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidOperationException("Skill 已在其他位置更新，请刷新后再保存。");
+                    }
+
+                    PreserveHistoryVersion(skillRoot, skillFilePath);
+                    WriteTextAtomically(skillFilePath, content);
+                    TrimHistoryVersions(skillRoot);
+                }
+
                 return ReadDetail(ReadDefinition(skillRoot, false, LoadState()), cancellationToken);
             }, cancellationToken);
         }
@@ -177,6 +197,26 @@ namespace SmartWord.Infrastructure.Skills
             }, cancellationToken);
         }
 
+        public Task SetSkillScriptPolicyAsync(
+            string name,
+            SkillScriptPolicy policy,
+            CancellationToken cancellationToken)
+        {
+            return Task.Run(async () =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var definition = await FindSkillAsync(name, cancellationToken).ConfigureAwait(false);
+                if (definition == null)
+                {
+                    throw new InvalidOperationException("未找到指定 Skill。");
+                }
+
+                var states = LoadState();
+                states.ScriptPolicies[definition.Name] = policy.ToString();
+                SaveState(states);
+            }, cancellationToken);
+        }
+
         public async Task<IReadOnlyList<SkillScriptInfo>> GetSkillScriptsAsync(
             string name,
             CancellationToken cancellationToken)
@@ -205,8 +245,30 @@ namespace SmartWord.Infrastructure.Skills
                 throw new InvalidOperationException("未找到可用的 Skill。");
             }
 
+            if (definition.ScriptPolicy == SkillScriptPolicy.Disabled)
+            {
+                throw new InvalidOperationException("此 Skill 的脚本默认禁用，请先在 Skill 面板中显式启用。");
+            }
+
             return await Task.Run(
                     () => ResolveScript(definition, scriptPath, runtime, cancellationToken),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        public async Task<SkillResourceResolution> ResolveResourceAsync(
+            string skillName,
+            string relativePath,
+            CancellationToken cancellationToken)
+        {
+            var definition = await FindSkillAsync(skillName, cancellationToken).ConfigureAwait(false);
+            if (definition == null || !definition.Enabled)
+            {
+                throw new InvalidOperationException("未找到可用的 Skill。");
+            }
+
+            return await Task.Run(
+                    () => ResolveResource(definition, relativePath, cancellationToken),
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -280,12 +342,26 @@ namespace SmartWord.Infrastructure.Skills
             }
 
             definition.IsBuiltIn = isBuiltIn;
+            definition.TrustLevel = isBuiltIn ? SkillTrustLevel.BuiltIn : definition.TrustLevel;
+            definition.Source = isBuiltIn
+                ? "built_in"
+                : string.IsNullOrWhiteSpace(definition.Source) ? "local" : definition.Source;
+            definition.ContentSha256 = ComputeSha256(skillFilePath);
             definition.RootPath = skillRoot;
             definition.SkillFilePath = skillFilePath;
             definition.UpdatedAtUtc = File.GetLastWriteTimeUtc(skillFilePath);
             if (states.Enabled.TryGetValue(definition.Name, out var enabled))
             {
                 definition.Enabled = enabled;
+            }
+
+            definition.ScriptPolicy = definition.TrustLevel == SkillTrustLevel.External
+                ? SkillScriptPolicy.Disabled
+                : SkillScriptPolicy.Prompt;
+            if (states.ScriptPolicies.TryGetValue(definition.Name, out var scriptPolicy)
+                && Enum.TryParse(scriptPolicy, true, out SkillScriptPolicy parsedPolicy))
+            {
+                definition.ScriptPolicy = parsedPolicy;
             }
 
             return definition;
@@ -339,6 +415,8 @@ namespace SmartWord.Infrastructure.Skills
                         RelativePath = relativePath.Replace(Path.DirectorySeparatorChar, '/'),
                         Kind = folder,
                         SizeBytes = new FileInfo(filePath).Length
+                        ,
+                        IsText = IsTextResource(filePath)
                     });
                 }
             }
@@ -430,6 +508,48 @@ namespace SmartWord.Infrastructure.Skills
                     Runtime = normalizedRuntime,
                     SizeBytes = fileInfo.Length,
                     Sha256 = ComputeSha256(absolutePath)
+                }
+            };
+        }
+
+        private static SkillResourceResolution ResolveResource(
+            SkillDefinition definition,
+            string relativePath,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var normalized = (relativePath ?? string.Empty).Trim().Replace('\\', '/').TrimStart('/');
+            if (Path.IsPathRooted(normalized)
+                || normalized.Contains("../")
+                || normalized == ".."
+                || (!normalized.StartsWith("references/", StringComparison.OrdinalIgnoreCase)
+                    && !normalized.StartsWith("assets/", StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException("资源路径必须位于 references/ 或 assets/ 目录内。");
+            }
+
+            var absolutePath = Path.GetFullPath(Path.Combine(definition.RootPath, normalized));
+            SkillPathGuard.EnsureInsideRoot(definition.RootPath, absolutePath);
+            if (!File.Exists(absolutePath))
+            {
+                throw new FileNotFoundException("未找到指定 Skill 资源。", normalized);
+            }
+
+            EnsureNoReparsePoint(definition.RootPath, absolutePath);
+            var fileInfo = new FileInfo(absolutePath);
+            return new SkillResourceResolution
+            {
+                Skill = definition,
+                AbsolutePath = absolutePath,
+                IsText = IsTextResource(absolutePath),
+                Resource = new SkillResource
+                {
+                    RelativePath = normalized,
+                    Kind = normalized.StartsWith("references/", StringComparison.OrdinalIgnoreCase)
+                        ? "references"
+                        : "assets",
+                    SizeBytes = fileInfo.Length,
+                    IsText = IsTextResource(absolutePath)
                 }
             };
         }
@@ -531,9 +651,12 @@ namespace SmartWord.Infrastructure.Skills
 $@"---
 name: {name}
 display_name: {safeDisplayName}
-description: {safeDescription}
-version: 1.0.0
-enabled: true
+ description: {safeDescription}
+schema_version: 1
+ version: 1.0.0
+ enabled: true
+trust_level: user
+source: local
 ---
 
 # {safeDisplayName}
@@ -581,10 +704,9 @@ enabled: true
         private void SaveState(SkillState state)
         {
             Directory.CreateDirectory(_userRoot);
-            File.WriteAllText(
+            WriteTextAtomically(
                 GetStatePath(),
-                JsonConvert.SerializeObject(state ?? new SkillState(), Formatting.Indented),
-                Encoding.UTF8);
+                JsonConvert.SerializeObject(state ?? new SkillState(), Formatting.Indented));
         }
 
         private string GetStatePath()
@@ -596,6 +718,109 @@ enabled: true
         {
             public Dictionary<string, bool> Enabled { get; set; } =
                 new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+
+            public Dictionary<string, string> ScriptPolicies { get; set; } =
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static bool IsTextResource(string path)
+        {
+            switch ((Path.GetExtension(path) ?? string.Empty).ToLowerInvariant())
+            {
+                case ".md":
+                case ".txt":
+                case ".json":
+                case ".yaml":
+                case ".yml":
+                case ".csv":
+                case ".tsv":
+                case ".xml":
+                case ".html":
+                case ".css":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static void EnsureNoReparsePoint(string root, string path)
+        {
+            var current = new FileInfo(path) as FileSystemInfo;
+            while (current != null)
+            {
+                if ((current.Attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    throw new InvalidOperationException("Skill 资源路径包含符号链接或 Junction，已拒绝访问。");
+                }
+
+                if (string.Equals(current.FullName, Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase))
+                {
+                    break;
+                }
+
+                current = current is FileInfo file ? file.Directory : ((DirectoryInfo)current).Parent;
+            }
+        }
+
+        private static void WriteTextAtomically(string path, string content)
+        {
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            var tempPath = path + ".tmp-" + Guid.NewGuid().ToString("N");
+            File.WriteAllText(tempPath, content ?? string.Empty, new UTF8Encoding(false));
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Replace(tempPath, path, null);
+                }
+                else
+                {
+                    File.Move(tempPath, path);
+                }
+            }
+            finally
+            {
+                if (File.Exists(tempPath))
+                {
+                    File.Delete(tempPath);
+                }
+            }
+        }
+
+        private static void PreserveHistoryVersion(string skillRoot, string skillFilePath)
+        {
+            if (!File.Exists(skillFilePath))
+            {
+                return;
+            }
+
+            var historyRoot = Path.Combine(skillRoot, ".history");
+            Directory.CreateDirectory(historyRoot);
+            var historyPath = Path.Combine(
+                historyRoot,
+                DateTime.UtcNow.ToString("yyyyMMddHHmmssfff") + "-" + ComputeSha256(skillFilePath) + ".md");
+            File.Copy(skillFilePath, historyPath, false);
+        }
+
+        private static void TrimHistoryVersions(string skillRoot)
+        {
+            var historyRoot = Path.Combine(skillRoot, ".history");
+            if (!Directory.Exists(historyRoot))
+            {
+                return;
+            }
+
+            foreach (var path in Directory.GetFiles(historyRoot, "*.md")
+                .OrderByDescending(File.GetLastWriteTimeUtc)
+                .Skip(MaxHistoryVersions))
+            {
+                File.Delete(path);
+            }
         }
     }
 }

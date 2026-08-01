@@ -150,15 +150,42 @@
             >{{ isCancelling ? '取消中' : '停止' }}</button>
             <button v-else class="composer-action composer-action--send" type="submit" :disabled="isSubmitDisabled">发送</button>
           </div>
+          <div v-if="skillsStore.activeSkillTags.length || skillsStore.recommendedItems.length" class="active-skill-strip">
+            <span
+              v-for="tag in skillsStore.activeSkillTags"
+              :key="`active-${tag.name}`"
+              class="active-skill-tag"
+              :class="{ 'active-skill-tag--auto': tag.source === 'auto' }"
+            >
+              <span class="active-skill-tag__label">{{ tag.label }}</span>
+              <span class="active-skill-tag__source">{{ tag.source === 'auto' ? '自动' : '已选' }}</span>
+              <button
+                type="button"
+                :disabled="chatStore.isLoading"
+                :title="tag.source === 'auto' ? '本次任务不使用此推荐' : '取消选择'"
+                :aria-label="`关闭 ${tag.label}`"
+                @click="skillsStore.closeActiveSkill(tag.name)"
+              >×</button>
+            </span>
+            <button
+              v-for="item in skillsStore.recommendedItems"
+              :key="`recommended-${item.skillName}`"
+              class="recommended-skill-tag"
+              type="button"
+              :disabled="chatStore.isLoading || skillsStore.activeSkillNames.length >= 3"
+              :title="item.reason || '添加本次推荐'"
+              @click="skillsStore.toggleSelectedSkill(item.skillName)"
+            >+ {{ item.displayName }} · 建议</button>
+          </div>
           <div class="composer-tools">
             <details v-if="skillsStore.enabledItems.length" class="skill-popover">
-              <summary>Skill <span>{{ skillsStore.selectedSkillNames.length }}/3</span></summary>
+              <summary>Skill <span>{{ skillsStore.activeSkillNames.length }}/3</span></summary>
               <div class="skill-selector__chips">
                 <button
                   v-for="skill in skillsStore.enabledItems"
                   :key="skill.name"
                   class="skill-chip"
-                  :class="{ 'skill-chip--active': skillsStore.selectedSkillNames.includes(skill.name) }"
+                  :class="{ 'skill-chip--active': skillsStore.activeSkillNames.includes(skill.name) }"
                   type="button"
                   :disabled="chatStore.isLoading"
                   @click="skillsStore.toggleSelectedSkill(skill.name)"
@@ -423,7 +450,8 @@ async function sendMessage(content, manualMode, permissionModeOverride = '') {
     contextEmergencyLimitRatio: settingsStore.form.contextEmergencyLimitRatio,
     contextTokenSafetyMargin: settingsStore.form.contextTokenSafetyMargin,
     customInstructions: settingsStore.form.customInstructions,
-    selectedSkillNames: skillsStore.selectedSkillNames
+    selectedSkillNames: skillsStore.selectedSkillNames,
+    suppressedSkillNames: skillsStore.suppressedSkillNames
   };
 
   chatStore.setMode(manualMode);
@@ -537,7 +565,8 @@ async function executePlan() {
     contextEmergencyLimitRatio: settingsStore.form.contextEmergencyLimitRatio,
     contextTokenSafetyMargin: settingsStore.form.contextTokenSafetyMargin,
     activePlan: plan,
-    selectedSkillNames: skillsStore.selectedSkillNames
+    selectedSkillNames: skillsStore.selectedSkillNames,
+    suppressedSkillNames: skillsStore.suppressedSkillNames
   });
 }
 
@@ -722,7 +751,8 @@ async function resumePausedTodoRun(decision) {
       contextTokenSafetyMargin: settingsStore.form.contextTokenSafetyMargin,
       activePlan: chatStore.lastApprovedPlan,
       todoBoardDecision: decision,
-      selectedSkillNames: skillsStore.selectedSkillNames
+      selectedSkillNames: skillsStore.selectedSkillNames,
+      suppressedSkillNames: skillsStore.suppressedSkillNames
     });
   } catch (error) {
     chatStore.finishLoading();
@@ -739,6 +769,9 @@ function handleAgentEvent(event) {
   flushPendingAssistantChunk();
 
   switch (event.type) {
+    case 'skill_recommendation':
+      skillsStore.applyRuntimeRecommendations(event);
+      break;
     case 'tool_call_started':
       chatStore.startToolCall(event.toolCallId, event.toolName, event.toolInput, {
         requiresConfirmation: event.requiresConfirmation === true,
@@ -828,6 +861,7 @@ function handleAgentEvent(event) {
     case 'max_iterations_reached':
       chatStore.finishLoading();
       isCancelling.value = false;
+      skillsStore.resetTaskRecommendations();
       if (event.message) {
         chatStore.appendAssistantMessage(event.message);
         scheduleScrollToBottom({ force: true });
@@ -854,6 +888,7 @@ function handleAgentEvent(event) {
         taskHistoryStore.loadRecentTasks();
       }
       isCancelling.value = false;
+      skillsStore.resetTaskRecommendations();
       if (event.message) {
         chatStore.appendAssistantMessage(event.message);
         scheduleScrollToBottom({ force: true });
@@ -870,6 +905,7 @@ function handleAgentEvent(event) {
         taskHistoryStore.loadRecentTasks();
       }
       isCancelling.value = false;
+      skillsStore.resetTaskRecommendations();
       break;
     case 'document_not_writable':
     case 'document_mismatch':
@@ -880,6 +916,7 @@ function handleAgentEvent(event) {
       chatStore.finishLoading();
       chatStore.finalizeTaskChanges();
       isCancelling.value = false;
+      skillsStore.resetTaskRecommendations();
       if (event.message) {
         chatStore.appendAssistantMessage(event.message);
         scheduleScrollToBottom({ force: true });
@@ -953,7 +990,21 @@ watch(
   }
 );
 
-watch(draft, syncComposerHeight);
+watch(draft, (value) => {
+  syncComposerHeight();
+  if (!chatStore.isLoading) {
+    skillsStore.updateLocalRecommendations(value, chatStore.currentMode);
+  }
+});
+
+watch(
+  () => chatStore.currentMode,
+  (mode) => {
+    if (!chatStore.isLoading) {
+      skillsStore.updateLocalRecommendations(draft.value, mode);
+    }
+  }
+);
 
 watch(
   () => settingsStore.form.permissionMode,
@@ -1341,6 +1392,73 @@ watch(
   min-height: 20px;
   align-items: center;
   gap: 7px;
+}
+
+.active-skill-strip {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.active-skill-tag,
+.recommended-skill-tag {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 24px;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  border: 1px solid rgba(37, 99, 235, 0.28);
+  border-radius: var(--sw-radius-xs);
+  background: var(--sw-primary-soft);
+  color: var(--sw-primary-strong);
+  font-size: 9px;
+}
+
+.active-skill-tag--auto {
+  border-color: rgba(5, 150, 105, 0.28);
+  background: rgba(5, 150, 105, 0.08);
+  color: #047857;
+}
+
+.active-skill-tag__label {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.active-skill-tag__source {
+  flex: 0 0 auto;
+  color: currentColor;
+  opacity: 0.72;
+}
+
+.active-skill-tag button {
+  display: inline-grid;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: currentColor;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.recommended-skill-tag {
+  overflow: hidden;
+  border-color: var(--sw-border);
+  background: var(--sw-surface-muted);
+  color: var(--sw-text-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 .composer-hint {

@@ -313,6 +313,12 @@ function createDefaultMockSkills() {
       version: '1.0.0',
       enabled: true,
       isBuiltIn: true,
+      trustLevel: 'built_in',
+      scriptPolicy: 'prompt',
+      source: 'built_in',
+      contentSha256: 'mock-document-finalizer',
+      activationTriggers: ['终检', '交付前', '占位符', 'TODO'],
+      activationExcludedTriggers: [],
       updatedAtUtc: new Date().toISOString(),
       content: `---
 name: document-finalizer
@@ -344,6 +350,12 @@ enabled: true
       version: '1.0.0',
       enabled: true,
       isBuiltIn: true,
+      trustLevel: 'built_in',
+      scriptPolicy: 'prompt',
+      source: 'built_in',
+      contentSha256: 'mock-business-report-polish',
+      activationTriggers: ['汇报', '商务报告', '润色', '正式表达'],
+      activationExcludedTriggers: [],
       updatedAtUtc: new Date().toISOString(),
       content: `---
 name: business-report-polish
@@ -365,6 +377,12 @@ enabled: true
       version: '1.0.0',
       enabled: true,
       isBuiltIn: true,
+      trustLevel: 'built_in',
+      scriptPolicy: 'prompt',
+      source: 'built_in',
+      contentSha256: 'mock-term-consistency-check',
+      activationTriggers: ['术语', '产品名', '统一表达', '缩写'],
+      activationExcludedTriggers: [],
       updatedAtUtc: new Date().toISOString(),
       content: `---
 name: term-consistency-check
@@ -391,7 +409,27 @@ function loadMockSkills() {
   }
 
   try {
-    return JSON.parse(cached);
+    const parsed = JSON.parse(cached);
+    const defaults = createDefaultMockSkills();
+    const defaultByName = new Map(defaults.map((item) => [item.name, item]));
+    const migrated = (Array.isArray(parsed) ? parsed : []).map((item) => {
+      const builtInDefault = defaultByName.get(item.name) || {};
+      return {
+        trustLevel: item.isBuiltIn ? 'built_in' : 'user',
+        scriptPolicy: 'prompt',
+        source: item.isBuiltIn ? 'built_in' : 'local',
+        contentSha256: `mock-${item.name || Date.now()}`,
+        activationTriggers: [],
+        activationExcludedTriggers: [],
+        ...builtInDefault,
+        ...item,
+        activationTriggers: item.activationTriggers || builtInDefault.activationTriggers || [],
+        activationExcludedTriggers:
+          item.activationExcludedTriggers || builtInDefault.activationExcludedTriggers || []
+      };
+    });
+    saveMockSkills(migrated);
+    return migrated;
   } catch {
     return createDefaultMockSkills();
   }
@@ -749,6 +787,12 @@ export const hostBridge = {
       version: '1.0.0',
       enabled: true,
       isBuiltIn: false,
+      trustLevel: 'user',
+      scriptPolicy: 'prompt',
+      source: 'local',
+      contentSha256: `mock-${Date.now()}`,
+      activationTriggers: [],
+      activationExcludedTriggers: [],
       updatedAtUtc: new Date().toISOString(),
       content: request?.content || createSkillTemplate(name, request?.displayName, request?.description),
       resources: [],
@@ -761,8 +805,17 @@ export const hostBridge = {
   },
 
   async saveSkill(name, content) {
+    return this.saveSkillWithVersion(name, content, '');
+  },
+
+  async saveSkillWithVersion(name, content, expectedContentSha256) {
     if (this.isAvailable) {
-      const raw = await callBridge('SaveSkillJson', name || '', content || '');
+      const raw = await callBridge(
+        'SaveSkillWithVersionJson',
+        name || '',
+        content || '',
+        expectedContentSha256 || ''
+      );
       const result = JSON.parse(raw || '{}');
       if (result.success === false) {
         throw new Error(result.message || 'Skill 保存失败');
@@ -778,11 +831,53 @@ export const hostBridge = {
     }
 
     skill.content = content || '';
+    skill.contentSha256 = `mock-${Date.now()}`;
     skill.updatedAtUtc = new Date().toISOString();
     saveMockSkills(skills);
     const { resources, scripts, ...summaryWithContent } = skill;
     const { content: savedContent, ...summary } = summaryWithContent;
     return { success: true, skill: summary, content: savedContent, resources: resources || [], scripts: scripts || [] };
+  },
+
+  async setSkillScriptPolicy(name, policy) {
+    const normalized = String(policy || '').toLowerCase() === 'prompt' ? 'prompt' : 'disabled';
+    if (this.isAvailable) {
+      const raw = await callBridge('SetSkillScriptPolicyJson', name || '', normalized);
+      const result = JSON.parse(raw || '{}');
+      if (result.success === false) {
+        throw new Error(result.message || 'Skill 脚本策略设置失败');
+      }
+      return result;
+    }
+
+    const skills = loadMockSkills();
+    const skill = skills.find((item) => item.name === name);
+    if (skill) {
+      skill.scriptPolicy = normalized;
+      saveMockSkills(skills);
+    }
+    return { success: true, scriptPolicy: normalized };
+  },
+
+  async getSkillTelemetrySummary() {
+    if (this.isAvailable) {
+      const raw = await callBridge('GetSkillTelemetrySummaryJson');
+      const result = JSON.parse(raw || '{}');
+      if (result.success === false) {
+        throw new Error(result.message || '本地观测读取失败');
+      }
+      return result.summary || {};
+    }
+
+    return {
+      isEnabled: true,
+      eventCount: 0,
+      skillContextResolvedCount: 0,
+      completedTaskCount: 0,
+      failedTaskCount: 0,
+      toolFailureCount: 0,
+      topSkills: []
+    };
   },
 
   async getSkillScriptApprovals() {

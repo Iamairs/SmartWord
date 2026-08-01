@@ -17,6 +17,7 @@ using SmartWord.Infrastructure.Configuration;
 using SmartWord.Infrastructure.LlmClients;
 using SmartWord.Infrastructure.Persistence;
 using SmartWord.Infrastructure.Skills;
+using SmartWord.Infrastructure.Telemetry;
 using SmartWord.OfficeIntegration.SkillScripts;
 using SmartWord.OfficeIntegration.Scripting;
 using SmartWord.OfficeIntegration.Tools;
@@ -62,7 +63,13 @@ namespace SmartWord.AddIn.DI
             services.AddSingleton(provider => LoadSmartWordSettings());
             services.AddSingleton(provider => CreateLlmClientOptions(
                 provider.GetRequiredService<SmartWordSettings>()));
-            services.AddSingleton<IAgentTelemetrySink>(NullAgentTelemetrySink.Instance);
+            var localTelemetryPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "SmartWord",
+                "telemetry",
+                "agent-events.jsonl");
+            services.AddSingleton<IAgentTelemetrySink>(_ => new LocalAgentTelemetrySink(localTelemetryPath));
+            services.AddSingleton(_ => new LocalSkillTelemetryReader(localTelemetryPath));
             services.AddSingleton<ILlmClient, OpenAiCompatibleClient>();
             services.AddSingleton<SmartWordSqliteDatabase>();
             services.AddSingleton<IConversationStore, SqliteConversationStore>();
@@ -70,7 +77,7 @@ namespace SmartWord.AddIn.DI
             services.AddSingleton<ITodoStore, JsonTodoStore>();
             services.AddSingleton<ISkillStore, FileSystemSkillStore>();
             services.AddSingleton<ISkillScriptApprovalStore, FileSkillScriptApprovalStore>();
-            services.AddSingleton<ISkillScriptRunner, SkillScriptRunner>();
+            services.AddSingleton<ISkillScriptRunner, OutOfProcessSkillScriptRunner>();
             services.AddSingleton<ISkillPromptResolver, SkillPromptResolver>();
             services.AddSingleton<IContextHydrator, ContextHydrator>();
             services.AddSingleton<TodoManager>();
@@ -101,6 +108,8 @@ namespace SmartWord.AddIn.DI
                 registry.Register(new SkillRunScriptTool(
                     provider.GetRequiredService<ISkillStore>(),
                     provider.GetRequiredService<ISkillScriptRunner>()));
+                registry.Register(new ReadSkillResourceTool(
+                    provider.GetRequiredService<ISkillStore>()));
                 registry.Register(new AskUserQuestionTool());
                 registry.Register(new TodoReadTool(provider.GetRequiredService<TodoManager>()));
                 registry.Register(new TodoWriteTool(provider.GetRequiredService<TodoManager>()));

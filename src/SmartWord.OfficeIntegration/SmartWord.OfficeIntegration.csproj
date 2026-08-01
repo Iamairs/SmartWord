@@ -104,6 +104,8 @@
     <Compile Include="Reading\ReadScope.cs" />
     <Compile Include="Reading\ReadScopeResolver.cs" />
     <Compile Include="SkillScripts\SkillScriptRunner.cs" />
+    <Compile Include="SkillScripts\OutOfProcessSkillScriptRunner.cs" />
+    <Compile Include="SkillScripts\WindowsJobObject.cs" />
     <Compile Include="Scripting\CSharpScriptExecutor.cs" />
     <Compile Include="Scripting\ScriptContext.cs" />
     <Compile Include="Scripting\ScriptGlobals.cs" />

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using SmartWord.Core.Enums;
 
 namespace SmartWord.Core.Models
 {
@@ -20,6 +21,22 @@ namespace SmartWord.Core.Models
 
         public bool IsBuiltIn { get; set; }
 
+        public SkillTrustLevel TrustLevel { get; set; } = SkillTrustLevel.User;
+
+        public SkillScriptPolicy ScriptPolicy { get; set; } = SkillScriptPolicy.Prompt;
+
+        public string Source { get; set; } = string.Empty;
+
+        public string ContentSha256 { get; set; } = string.Empty;
+
+        public IReadOnlyList<string> ActivationTriggers { get; set; } = new List<string>();
+
+        public IReadOnlyList<string> ActivationExcludedTriggers { get; set; } = new List<string>();
+
+        public IReadOnlyList<string> SupportedModes { get; set; } = new List<string>();
+
+        public IReadOnlyList<string> RequiredTools { get; set; } = new List<string>();
+
         public string RootPath { get; set; } = string.Empty;
 
         public string SkillFilePath { get; set; } = string.Empty;
@@ -37,6 +54,8 @@ namespace SmartWord.Core.Models
         public string Kind { get; set; } = string.Empty;
 
         public long SizeBytes { get; set; }
+
+        public bool IsText { get; set; }
     }
 
     /// <summary>
@@ -105,6 +124,8 @@ namespace SmartWord.Core.Models
         public string Name { get; set; } = string.Empty;
 
         public string Content { get; set; } = string.Empty;
+
+        public string ExpectedContentSha256 { get; set; } = string.Empty;
     }
 
     /// <summary>
@@ -117,6 +138,12 @@ namespace SmartWord.Core.Models
         public IReadOnlyList<SkillDetail> ActiveSkills { get; set; } = new List<SkillDetail>();
 
         public string PromptBlock { get; set; } = string.Empty;
+
+        public IReadOnlyList<SkillRecommendation> Recommendations { get; set; } = new List<SkillRecommendation>();
+
+        public IReadOnlyList<ActiveSkillSnapshot> ActiveSnapshots { get; set; } = new List<ActiveSkillSnapshot>();
+
+        public SkillPromptLoadMetrics LoadMetrics { get; set; } = new SkillPromptLoadMetrics();
     }
 
     /// <summary>
@@ -177,6 +204,10 @@ namespace SmartWord.Core.Models
     {
         public string SkillName { get; set; } = string.Empty;
 
+        public string SkillSource { get; set; } = string.Empty;
+
+        public string SkillContentSha256 { get; set; } = string.Empty;
+
         public string RelativeScriptPath { get; set; } = string.Empty;
 
         public string ScriptHash { get; set; } = string.Empty;
@@ -190,6 +221,8 @@ namespace SmartWord.Core.Models
             return string.Join(
                 "|",
                 (SkillName ?? string.Empty).Trim().ToLowerInvariant(),
+                (SkillSource ?? string.Empty).Trim().ToLowerInvariant(),
+                (SkillContentSha256 ?? string.Empty).Trim().ToLowerInvariant(),
                 (RelativeScriptPath ?? string.Empty).Trim().Replace('\\', '/').ToLowerInvariant(),
                 (ScriptHash ?? string.Empty).Trim().ToLowerInvariant(),
                 (Runtime ?? string.Empty).Trim().ToLowerInvariant(),

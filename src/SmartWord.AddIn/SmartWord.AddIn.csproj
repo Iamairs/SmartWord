@@ -191,6 +191,7 @@
     <ProjectReference Include="..\SmartWord.Core\SmartWord.Core.csproj" />
     <ProjectReference Include="..\SmartWord.Infrastructure\SmartWord.Infrastructure.csproj" />
     <ProjectReference Include="..\SmartWord.OfficeIntegration\SmartWord.OfficeIntegration.csproj" />
+    <ProjectReference Include="..\SmartWord.SkillHost\SmartWord.SkillHost.csproj" />
   </ItemGroup>
   <!--
     This section defines the user source files that are part of the project.
@@ -287,6 +288,16 @@
     <Copy SourceFiles="@(WebClientResources)" DestinationFiles="@(WebClientResources->'$(TargetDir)Resources\WebClient\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" Condition="Exists('$(ProjectDir)Resources\WebClient')" />
     <MakeDir Directories="$(TargetDir)Resources\Skills" Condition="Exists('$(ProjectDir)Resources\Skills')" />
     <Copy SourceFiles="@(SkillResources)" DestinationFiles="@(SkillResources->'$(TargetDir)Resources\Skills\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" Condition="Exists('$(ProjectDir)Resources\Skills')" />
+  </Target>
+  <Target Name="CopySkillHost" AfterTargets="Build">
+    <ItemGroup>
+      <SkillHostOutput Include="$(MSBuildThisFileDirectory)..\SmartWord.SkillHost\bin\$(Configuration)\**\*" />
+    </ItemGroup>
+    <Copy
+      SourceFiles="@(SkillHostOutput)"
+      DestinationFiles="@(SkillHostOutput->'$(TargetDir)%(RecursiveDir)%(Filename)%(Extension)')"
+      SkipUnchangedFiles="true"
+      Condition="Exists('$(MSBuildThisFileDirectory)..\SmartWord.SkillHost\bin\$(Configuration)')" />
   </Target>
   <!-- Include the build rules for a C# project. -->
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
