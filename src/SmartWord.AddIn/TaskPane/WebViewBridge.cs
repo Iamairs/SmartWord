@@ -419,14 +419,7 @@ namespace SmartWord.AddIn.TaskPane
                     });
                 }
 
-                return JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    skill = ToSkillPayload(detail.Definition),
-                    content = detail.Content,
-                    resources = detail.Resources,
-                    scripts = detail.Scripts
-                });
+                return JsonConvert.SerializeObject(ToSkillDetailPayload(detail));
             }
             catch (Exception ex)
             {
@@ -447,14 +440,7 @@ namespace SmartWord.AddIn.TaskPane
                     ?? new CreateSkillRequest();
                 var store = ServiceLocator.GetRequiredService<ISkillStore>();
                 var detail = store.CreateSkillAsync(request, CancellationToken.None).GetAwaiter().GetResult();
-                return JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    skill = ToSkillPayload(detail.Definition),
-                    content = detail.Content,
-                    resources = detail.Resources,
-                    scripts = detail.Scripts
-                });
+                return JsonConvert.SerializeObject(ToSkillDetailPayload(detail));
             }
             catch (Exception ex)
             {
@@ -592,14 +578,7 @@ namespace SmartWord.AddIn.TaskPane
                         ExpectedContentSha256 = expectedContentSha256 ?? string.Empty
                     },
                     CancellationToken.None).GetAwaiter().GetResult();
-                return JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    skill = ToSkillPayload(detail.Definition),
-                    content = detail.Content,
-                    resources = detail.Resources,
-                    scripts = detail.Scripts
-                });
+                return JsonConvert.SerializeObject(ToSkillDetailPayload(detail));
             }
             catch (Exception ex)
             {
@@ -1302,6 +1281,37 @@ namespace SmartWord.AddIn.TaskPane
                 activationExcludedTriggers = skill.ActivationExcludedTriggers,
                 supportedModes = skill.SupportedModes,
                 updatedAtUtc = skill.UpdatedAtUtc
+            };
+        }
+
+        /// <summary>
+        /// 显式固定 Skill 详情的前端 JSON 字段，避免领域模型的 PascalCase 泄漏到 Vue。
+        /// </summary>
+        private static object ToSkillDetailPayload(SkillDetail detail)
+        {
+            var resources = detail.Resources ?? new List<SkillResource>();
+            var scripts = detail.Scripts ?? new List<SkillScriptInfo>();
+            return new
+            {
+                success = true,
+                skill = ToSkillPayload(detail.Definition),
+                content = detail.Content,
+                resources = resources.Select(resource => new
+                {
+                    relativePath = resource.RelativePath,
+                    kind = resource.Kind,
+                    sizeBytes = resource.SizeBytes,
+                    isText = resource.IsText
+                }).ToArray(),
+                scripts = scripts.Select(script => new
+                {
+                    skillName = script.SkillName,
+                    relativePath = script.RelativePath,
+                    runtime = script.Runtime,
+                    sizeBytes = script.SizeBytes,
+                    sha256 = script.Sha256,
+                    isApproved = script.IsApproved
+                }).ToArray()
             };
         }
 

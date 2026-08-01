@@ -213,34 +213,109 @@
 
     <div v-if="skillsStore.selectedSkill" class="skill-detail">
       <div class="skill-detail__header">
-        <h3>{{ skillsStore.selectedSkill.displayName || skillsStore.selectedSkill.name }}</h3>
-        <span>{{ trustLabel(skillsStore.selectedSkill) }} · {{ skillsStore.selectedSkill.isBuiltIn ? '只读' : '可编辑' }}</span>
+        <div>
+          <h3>{{ skillsStore.selectedSkill.displayName || skillsStore.selectedSkill.name }}</h3>
+          <p class="skill-detail__name">{{ skillsStore.selectedSkill.name }}</p>
+        </div>
+        <span class="skill-detail__trust">
+          {{ trustLabel(skillsStore.selectedSkill) }} · {{ skillsStore.selectedSkill.isBuiltIn ? '只读' : '可编辑' }}
+        </span>
+      </div>
+
+      <p v-if="skillsStore.selectedSkill.description" class="skill-detail__description">
+        {{ skillsStore.selectedSkill.description }}
+      </p>
+
+      <div class="skill-detail__stats">
+        <span v-if="skillsStore.selectedSkill.version">v{{ skillsStore.selectedSkill.version }}</span>
+        <span>资源 {{ resourceItems.length }}</span>
+        <span>脚本 {{ skillsStore.scripts.length }}</span>
+        <span v-if="scriptAuxiliaryItems.length">附属文件 {{ scriptAuxiliaryItems.length }}</span>
       </div>
 
       <p v-if="skillsStore.selectedSkill.trustLevel === 'external'" class="skill-security-note">
         外部 Skill 的脚本默认禁用。Markdown 工作流仍可查看和使用。
       </p>
 
-      <textarea
-        v-model="skillsStore.selectedContent"
-        class="skill-editor"
-        rows="12"
-        :readonly="skillsStore.selectedSkill.isBuiltIn"
-      ></textarea>
-
-      <div v-if="skillsStore.resources.length" class="skill-resources">
-        <p>资源</p>
-        <span v-for="resource in skillsStore.resources" :key="resource.relativePath">
-          {{ resource.kind }} / {{ resource.relativePath }}
-        </span>
+      <div class="skill-detail__section">
+        <div class="skill-detail__section-header">
+          <div>
+            <strong>工作流说明</strong>
+            <span>{{ skillsStore.selectedSkill.isBuiltIn ? '内置模板' : 'SKILL.md' }}</span>
+          </div>
+          <button
+            class="ghost-button ghost-button--tiny"
+            type="button"
+            :aria-expanded="isContentExpanded"
+            @click="isContentExpanded = !isContentExpanded"
+          >
+            {{ isContentExpanded ? '收起源码' : '查看源码' }}
+          </button>
+        </div>
+        <div v-if="isContentExpanded" class="skill-editor-wrap">
+          <textarea
+            v-model="skillsStore.selectedContent"
+            class="skill-editor"
+            rows="12"
+            :readonly="skillsStore.selectedSkill.isBuiltIn"
+          ></textarea>
+        </div>
       </div>
 
-      <div v-if="skillsStore.scripts.length" class="skill-resources">
-        <p>scripts/</p>
-        <span v-for="script in skillsStore.scripts" :key="script.relativePath">
-          {{ script.runtime }} / {{ script.relativePath }} / {{ formatHash(script.sha256) }}
-          · {{ skillsStore.isScriptApproved(script) ? '已授权' : '未授权' }}
-        </span>
+      <div v-if="resourceItems.length" class="skill-detail__section">
+        <div class="skill-detail__section-header">
+          <div>
+            <strong>资源</strong>
+            <span>references/ · assets/</span>
+          </div>
+          <span>{{ resourceItems.length }} 个</span>
+        </div>
+        <div class="skill-file-list">
+          <div v-for="resource in displayedResourceItems" :key="resource.relativePath" class="skill-file-row">
+            <span class="skill-file-row__kind">{{ resource.kind }}</span>
+            <span class="skill-file-row__path" :title="resource.relativePath">{{ resource.relativePath }}</span>
+            <span class="skill-file-row__size">{{ formatBytes(resource.sizeBytes) }}</span>
+          </div>
+        </div>
+        <button
+          v-if="resourceItems.length > resourcePreviewLimit"
+          class="skill-detail__more"
+          type="button"
+          @click="showAllResources = !showAllResources"
+        >
+          {{ showAllResources ? '收起资源' : `查看全部 ${resourceItems.length} 个资源` }}
+        </button>
+      </div>
+
+      <div v-if="skillsStore.scripts.length || scriptAuxiliaryItems.length" class="skill-detail__section">
+        <div class="skill-detail__section-header">
+          <div>
+            <strong>脚本</strong>
+            <span>独立进程 · 默认禁用</span>
+          </div>
+          <span>{{ skillsStore.scripts.length }} 个可执行</span>
+        </div>
+        <div v-if="skillsStore.scripts.length" class="skill-file-list">
+          <div v-for="script in displayedScripts" :key="script.relativePath" class="skill-file-row skill-file-row--script">
+            <span class="skill-file-row__path" :title="script.relativePath">{{ script.relativePath }}</span>
+            <span class="skill-file-row__runtime">{{ script.runtime || '未知' }}</span>
+            <span :class="['skill-file-row__status', { 'is-approved': skillsStore.isScriptApproved(script) }]">
+              {{ skillsStore.isScriptApproved(script) ? '已授权' : '未授权' }}
+            </span>
+          </div>
+        </div>
+        <p v-else class="skill-detail__muted">未发现可执行的 Python 或 C# 脚本。</p>
+        <p v-if="scriptAuxiliaryItems.length" class="skill-detail__muted">
+          scripts/ 下另有 {{ scriptAuxiliaryItems.length }} 个附属文件，已从资源列表中折叠。
+        </p>
+        <button
+          v-if="skillsStore.scripts.length > scriptPreviewLimit"
+          class="skill-detail__more"
+          type="button"
+          @click="showAllScripts = !showAllScripts"
+        >
+          {{ showAllScripts ? '收起脚本' : `查看全部 ${skillsStore.scripts.length} 个脚本` }}
+        </button>
       </div>
 
       <div v-if="skillsStore.scripts.length" class="skill-script-policy">
@@ -261,7 +336,7 @@
         </button>
       </div>
 
-      <div v-if="matchingApprovals.length" class="skill-resources">
+      <div v-if="matchingApprovals.length" class="skill-detail__section skill-resources">
         <p>已授权脚本</p>
         <span v-for="record in matchingApprovals" :key="approvalKey(record)">
           {{ approvalLabel(record) }}
@@ -296,7 +371,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useSkillsStore } from '../stores/skills';
 
 defineProps({
@@ -309,6 +384,11 @@ defineProps({
 defineEmits(['close']);
 
 const skillsStore = useSkillsStore();
+const isContentExpanded = ref(false);
+const showAllResources = ref(false);
+const showAllScripts = ref(false);
+const resourcePreviewLimit = 6;
+const scriptPreviewLimit = 6;
 
 const installablePreviewItems = computed(() => {
   const items = Array.isArray(skillsStore.importPreview?.items) ? skillsStore.importPreview.items : [];
@@ -322,6 +402,40 @@ const matchingApprovals = computed(() => {
     return String(key.skillName || key.SkillName || '').toLowerCase() === skillName.toLowerCase();
   });
 });
+
+const resourceItems = computed(() =>
+  skillsStore.resources.filter((resource) => String(resource.kind || '').toLowerCase() !== 'scripts')
+);
+
+const scriptResourceItems = computed(() =>
+  skillsStore.resources.filter((resource) => String(resource.kind || '').toLowerCase() === 'scripts')
+);
+
+const scriptAuxiliaryItems = computed(() => {
+  const executablePaths = new Set(
+    skillsStore.scripts.map((script) => String(script.relativePath || '').toLowerCase())
+  );
+  return scriptResourceItems.value.filter(
+    (resource) => !executablePaths.has(String(resource.relativePath || '').toLowerCase())
+  );
+});
+
+const displayedResourceItems = computed(() =>
+  showAllResources.value ? resourceItems.value : resourceItems.value.slice(0, resourcePreviewLimit)
+);
+
+const displayedScripts = computed(() =>
+  showAllScripts.value ? skillsStore.scripts : skillsStore.scripts.slice(0, scriptPreviewLimit)
+);
+
+watch(
+  () => skillsStore.selectedSkill?.name,
+  () => {
+    isContentExpanded.value = false;
+    showAllResources.value = false;
+    showAllScripts.value = false;
+  }
+);
 
 function formatHash(hash) {
   const value = String(hash || '');
@@ -397,7 +511,6 @@ onMounted(() => {
 .skill-panel__toolbar,
 .skill-card__meta,
 .skill-card__desc,
-.skill-detail__header span,
 .skill-resources {
   margin: 0;
   font-size: 11px;
@@ -633,6 +746,153 @@ onMounted(() => {
   color: #92400e;
 }
 
+.skill-detail__header {
+  align-items: flex-start;
+}
+
+.skill-detail__header h3 {
+  font-size: 15px;
+  color: #203a59;
+}
+
+.skill-detail__name,
+.skill-detail__description,
+.skill-detail__muted {
+  margin: 0;
+  color: #60758f;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.skill-detail__name {
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+.skill-detail__trust {
+  flex: 0 0 auto;
+  max-width: 46%;
+  color: #60758f;
+  font-size: 10px;
+  line-height: 1.4;
+  text-align: right;
+}
+
+.skill-detail__description {
+  color: #445b73;
+}
+
+.skill-detail__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  color: #60758f;
+  font-size: 10px;
+}
+
+.skill-detail__stats span {
+  padding: 3px 5px;
+  border: 1px solid rgba(89, 118, 161, 0.16);
+  border-radius: 4px;
+  background: #f7f9fc;
+}
+
+.skill-detail__section {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 7px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(89, 118, 161, 0.16);
+}
+
+.skill-detail__section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  color: #60758f;
+  font-size: 10px;
+}
+
+.skill-detail__section-header > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.skill-detail__section-header strong {
+  color: #2b4868;
+  font-size: 11px;
+}
+
+.skill-detail__section-header span {
+  overflow-wrap: anywhere;
+}
+
+.skill-editor-wrap {
+  min-width: 0;
+}
+
+.skill-file-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.skill-file-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 6px;
+  min-width: 0;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(89, 118, 161, 0.1);
+  color: #445b73;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.skill-file-row:last-child {
+  border-bottom: 0;
+}
+
+.skill-file-row__kind,
+.skill-file-row__runtime {
+  color: #6f86a3;
+  text-transform: lowercase;
+}
+
+.skill-file-row__path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.skill-file-row__size,
+.skill-file-row__status {
+  white-space: nowrap;
+  color: #6f86a3;
+}
+
+.skill-file-row__status.is-approved {
+  color: #2d6a4f;
+}
+
+.skill-detail__more {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  color: #35648e;
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
 .skill-script-policy {
   padding: 8px 0;
   border-top: 1px solid rgba(89, 118, 161, 0.16);
@@ -645,6 +905,15 @@ onMounted(() => {
 
 .skill-script-policy p {
   color: #60758f;
+}
+
+.skill-script-policy > div {
+  min-width: 0;
+}
+
+.skill-script-policy button {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .skill-card {
@@ -712,14 +981,11 @@ onMounted(() => {
   font-family: Consolas, "Courier New", monospace;
   font-size: 11px;
   line-height: 1.5;
+  box-sizing: border-box;
+  border-radius: 8px;
 }
 
 .skill-resources {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px;
-  border-radius: 10px;
-  background: #f7f9fc;
+  color: #60758f;
 }
 </style>
