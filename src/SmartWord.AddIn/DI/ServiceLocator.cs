@@ -76,6 +76,7 @@ namespace SmartWord.AddIn.DI
             services.AddSingleton<ITaskHistoryStore, SqliteTaskHistoryStore>();
             services.AddSingleton<ITodoStore, JsonTodoStore>();
             services.AddSingleton<ISkillStore, FileSystemSkillStore>();
+            services.AddSingleton<ISkillPackageInstaller, FileSystemSkillPackageInstaller>();
             services.AddSingleton<ISkillScriptApprovalStore, FileSkillScriptApprovalStore>();
             services.AddSingleton<ISkillScriptRunner, OutOfProcessSkillScriptRunner>();
             services.AddSingleton<ISkillPromptResolver, SkillPromptResolver>();

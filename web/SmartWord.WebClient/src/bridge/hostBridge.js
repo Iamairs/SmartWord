@@ -760,6 +760,76 @@ export const hostBridge = {
     };
   },
 
+  async selectSkillFolder() {
+    if (!this.isAvailable) {
+      return { success: true, canceled: true, path: '' };
+    }
+
+    const raw = await callBridge('SelectSkillFolderJson');
+    const result = JSON.parse(raw || '{}');
+    if (result.success === false) {
+      throw new Error(result.message || '选择 Skill 文件夹失败');
+    }
+
+    return result;
+  },
+
+  async previewNetworkSkill(sourceUrl) {
+    if (!this.isAvailable) {
+      throw new Error('请在 Word 宿主中预览网络 Skill。');
+    }
+
+    const raw = await callBridge('PreviewNetworkSkillJson', sourceUrl || '');
+    const result = JSON.parse(raw || '{}');
+    if (result.success === false) {
+      throw new Error(result.message || '网络 Skill 预览失败');
+    }
+
+    return result.preview || { sessionId: '', items: [] };
+  },
+
+  async previewSkillFolders(folderPaths) {
+    if (!this.isAvailable) {
+      throw new Error('请在 Word 宿主中预览本地 Skill 文件夹。');
+    }
+
+    const raw = await callBridge('PreviewSkillFoldersJson', JSON.stringify(folderPaths || []));
+    const result = JSON.parse(raw || '{}');
+    if (result.success === false) {
+      throw new Error(result.message || '本地 Skill 文件夹预览失败');
+    }
+
+    return result.preview || { sessionId: '', items: [] };
+  },
+
+  async installSkillPackages(request) {
+    if (!this.isAvailable) {
+      throw new Error('请在 Word 宿主中安装 Skill。');
+    }
+
+    const raw = await callBridge('InstallSkillPackagesJson', JSON.stringify(request || {}));
+    const result = JSON.parse(raw || '{}');
+    if (result.success === false) {
+      throw new Error(result.message || 'Skill 安装失败');
+    }
+
+    return result;
+  },
+
+  async cancelSkillImportPreview(sessionId) {
+    if (!this.isAvailable || !sessionId) {
+      return { success: true };
+    }
+
+    const raw = await callBridge('CancelSkillImportPreviewJson', sessionId);
+    const result = JSON.parse(raw || '{}');
+    if (result.success === false) {
+      throw new Error(result.message || '取消 Skill 导入预览失败');
+    }
+
+    return result;
+  },
+
   async createSkill(request) {
     if (this.isAvailable) {
       const raw = await callBridge('CreateSkillJson', JSON.stringify(request || {}));

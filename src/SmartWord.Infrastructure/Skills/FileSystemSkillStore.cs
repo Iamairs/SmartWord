@@ -21,6 +21,7 @@ namespace SmartWord.Infrastructure.Skills
     {
         private const int MaxSkillMarkdownBytes = 64 * 1024;
         private const string SkillFileName = "SKILL.md";
+        private const string ExternalSourceMarkerFileName = ".smartword-source.json";
         private const string StateFileName = "skills-state.json";
         private const int MaxHistoryVersions = 5;
 
@@ -140,7 +141,7 @@ namespace SmartWord.Infrastructure.Skills
                     if (!string.IsNullOrWhiteSpace(request.ExpectedContentSha256)
                         && File.Exists(skillFilePath)
                         && !string.Equals(
-                            ComputeSha256(skillFilePath),
+                            ComputeContentSha256(skillRoot, skillFilePath),
                             request.ExpectedContentSha256,
                             StringComparison.OrdinalIgnoreCase))
                     {
@@ -341,12 +342,17 @@ namespace SmartWord.Infrastructure.Skills
                 definition.Name = SkillPathGuard.NormalizeSkillName(skillName);
             }
 
+            var externalSource = isBuiltIn ? null : ReadExternalSourceMarker(skillRoot);
             definition.IsBuiltIn = isBuiltIn;
-            definition.TrustLevel = isBuiltIn ? SkillTrustLevel.BuiltIn : definition.TrustLevel;
+            definition.TrustLevel = isBuiltIn
+                ? SkillTrustLevel.BuiltIn
+                : externalSource == null ? definition.TrustLevel : SkillTrustLevel.External;
             definition.Source = isBuiltIn
                 ? "built_in"
-                : string.IsNullOrWhiteSpace(definition.Source) ? "local" : definition.Source;
-            definition.ContentSha256 = ComputeSha256(skillFilePath);
+                : externalSource == null
+                    ? string.IsNullOrWhiteSpace(definition.Source) ? "local" : definition.Source
+                    : externalSource.Source;
+            definition.ContentSha256 = ComputeContentSha256(skillRoot, skillFilePath);
             definition.RootPath = skillRoot;
             definition.SkillFilePath = skillFilePath;
             definition.UpdatedAtUtc = File.GetLastWriteTimeUtc(skillFilePath);
@@ -618,6 +624,101 @@ namespace SmartWord.Infrastructure.Skills
             }
         }
 
+        /// <summary>
+        /// 外部导入 Skill 的授权哈希覆盖整个包，防止仅替换脚本或资源后复用旧授权。
+        /// </summary>
+        private static string ComputeContentSha256(string skillRoot, string skillFilePath)
+        {
+            var markerPath = Path.Combine(skillRoot, ExternalSourceMarkerFileName);
+            if (!File.Exists(markerPath))
+            {
+                return ComputeSha256(skillFilePath);
+            }
+
+            using (var sha256 = SHA256.Create())
+            {
+                var files = EnumerateSkillFilesSafely(skillRoot)
+                    .Where(path => !string.Equals(
+                        path.Substring(skillRoot.Length)
+                            .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                        ExternalSourceMarkerFileName,
+                        StringComparison.OrdinalIgnoreCase))
+                    .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                foreach (var filePath in files)
+                {
+                    EnsureNoReparsePoint(skillRoot, filePath);
+                    var relativePath = filePath.Substring(skillRoot.Length)
+                        .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                        .Replace(Path.DirectorySeparatorChar, '/')
+                        .ToLowerInvariant();
+                    var pathBytes = Encoding.UTF8.GetBytes(relativePath);
+                    sha256.TransformBlock(pathBytes, 0, pathBytes.Length, pathBytes, 0);
+                    var separator = new byte[] { 0 };
+                    sha256.TransformBlock(separator, 0, separator.Length, separator, 0);
+                    using (var stream = File.OpenRead(filePath))
+                    {
+                        var buffer = new byte[81920];
+                        int read;
+                        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+                        {
+                            sha256.TransformBlock(buffer, 0, read, buffer, 0);
+                        }
+                    }
+                }
+
+                sha256.TransformFinalBlock(new byte[0], 0, 0);
+                return BitConverter.ToString(sha256.Hash).Replace("-", string.Empty).ToLowerInvariant();
+            }
+        }
+
+        private static IReadOnlyList<string> EnumerateSkillFilesSafely(string skillRoot)
+        {
+            var files = new List<string>();
+            var pendingDirectories = new Stack<string>();
+            pendingDirectories.Push(Path.GetFullPath(skillRoot));
+            while (pendingDirectories.Count > 0)
+            {
+                var currentDirectory = pendingDirectories.Pop();
+                EnsureNoReparsePoint(skillRoot, currentDirectory);
+                foreach (var directory in Directory.GetDirectories(currentDirectory))
+                {
+                    EnsureNoReparsePoint(skillRoot, directory);
+                    pendingDirectories.Push(directory);
+                }
+
+                foreach (var filePath in Directory.GetFiles(currentDirectory))
+                {
+                    EnsureNoReparsePoint(skillRoot, filePath);
+                    files.Add(filePath);
+                }
+            }
+
+            return files;
+        }
+
+        private static ExternalSourceMarker ReadExternalSourceMarker(string skillRoot)
+        {
+            try
+            {
+                var markerPath = Path.Combine(skillRoot, ExternalSourceMarkerFileName);
+                if (!File.Exists(markerPath))
+                {
+                    return null;
+                }
+
+                var marker = JsonConvert.DeserializeObject<ExternalSourceMarker>(
+                    File.ReadAllText(markerPath, Encoding.UTF8));
+                return marker != null && !string.IsNullOrWhiteSpace(marker.Source)
+                    ? marker
+                    : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         private string NormalizeSkillContent(string name, string content)
         {
             if (string.IsNullOrWhiteSpace(content))
@@ -721,6 +822,12 @@ source: local
 
             public Dictionary<string, string> ScriptPolicies { get; set; } =
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        private sealed class ExternalSourceMarker
+        {
+            [JsonProperty("source")]
+            public string Source { get; set; } = string.Empty;
         }
 
         private static bool IsTextResource(string path)

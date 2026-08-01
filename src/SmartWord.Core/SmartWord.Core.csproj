@@ -62,6 +62,7 @@
     <Compile Include="Interfaces\IContextHydrator.cs" />
     <Compile Include="Interfaces\IConversationStore.cs" />
     <Compile Include="Interfaces\ISkillPromptResolver.cs" />
+    <Compile Include="Interfaces\ISkillPackageInstaller.cs" />
     <Compile Include="Interfaces\ISkillScriptApprovalStore.cs" />
     <Compile Include="Interfaces\ISkillScriptRunner.cs" />
     <Compile Include="Interfaces\ISkillStore.cs" />
@@ -86,6 +87,7 @@
     <Compile Include="Models\LlmResponseMetadata.cs" />
     <Compile Include="Models\PermissionDecision.cs" />
     <Compile Include="Models\SkillModels.cs" />
+    <Compile Include="Models\SkillImportModels.cs" />
     <Compile Include="Models\SkillRuntimeModels.cs" />
     <Compile Include="Models\TodoBoard.cs" />
     <Compile Include="Models\TaskHistoryModels.cs" />
