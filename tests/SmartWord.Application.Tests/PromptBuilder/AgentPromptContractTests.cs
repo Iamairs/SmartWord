@@ -51,6 +51,13 @@ namespace SmartWord.Application.Tests.PromptBuilder
             Assert.Contains("不得仅凭用户描述、历史回答或历史工具结果直接生成计划", planPrompt);
             Assert.DoesNotContain("每次新任务必须首先调用 probe_document", agentPrompt);
             Assert.Contains("不要把微小操作拆成过细 Todo", planPrompt);
+            Assert.Contains("长文档执行“查找后处理”时", agentPrompt);
+            Assert.Contains("只能选择一种范围", agentPrompt);
+            Assert.Contains("工具返回字段或范围错误时", agentPrompt);
+            Assert.Contains("每项必须包含 `type` 和非负 0-based", agentPrompt);
+            Assert.Contains("批量操作最多 20 项", agentPrompt);
+            Assert.Contains("`grep_document.scope` 必须是真实 JSON 对象", askPrompt);
+            Assert.Contains("当前证据不完整", askPrompt);
         }
 
         private static string ReadPromptFile(string fileName)

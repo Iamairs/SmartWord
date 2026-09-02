@@ -30,14 +30,14 @@ namespace SmartWord.OfficeIntegration.Tools
             _readScopeResolver = new ReadScopeResolver();
             _paragraphSearchEngine = new ParagraphSearchEngine();
             _inputSchema = JsonDocument.Parse(
-                "{\"type\":\"object\",\"properties\":{\"keyword\":{\"type\":\"string\",\"description\":\"要搜索的关键词或 .NET 正则表达式。keyword 必须是普通字符串。\"},\"use_regex\":{\"type\":\"boolean\",\"description\":\"true 时按标准 .NET 正则解释 keyword；非法正则会直接报错。\"},\"context_lines\":{\"type\":\"integer\",\"description\":\"每个命中段落前后额外返回多少段上下文。\"},\"max_results\":{\"type\":\"integer\",\"description\":\"最多返回多少个命中段落。\"},\"scope\":{\"type\":\"object\",\"description\":\"可选的搜索范围限制。scope 自身必须是 JSON 对象。\",\"properties\":{\"heading\":{\"type\":\"string\",\"description\":\"按标题限制搜索范围。\"},\"from_para\":{\"type\":\"integer\",\"description\":\"起始段落，0-based。\"},\"to_para\":{\"type\":\"integer\",\"description\":\"结束段落，0-based 且包含该段。\"},\"around_cursor\":{\"type\":\"boolean\",\"description\":\"true 表示以光标附近为搜索范围。\"},\"context_window\":{\"type\":\"integer\",\"description\":\"around_cursor=true 时，表示光标前后各包含多少段。\"},\"selection_only\":{\"type\":\"boolean\",\"description\":\"true 表示仅在当前选区覆盖的段落范围内搜索。\"}}}},\"required\":[\"keyword\"]}")
+                "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"keyword\":{\"type\":\"string\",\"minLength\":1,\"description\":\"要搜索的关键词或 .NET 正则表达式，必须是普通字符串。\"},\"use_regex\":{\"type\":\"boolean\",\"description\":\"true 时按标准 .NET 正则解释 keyword；非法正则会直接报错。\"},\"context_lines\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":20,\"description\":\"每个命中段落前后额外返回的上下文段落数。\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100,\"description\":\"最多返回的命中段落数；结果截断时会返回 diagnostics。\"},\"scope\":{\"type\":\"object\",\"additionalProperties\":false,\"description\":\"可选的搜索范围限制。scope 必须是 JSON 对象，不要传字符串化后的 JSON，否则会错误退化为全文搜索。\",\"properties\":{\"heading\":{\"type\":\"string\",\"description\":\"按标题限制搜索范围。与 from_para/to_para、around_cursor、selection_only 互斥。\"},\"from_para\":{\"type\":\"integer\",\"minimum\":0,\"description\":\"起始段落，0-based，必须与 to_para 同时提供。\"},\"to_para\":{\"type\":\"integer\",\"minimum\":0,\"description\":\"结束段落，0-based，必须不小于 from_para。\"},\"around_cursor\":{\"type\":\"boolean\",\"description\":\"true 表示以光标附近为搜索范围，与其它范围选择互斥。\"},\"context_window\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":50,\"description\":\"around_cursor=true 时，表示光标前后各包含多少段。\"},\"selection_only\":{\"type\":\"boolean\",\"description\":\"true 表示仅在当前选区覆盖的段落范围内搜索，与其它范围选择互斥。\"}}}},\"required\":[\"keyword\"]}")
                 .RootElement
                 .Clone();
         }
 
         public string Name => "grep_document";
 
-        public string Description => "搜索关键词或 .NET 正则表达式，返回总命中次数、每段全部命中偏移、所属章节与前后文。scope.from_para/to_para 都是 0-based。";
+        public string Description => "搜索关键词或 .NET 正则表达式，返回总命中次数、每段全部命中偏移、所属章节与前后文。scope 必须是对象且范围选择互斥；scope.from_para/to_para 都是 0-based。";
 
         public ToolPermission RequiredPermission => ToolPermission.ReadOnly;
 
@@ -49,6 +49,12 @@ namespace SmartWord.OfficeIntegration.Tools
         {
             _ = undoScope;
             cancellationToken.ThrowIfCancellationRequested();
+
+            var contractError = ValidateInputContract(input);
+            if (!string.IsNullOrWhiteSpace(contractError))
+            {
+                return ToolCallResult.Error(Name, contractError);
+            }
 
             var keyword = ReadString(input, "keyword");
             if (string.IsNullOrWhiteSpace(keyword))
@@ -185,6 +191,114 @@ namespace SmartWord.OfficeIntegration.Tools
                 ContextWindow = Math.Max(1, ReadNullableInt(scopeToken, "context_window") ?? 5),
                 SelectionOnly = ReadBool(scopeToken, "selection_only", false)
             };
+        }
+
+        private static string ValidateInputContract(JsonElement input)
+        {
+            if (input.ValueKind != JsonValueKind.Object)
+            {
+                return "grep_document 输入必须是 JSON 对象。";
+            }
+
+            if (!input.TryGetProperty("keyword", out var keyword)
+                || keyword.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(keyword.GetString()))
+            {
+                return "keyword 必须是非空字符串。";
+            }
+
+            if (input.TryGetProperty("use_regex", out var useRegex)
+                && useRegex.ValueKind != JsonValueKind.True
+                && useRegex.ValueKind != JsonValueKind.False)
+            {
+                return "use_regex 必须是布尔值。";
+            }
+
+            if (input.TryGetProperty("scope", out var scope)
+                && scope.ValueKind != JsonValueKind.Object)
+            {
+                return "scope 必须是 JSON 对象，不要传字符串化 JSON；否则搜索范围无法生效。";
+            }
+
+            if (input.TryGetProperty("context_lines", out var contextLines)
+                && (!IsNonNegativeInt(contextLines) || contextLines.GetInt32() > 20))
+            {
+                return "context_lines 必须是 0 到 20 的整数。";
+            }
+
+            if (input.TryGetProperty("max_results", out var maxResults)
+                && (!IsNonNegativeInt(maxResults) || maxResults.GetInt32() < 1 || maxResults.GetInt32() > 100))
+            {
+                return "max_results 必须是 1 到 100 的整数。";
+            }
+
+            if (scope.ValueKind == JsonValueKind.Object)
+            {
+                var scopeSelectors = 0;
+                if (scope.TryGetProperty("heading", out var headingSelector)
+                    && headingSelector.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(headingSelector.GetString()))
+                {
+                    scopeSelectors++;
+                }
+
+                var hasFrom = scope.TryGetProperty("from_para", out var from);
+                var hasTo = scope.TryGetProperty("to_para", out var to);
+                if (hasFrom != hasTo)
+                {
+                    return "scope.from_para 和 scope.to_para 必须同时提供。";
+                }
+
+                if (hasFrom && (!IsNonNegativeInt(from) || !IsNonNegativeInt(to)))
+                {
+                    return "scope.from_para/to_para 必须是 0-based 非负整数。";
+                }
+
+                if (hasFrom && from.GetInt32() > to.GetInt32())
+                {
+                    return "scope.to_para 必须大于或等于 scope.from_para。";
+                }
+
+                if (hasFrom)
+                {
+                    scopeSelectors++;
+                }
+
+                if (scope.TryGetProperty("heading", out var heading)
+                    && heading.ValueKind != JsonValueKind.String)
+                {
+                    return "scope.heading 必须是字符串。";
+                }
+
+                foreach (var name in new[] { "around_cursor", "selection_only" })
+                {
+                    if (scope.TryGetProperty(name, out var flag)
+                        && flag.ValueKind != JsonValueKind.True
+                        && flag.ValueKind != JsonValueKind.False)
+                    {
+                        return $"scope.{name} 必须是布尔值。";
+                    }
+
+                    if (scope.TryGetProperty(name, out flag) && flag.ValueKind == JsonValueKind.True)
+                    {
+                        scopeSelectors++;
+                    }
+                }
+
+                if (scopeSelectors > 1)
+                {
+                    return "scope 范围选择互斥：heading、from_para/to_para、around_cursor、selection_only 只能选择一种。";
+                }
+            }
+
+            return string.Empty;
+        }
+
+        private static bool IsNonNegativeInt(JsonElement element)
+        {
+            return element.ValueKind == JsonValueKind.Number
+                && element.TryGetInt32(out var value)
+                && value >= 0;
         }
 
         private static IEnumerable<object> BuildContextPayload(

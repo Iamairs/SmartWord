@@ -27,14 +27,14 @@ namespace SmartWord.OfficeIntegration.Tools
         {
             _wordApplicationWrapper = wordApplicationWrapper;
             _inputSchema = JsonDocument.Parse(
-                "{\"type\":\"object\",\"properties\":{\"description\":{\"type\":\"string\",\"description\":\"本次写操作的简要说明。\"},\"operations\":{\"type\":\"array\",\"description\":\"按顺序执行的写入操作列表。operations 必须是 JSON 数组本身，不要传字符串化后的 JSON。paragraph_index 使用 0-based 段落索引，即第一段是 0。当前批处理语义按实时文档顺序执行，前一步插入/删除会影响后续 paragraph_index。默认优先一次只做 1 个写操作。\" ,\"items\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\",\"description\":\"支持 replace_text、insert_paragraph_after、set_paragraph_style、delete_paragraph；同时兼容 replace、set_text、insert_after、set_style、delete 等常见别名。优先输出标准名。\"},\"paragraph_index\":{\"type\":\"integer\",\"description\":\"0-based 段落索引。第一段是 0，不是 1。\"},\"text\":{\"type\":\"string\",\"description\":\"目标文本内容。replace_text 会整段替换目标段落；insert_paragraph_after 会在目标段落后新增一段，并把 text 写入新段落。text 是普通字符串，不要再额外包一层 JSON。\"},\"style\":{\"type\":\"string\",\"description\":\"Word 中可识别的段落样式名称，例如 Heading 1。仅在 set_paragraph_style 或 insert_paragraph_after 需要设置样式时使用。\"}},\"required\":[\"type\",\"paragraph_index\"]}}},\"required\":[\"operations\"]}")
+                "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"description\":{\"type\":\"string\",\"description\":\"本次写操作的简要说明，面向用户描述目标范围和结果。\"},\"operations\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":20,\"description\":\"按顺序执行的写入操作列表。必须传真实 JSON 数组，不要传字符串化后的 JSON。所有 paragraph_index 使用 0-based。前一步插入或删除会改变后续索引；同一目标的一组安全改动才放在同一次调用中。\",\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"type\":{\"type\":\"string\",\"enum\":[\"replace_text\",\"insert_paragraph_after\",\"set_paragraph_style\",\"delete_paragraph\"],\"description\":\"标准操作名。replace_text/insert_paragraph_after 需要 text；set_paragraph_style 需要 style；delete_paragraph 不需要 text/style。\"},\"paragraph_index\":{\"type\":\"integer\",\"minimum\":0,\"description\":\"0-based 非负段落索引。第一段是 0，不是 1。\"},\"text\":{\"type\":\"string\",\"description\":\"replace_text 的替换文本，或 insert_paragraph_after 的新段落文本。允许为空字符串，但字段必须存在。\"},\"style\":{\"type\":\"string\",\"minLength\":1,\"description\":\"Word 可识别的段落样式名称，例如 Heading 1。set_paragraph_style 必填；insert_paragraph_after 可选。\"}},\"required\":[\"type\",\"paragraph_index\"]}}},\"required\":[\"operations\"]}")
                 .RootElement
                 .Clone();
         }
 
         public string Name => "patch_range";
 
-        public string Description => "以最小风险执行段落替换、插入、样式设置与删除。operations 必须传真正的 JSON 数组，不要传字符串化 JSON；所有 paragraph_index 都使用 0-based 段落索引。当前批处理按实时文档顺序执行，前一步对结构的影响会改变后续索引。";
+        public string Description => "以最小风险执行段落替换、插入、样式设置与删除。operations 必须传真正的 JSON 数组，不要传字符串化后的 JSON；所有 paragraph_index 都使用 0-based 段落索引。当前批处理按实时文档顺序执行，前一步对结构的影响会改变后续索引。";
 
         public ToolPermission RequiredPermission => ToolPermission.DocumentPatchWrite;
 
@@ -51,6 +51,12 @@ namespace SmartWord.OfficeIntegration.Tools
             if (!string.IsNullOrWhiteSpace(operationsError))
             {
                 return ToolCallResult.Error(Name, operationsError);
+            }
+
+            var operationContractError = ValidateOperationContracts(input);
+            if (!string.IsNullOrWhiteSpace(operationContractError))
+            {
+                return ToolCallResult.Error(Name, operationContractError);
             }
 
             var request = PatchRangeRequest.Parse(input);
@@ -222,7 +228,7 @@ namespace SmartWord.OfficeIntegration.Tools
             if (input.ValueKind != JsonValueKind.Object
                 || !input.TryGetProperty("operations", out var operationsElement))
             {
-                return string.Empty;
+                return "operations 是必填字段，必须传 JSON 数组。";
             }
 
             if (operationsElement.ValueKind == JsonValueKind.String)
@@ -236,6 +242,95 @@ namespace SmartWord.OfficeIntegration.Tools
             }
 
             return string.Empty;
+        }
+
+        private static string ValidateOperationContracts(JsonElement input)
+        {
+            var operations = input.GetProperty("operations");
+            if (operations.GetArrayLength() == 0)
+            {
+                return "operations 至少需要包含一个写入操作。";
+            }
+
+            if (operations.GetArrayLength() > 20)
+            {
+                return "operations 最多包含 20 个操作；请按阶段拆分任务。";
+            }
+
+            var index = 0;
+            foreach (var item in operations.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                {
+                    return $"operations[{index}] 必须是 JSON 对象。";
+                }
+
+                var type = item.TryGetProperty("type", out var typeElement)
+                    && typeElement.ValueKind == JsonValueKind.String
+                    ? NormalizeOperationType(typeElement.GetString())
+                    : string.Empty;
+                if (string.IsNullOrWhiteSpace(type))
+                {
+                    return $"operations[{index}].type 必须是 replace_text、insert_paragraph_after、set_paragraph_style 或 delete_paragraph。";
+                }
+
+                if (type != "replace_text"
+                    && type != "insert_paragraph_after"
+                    && type != "set_paragraph_style"
+                    && type != "delete_paragraph")
+                {
+                    return $"operations[{index}].type 不支持“{type}”；请使用标准操作名，不要依赖未声明的别名。";
+                }
+
+                if (!item.TryGetProperty("paragraph_index", out var paragraphElement)
+                    || paragraphElement.ValueKind != JsonValueKind.Number
+                    || !paragraphElement.TryGetInt32(out var paragraphIndex)
+                    || paragraphIndex < 0)
+                {
+                    return $"operations[{index}].paragraph_index 必须是 0-based 非负整数。";
+                }
+
+                if ((type == "replace_text" || type == "insert_paragraph_after")
+                    && (!item.TryGetProperty("text", out var textElement)
+                        || textElement.ValueKind != JsonValueKind.String))
+                {
+                    return $"operations[{index}] 的 {type} 必须提供 text 字段，且 text 必须是字符串。";
+                }
+
+                if (type == "set_paragraph_style"
+                    && (!item.TryGetProperty("style", out var styleElement)
+                        || styleElement.ValueKind != JsonValueKind.String
+                        || string.IsNullOrWhiteSpace(styleElement.GetString())))
+                {
+                    return $"operations[{index}] 的 set_paragraph_style 必须提供非空 style 字段。";
+                }
+
+                index++;
+            }
+
+            return string.Empty;
+        }
+
+        private static string NormalizeOperationType(string type)
+        {
+            var normalized = (type ?? string.Empty).Trim().ToLowerInvariant();
+            switch (normalized)
+            {
+                case "replace":
+                case "set_text":
+                    return "replace_text";
+                case "insert_after":
+                case "append_paragraph_after":
+                    return "insert_paragraph_after";
+                case "set_style":
+                case "apply_style":
+                    return "set_paragraph_style";
+                case "delete":
+                case "remove_paragraph":
+                    return "delete_paragraph";
+                default:
+                    return normalized;
+            }
         }
 
     }

@@ -25,7 +25,7 @@ namespace SmartWord.OfficeIntegration.Tools
         {
             _wordApplicationWrapper = wordApplicationWrapper;
             _inputSchema = JsonDocument.Parse(
-                "{\"type\":\"object\",\"properties\":{\"author\":{\"type\":\"string\",\"description\":\"按作者名过滤批注；为空表示不过滤。\"},\"max_results\":{\"type\":\"integer\",\"description\":\"最多返回多少条批注。返回结果中的 para_index 一律使用 0-based。\"}}}")
+                "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"author\":{\"type\":\"string\",\"description\":\"按作者名过滤批注；为空表示不过滤。\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100,\"description\":\"最多返回多少条批注，超出时返回 diagnostics。返回结果中的 para_index 一律使用 0-based。\"}}}")
                 .RootElement
                 .Clone();
         }
@@ -47,6 +47,10 @@ namespace SmartWord.OfficeIntegration.Tools
 
             var author = ReadString(input, "author");
             var maxResults = ReadNullableInt(input, "max_results") ?? 20;
+            if (maxResults < 1 || maxResults > 100)
+            {
+                return ToolCallResult.Error(Name, "max_results 必须是 1 到 100 的整数。请使用 author 过滤或分批读取，不要请求过大的批注结果。" );
+            }
             var annotations = await _wordApplicationWrapper
                 .ReadAnnotationsAsync(author, maxResults)
                 .ConfigureAwait(false);

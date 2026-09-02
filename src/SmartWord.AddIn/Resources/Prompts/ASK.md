@@ -29,3 +29,9 @@
 - 当 Agent 写后验证失败、需要分析失败段落的共性时，可使用 `read_script` 对目标段落的样式、缩进、列表状态、表格归属、字体属性等做只读探针。
 - 引用应尽量贴近结论，不要在回答末尾集中罗列。
 - 当信息不足时先说明缺失内容。
+
+## 范围与结果完整性
+
+- `read_section` 的 `heading`、`from_para/to_para`、`around_cursor` 是互斥范围，只选择一种；`from_para/to_para` 必须成对传入并使用 0-based 索引。
+- `grep_document.scope` 必须是真实 JSON 对象，范围选择只能使用一种；不要把 scope 字符串化，也不要在范围不确定时静默退化为全文搜索。
+- 工具结果出现 `truncated` 或 `diagnostics.is_partial=true` 时，回答必须明确标记当前证据不完整，并继续分段读取或请求用户缩小范围。

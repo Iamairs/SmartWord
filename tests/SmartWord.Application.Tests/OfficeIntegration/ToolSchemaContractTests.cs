@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Linq;
 using SmartWord.OfficeIntegration.Tools;
 using Xunit;
 
@@ -23,6 +24,9 @@ namespace SmartWord.Application.Tests.OfficeIntegration
 
             Assert.True(tool.InputSchema.TryGetProperty("properties", out var properties));
             Assert.False(properties.TryGetProperty("include_formatting", out _));
+            Assert.True(tool.InputSchema.TryGetProperty("oneOf", out var selectors));
+            Assert.Equal(JsonValueKind.Array, selectors.ValueKind);
+            Assert.Contains("互斥", tool.Description);
         }
 
         [Fact]
@@ -33,6 +37,27 @@ namespace SmartWord.Application.Tests.OfficeIntegration
             Assert.True(tool.InputSchema.TryGetProperty("properties", out var properties));
             Assert.True(properties.TryGetProperty("scope", out var scope));
             Assert.Equal(JsonValueKind.Object, scope.ValueKind);
+            Assert.Contains("范围限制", scope.GetProperty("description").GetString());
+            Assert.Contains("字符串化", scope.GetProperty("description").GetString());
+        }
+
+        [Fact]
+        public void ReadTableTool_InputSchema_限制结果范围()
+        {
+            var tool = new ReadTableTool(null);
+            var properties = tool.InputSchema.GetProperty("properties");
+
+            Assert.Equal(100, properties.GetProperty("max_rows").GetProperty("maximum").GetInt32());
+            Assert.Equal(50, properties.GetProperty("max_columns").GetProperty("maximum").GetInt32());
+        }
+
+        [Fact]
+        public void ReadAnnotationsTool_InputSchema_限制批注数量()
+        {
+            var tool = new ReadAnnotationsTool(null);
+            var maximum = tool.InputSchema.GetProperty("properties").GetProperty("max_results").GetProperty("maximum");
+
+            Assert.Equal(100, maximum.GetInt32());
         }
 
         [Fact]
@@ -46,6 +71,8 @@ namespace SmartWord.Application.Tests.OfficeIntegration
             Assert.Equal("array", operations.GetProperty("type").GetString());
             Assert.Contains("0-based", operations.GetProperty("description").GetString());
             Assert.Contains("不要传字符串化后的 JSON", operations.GetProperty("description").GetString());
+            Assert.Equal(20, operations.GetProperty("maxItems").GetInt32());
+            Assert.Contains("replace_text", operations.GetProperty("items").GetProperty("properties").GetProperty("type").GetProperty("enum").EnumerateArray().Select(item => item.GetString()));
         }
 
         [Fact]

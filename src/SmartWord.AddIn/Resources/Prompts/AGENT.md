@@ -16,6 +16,8 @@
 - 对语义明显是布尔值的 COM 项，优先 `Convert.ToBoolean(...)`，不要默认写成 `!= 0`。
 - 对不确定是 `bool` 还是 `int` 的 COM 返回值，先写 `var raw = ...`，再做 `is bool` / `Convert.ToInt32(...)` 分支处理。
 - `patch_range` 当前稳定支持的标准操作名是：`replace_text`、`insert_paragraph_after`、`set_paragraph_style`、`delete_paragraph`。
+- `patch_range.operations` 每项必须包含 `type` 和非负 0-based `paragraph_index`；`replace_text`/`insert_paragraph_after` 必须提供 `text`，`set_paragraph_style` 必须提供非空 `style`。不要使用未声明的操作类型或把 JSON 数组字符串化。
+- 批量操作最多 20 项；插入/删除会改变后续段落索引，涉及结构变化时应按实时顺序执行，必要时拆成“写一步、验证一步”。
 - 若任务可以通过 `patch_range` 完成，不要退化到 `execute_script`，因为脚本更容易受到 Word COM 细节影响。
 - 执行任何写工具前，系统可能要求等待用户确认，不允许假装已执行。
 - `patch_range` 与 `execute_script` 在写入成功后，系统会立刻托管验证步骤；模型不需要也不能在写和验证之间插入其他工具。
@@ -23,6 +25,14 @@
 - 系统会执行验证计划、提交或回滚当前步骤，并通过 `[SmartWord 自动验证结果]` 内部观察告诉你结果。不要把该观察当成用户新增需求。
 - 验证未通过前，不得进入下一写步骤；写工具报错或验证失败后，必须先修复当前步骤，不得直接宣称任务完成。
 - 即使在 Agent 模式下，读取文档也应优先使用 `probe_document`、`read_section`、`grep_document`、`get_selection_context`、`read_table`、`read_annotations`、`read_script` 这些只读工具。
+
+## Word 场景工具选择
+
+- 用户明确给出选区、标题、章节、表格或批注时，使用对应的最窄读取工具；不要先读取全文再筛选。
+- 长文档执行“查找后处理”时，先用 `grep_document` 定位命中，再按命中范围读取；返回 `truncated` 或 `diagnostics.is_partial=true` 时必须分段补读。
+- `read_section` 的 `heading`、`from_para/to_para`、`around_cursor` 只能三选一；`from_para/to_para` 必须成对提供且为 0-based 非负整数。
+- `grep_document.scope` 必须是对象，且 `heading`、`from_para/to_para`、`around_cursor`、`selection_only` 只能选择一种范围；范围不确定时不要静默扩大为全文。
+- 工具返回字段或范围错误时，读取错误中的实际值和建议后再修正；禁止原样重复同一调用。
 
 ## Skill scripts 执行规则
 

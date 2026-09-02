@@ -23,7 +23,7 @@ namespace SmartWord.OfficeIntegration.Tools
         {
             _wordApplicationWrapper = wordApplicationWrapper;
             _inputSchema = JsonDocument.Parse(
-                "{\"type\":\"object\",\"properties\":{\"table_index\":{\"type\":\"integer\",\"description\":\"目标表格索引，0-based。第一个表格是 0，不是 1。\"},\"max_rows\":{\"type\":\"integer\",\"description\":\"最多返回多少行。\"},\"max_columns\":{\"type\":\"integer\",\"description\":\"最多返回多少列。\"}},\"required\":[\"table_index\"]}")
+                "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"table_index\":{\"type\":\"integer\",\"minimum\":0,\"description\":\"目标表格索引，0-based。第一个表格是 0，不是 1。先用文档结构或用户上下文确认表格位置。\"},\"max_rows\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100,\"description\":\"最多返回多少行，超出时返回 diagnostics。\"},\"max_columns\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":50,\"description\":\"最多返回多少列，超出时返回 diagnostics。\"}},\"required\":[\"table_index\"]}")
                 .RootElement
                 .Clone();
         }
@@ -51,6 +51,10 @@ namespace SmartWord.OfficeIntegration.Tools
 
             var maxRows = ReadNullableInt(input, "max_rows") ?? 20;
             var maxColumns = ReadNullableInt(input, "max_columns") ?? 10;
+            if (maxRows < 1 || maxRows > 100 || maxColumns < 1 || maxColumns > 50)
+            {
+                return ToolCallResult.Error(Name, "max_rows 必须是 1 到 100 的整数，max_columns 必须是 1 到 50 的整数。请缩小读取范围，不要用超大值读取整张表。" );
+            }
             var tableResult = await _wordApplicationWrapper
                 .ReadTableAsync(tableIndex.Value, maxRows, maxColumns)
                 .ConfigureAwait(false);
